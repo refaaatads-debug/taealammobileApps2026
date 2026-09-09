@@ -1,0 +1,43 @@
+- [RLS policy verification](rls-policy-verification.md) — verify generated PostgreSQL policy expressions directly after schema pushes.
+- [Workspace TypeScript references](typescript-workspace-project-references.md) — standalone app checks can read stale or missing declaration outputs from referenced workspace libraries.
+- [Expo build concurrency](expo-build-concurrency.md) — Metro needs a free port, and codegen cleanup can require an Expo restart before judging logs.
+- [Supabase runtime verification](supabase-runtime-verification.md) — secret existence does not prove the key is valid for the live custom domain.
+- [Supabase Replit egress fallback](supabase-replit-egress-fallback.md) — API auth must use the Replit Supabase PostgREST proxy when the custom VPS domain is unreachable from Replit.
+- [Supabase bearer precedence](supabase-bearer-precedence.md) — legacy session cookies must not mask authenticated Supabase Bearer requests.
+- [OpenAPI integer generation](openapi-zod-compatibility.md) — the current Orval/Zod combination emits unsupported `zod.int()` for integer schemas.
+- [Production PostgREST timeout](production-postgrest-timeout.md) — the public Supabase domain can return 57014/500 on REST introspection while Auth and table probes remain available.
+- [Teacher directory parity](teacher-directory-parity.md) — original teacher search joins approved profiles with subjects; empty availability means no schedule, not unrestricted availability.
+- [Booking lifecycle parity](booking-lifecycle-parity.md) — booking decisions are group-aware RPC flows with source-specific conflict, session, notification, and cancellation rules.
+- [Session billing parity](session-billing-parity.md) — only ending a session through the platform session trigger can deduct minutes; cancellation has no proven automatic refund path.
+- [Mobile logout reliability](mobile-logout-reliability.md) — clear the local Supabase session without waiting for global network sign-out.
+- [Authenticated API caching](authenticated-api-caching.md) — 304 responses without a body must be retried or disabled for React Query API calls.
+- [Mobile identity gates](mobile-identity-gates.md) — never fall back to student when role, teacher approval, or ban status cannot be resolved from Supabase.
+- [Expo native WebRTC](expo-native-webrtc.md) — native calls require a Development Build and Expo config plugin; Expo Go is not enough.
+- [WebRTC receive-only fallback](webrtc-receive-only-fallback.md) — missing mobile media devices must not block joining; negotiate recvonly audio/video and show a nonfatal warning.
+- [Expo Go notifications](expo-go-notifications.md) — avoid importing expo-notifications at module evaluation time on Android Expo Go; load it only in supported builds.
+- [Mobile session device policy](mobile-session-device-policy.md) — mobile is a student join client; teacher lifecycle and billing stay desktop-owned.
+- [Expo Router custom tabs](expo-router-custom-tabs.md) — current Expo Router expects the custom tab bar on Tabs itself, not inside screenOptions.
+- [Chat attachments in production](chat-attachments-production.md) — chat-files uploads must use booking paths; production storage is private and needs signed URL resolution.
+- [Internal call delivery](internal-call-delivery.md) — teacher calls are persisted in internal_calls; student clients need Realtime plus push for reliable ringing.
+- [Mobile startup timeouts](mobile-startup-timeouts.md) — auth/session and bootstrap API requests must fail visibly instead of holding the native app on its launch skeleton forever.
+- [Supabase SecureStore sizing](supabase-secure-storage-sizing.md) — native Supabase sessions can exceed Android SecureStore's per-value limit and must be stored in safe-size chunks.
+- [Auth loading layout](auth-loading-layout.md) — full-width auth form containers need a separate centered loading style to avoid top-left skeletons.
+- [Supabase session hydration race](supabase-session-hydration-race.md) — initial getSession must not overwrite a newer password-login state.
+- [Same-path navigation cancellation](same-path-navigation-cancellation.md) — avoid replacing the current route after auth when it is already the dashboard path.
+- [Platform session transport](platform-session-transport.md) — original web sessions use Supabase Realtime signaling with direct WebRTC and TURN, not a separate VPS room protocol.
+- [Expo DevTools on NixOS](expo-devtools-nixos.md) — missing libglib affects optional DevTools only; Metro and the mobile preview can still be healthy.
+- [Supabase connector schema limits](supabase-connector-schema-limits.md) — OpenAPI may be blocked and concurrent metadata probes throttled; treat 403/429 as inconclusive.
+- [Supabase production DDL path](supabase-production-ddl-path.md) — the project’s live self-hosted Supabase policies require the VPS Postgres path, not the limited REST connector.
+- [Native auth recovery](mobile-auth-recovery-and-role-handoff.md) — native reset links need explicit token-session hydration; deferred teacher roles must be scoped to the authenticated signup email.
+- [Mobile credential storage](mobile-credential-storage.md) — persist the Supabase session, never the user's password; clear legacy remembered-login data during bootstrap.
+- [Self-hosted OAuth redirects](self-hosted-oauth-redirects.md) — custom Supabase Auth falls back to Site URL unless native and preview callback URLs are allowlisted.
+- [AI tutor fixed composer](ai-tutor-fixed-composer.md) — the student AI chat lives in SmartTeacherScreen; fixed input needs a non-scrolling screen and its own message scroller.
+- [Payment return verification](payment-return-verification.md) — a checkout redirect is never payment proof; mobile may only reread confirmed source state without creating financial records.
+- [Booking error visibility](booking-error-visibility.md) — a booking POST can reach the API and be rejected by platform validation; always surface structured API errors in the mobile UI.
+- [Group booking contract](group-booking-contract.md) — keep grouped slots on a separate endpoint; local parity is not Production E2E proof.
+- [Supabase Realtime channel lifecycle](supabase-realtime-channel-lifecycle.md) — use unique topics or await cleanup when effects create postgres_changes channels under React Strict Mode.
+- [Production assignments schema](production-assignments-schema.md) — do not assume assignments exposes a progress column when building teacher student lists.
+- [Web native video style](web-native-video-style.md) — raw HTML video elements on Expo web need plain CSS style objects, not React Native style arrays.
+- [Whiteboard data-channel compatibility](whiteboard-datachannel-compatibility.md) — accept event/kind envelopes and normalize varied path/permission payloads before rendering.
+- [Invoice source parity](invoice-source-parity.md) — student invoice history comes from invoices by student_id; payment_records is payment state, not an invoice.
+- [PostgREST session query batching](postgrest-session-query-batching.md) — batch booking IDs when loading session lifecycle rows to avoid proxy URI limits.
