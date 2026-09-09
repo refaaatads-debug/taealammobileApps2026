@@ -1,0 +1,1 @@
+export { TeacherWithdrawalsScreen as default } from "@/components/TeacherFinanceScreens";
