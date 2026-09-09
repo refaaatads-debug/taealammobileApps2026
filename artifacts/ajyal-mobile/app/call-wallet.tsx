@@ -1,0 +1,1 @@
+export { CallWalletScreen as default } from "@/components/TeacherFinanceScreens";
