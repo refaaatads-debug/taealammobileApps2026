@@ -1,0 +1,130 @@
+أريد منك معالجة مشكلة Network Connectivity الحالية بشكل نهائي ومنهجي، وليس إعادة تشخيصها بشكل متكرر.
+
+السياق المثبت من NETWORK_CONNECTIVITY_ROOT_CAUSE_REPORT.md:
+
+- Replit API يعمل محلياً.
+- /api/healthz = 200.
+- DNS = PASS.
+- Replit API لا يستطيع فتح TCP إلى:
+  - 72.61.23.237:22
+  - 72.61.23.237:80
+  - 72.61.23.237:443
+  - 72.61.23.237:8000
+  - ajyalalmaerifa.com:443
+- جميعها TIMEOUT.
+- TLS لم يبدأ.
+- HTTP لم يبدأ.
+- Supabase Auth غير قابل للوصول من API.
+- عنوان خروج Replit الذي ظهر هو 34.180.8.129، لكنه غير مثبت كعنوان ثابت ولا يجوز اعتباره حلاً إنتاجياً.
+- المشكلة مصنفة:
+  BLOCKED BY EXTERNAL NETWORK CONTROL
+- لا تفترض أن المشكلة في Expo أو Supabase Auth أو Bearer Token أو SecureStore أو Login.
+- لا تغير الكود لمعالجة مشكلة TCP.
+- لا تغير Supabase schema أو RLS أو Auth.
+- لا تغير DATABASE_URL أو Secrets عشوائياً.
+- لا تنفذ أي Migration أو SQL أو تعديل Production.
+- لا تعتبر إعادة تشغيل API حلاً.
+
+المطلوب الآن:
+
+1. ابدأ READ-ONLY فقط.
+2. افحص من داخل Replit:
+   - DNS resolution للدومين.
+   - IPv4/IPv6 resolution.
+   - route/network path إن أمكن.
+   - TCP connectivity على 22/80/443/8000.
+   - هل المشكلة خاصة بعنوان 72.61.23.237 أم بالدومين بالكامل؟
+   - هل هناك proxy/egress restriction داخل Replit؟
+   - هل HTTPS outbound إلى مواقع عامة يعمل من نفس runtime؟
+3. لا تحاول تجاوز أي قيود شبكة أو استخدام أساليب التفاف غير مصرح بها.
+4. افحص إعدادات المشروع الحالية فقط، دون كشف Secrets في output.
+5. راجع NETWORK_CONNECTIVITY_ROOT_CAUSE_REPORT.md والتقارير السابقة قبل اتخاذ أي قرار.
+6. إذا كان من المستحيل إصلاح المشكلة من داخل Replit، لا تدّعي أنك أصلحتها.
+
+بعد ذلك أنشئ تقريراً:
+
+NETWORK_CONNECTIVITY_FINAL_ACTION_PLAN.md
+
+ويجب أن يحتوي على:
+
+A. Root Cause
+B. الأدلة الفعلية
+C. ما تم استبعاده
+D. هل المشكلة:
+   - Replit egress
+   - Hostinger firewall
+   - VPS firewall
+   - Nginx/listener
+   - routing
+   - IPv4/IPv6
+   - أو سبب آخر
+E. الاختبار المطلوب من داخل VPS
+F. الاختبار المطلوب من Hostinger
+G. الاختبار المطلوب من Replit
+H. الحل المؤقت الآمن
+I. الحل الإنتاجي الدائم
+J. ما الذي يجب تغييره بالضبط
+K. ما الذي يجب عدم تغييره
+L. خطوات إثبات النجاح
+
+مهم جداً:
+
+إذا لم يكن لديك وصول فعلي إلى Hostinger/VPS من خلال أدوات المشروع، لا تقل إنك أصلحت Firewall أو Nginx.
+
+بدلاً من ذلك أعطني أوامر READ-ONLY دقيقة ليقوم بها مسؤول الـVPS، مثل:
+
+- ss -lntp
+- curl localhost
+- curl 127.0.0.1
+- ufw status
+- iptables/nftables status
+- nginx configuration test
+- listening interfaces
+- routing
+- public IPv4
+
+لكن لا تطلب مني تغيير أي Firewall Rule عشوائياً.
+
+بعد إثبات أن:
+Replit → VPS:443
+أصبح TCP CONNECTED
+
+انتقل إلى المرحلة التالية فقط:
+
+Replit API
+→ HTTPS
+→ Supabase Auth
+→ /auth/v1/user
+→ Bearer Token
+→ /api/me
+→ Profile
+→ HTTP 200
+
+ثم اختبر Login من التطبيق.
+
+ممنوع إعلان SUCCESS قبل إثبات المسار كاملاً.
+
+مهم جداً:
+لا تعيد فتح مراحل الحجز أو Availability أو Sessions حالياً.
+المشكلة الحالية Network/Authentication فقط.
+
+الهدف النهائي:
+
+EXPO
+ ↓
+API
+ ↓ HTTPS
+VPS/Supabase
+ ↓
+Supabase Auth
+ ↓
+Profile
+ ↓
+200
+
+وأريد منك في النهاية إعطائي:
+1. السبب الحقيقي.
+2. الإجراء المطلوب مني على Hostinger/VPS إن وجد.
+3. الإجراء المطلوب داخل Replit إن وجد.
+4. اختبار واحد واضح يثبت أن المشكلة انتهت.
+5. عدم تعديل أي شيء غير متعلق بالمشكلة.

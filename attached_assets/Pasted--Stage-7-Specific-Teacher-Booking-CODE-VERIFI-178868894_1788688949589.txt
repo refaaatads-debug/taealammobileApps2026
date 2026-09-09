@@ -1,0 +1,489 @@
+نحن لا نعتبر Stage 7 مكتملة وظيفيًا بعد.
+
+آخر تقرير أعطى:
+
+Specific Teacher Booking: CODE VERIFIED / E2E UNVERIFIED
+Open Subject Booking: CODE VERIFIED / E2E UNVERIFIED
+Availability: PARTIAL
+Timezone: UNVERIFIED
+Accept: PARTIAL
+Reject: CODE VERIFIED / E2E UNVERIFIED
+First Accept Wins: RPC MATCHED / E2E UNVERIFIED
+Race Conditions: BLOCKED
+Notifications: PARTIAL / E2E UNVERIFIED
+Dashboard 502: DIAGNOSTICS FIXED / UPSTREAM UNVERIFIED
+Database: PARTIAL / PRODUCTION BLOCKED
+
+والنتيجة:
+E2E PRODUCTION BLOCKED
+
+ممنوع الانتقال إلى Stage 8 الآن.
+
+الهدف:
+إغلاق Stage 7 فعلياً قدر الإمكان، وتحديد بالضبط ما الذي يمنع الحجز الحقيقي من العمل.
+
+==================================================
+أولاً: لا تعدل الكود
+==================================================
+
+ابدأ READ-ONLY فقط.
+
+راجع:
+
+- BOOKING_E2E_STAGE7_PRE_FIX_AUDIT.md
+- BOOKING_E2E_STAGE7_FINAL_REPORT.md
+- BOOKING_E2E_FINAL_PARITY_AUDIT.md
+- BOOKING_SYSTEM_FULL_ROOT_CAUSE_REPORT.md
+- BOOKING_PARITY_REPORT.md
+- SESSIONS_PARITY_REPORT.md
+
+ثم راجع:
+
+GitHub source
+Mobile
+API
+OpenAPI
+Supabase schema
+RLS
+RPC
+Functions
+Triggers
+Notifications
+
+==================================================
+ثانياً: أجب عن السؤال الأساسي
+==================================================
+
+لماذا لا نستطيع حتى الآن إثبات إنشاء حجز حقيقي للطالب؟
+
+لا تقبل إجابة:
+
+"لا توجد جلسة Production"
+
+بل حدد بالضبط:
+
+1. ما الحساب المطلوب؟
+2. ما الدور المطلوب؟
+3. ما البيانات المطلوبة؟
+4. ما الجداول التي يجب أن تتأثر؟
+5. ما RPC الذي ينفذ؟
+6. ما RLS الذي يمنع أو يسمح؟
+7. ما Endpoint الذي يستقبل الطلب؟
+8. ما payload النهائي؟
+9. ما response المتوقع؟
+10. ما الذي يمنع الاختبار حاليًا؟
+
+==================================================
+ثالثاً: Availability
+==================================================
+
+هذا الموضوع كان سبب المشكلة الأساسية سابقاً.
+
+حدد من GitHub والمنصة وقاعدة البيانات:
+
+- المصدر الحقيقي لأيام المعلم.
+- available_days
+- available_from
+- available_to
+- timezone
+- teacher_id
+- public_profiles
+- teacher_subjects
+- subjects
+
+ثم ارسم التدفق:
+
+Database
+→ API
+→ Mobile
+→ Booking Request
+
+وقارنه بالمنصة الأصلية حرفيًا.
+
+ممنوع:
+
+- fallback
+- ساعات افتراضية
+- availability وهمية
+- اختيار أول معلم عشوائياً
+
+==================================================
+رابعاً: نظامي الحجز
+==================================================
+
+يجب التعامل مع النظامين كوظيفتين منفصلتين.
+
+--------------------------------------------------
+A) Specific Teacher Booking
+--------------------------------------------------
+
+طالب:
+
+Teacher
+→ Subject
+→ Stage
+→ Duration
+→ Date
+→ Time
+→ Submit
+
+يجب إثبات:
+
+booking_request
+→ teacher relationship
+→ teacher notification
+→ accept
+→ booking
+→ session إن كان هذا هو عقد المنصة.
+
+إذا كان Production Schema لا يسمح بعزل teacher_id:
+
+لا تخترع حلًا.
+
+أظهر:
+
+TABLE
+COLUMN
+RLS
+RPC
+SOURCE
+
+وبيّن بالضبط المشكلة.
+
+--------------------------------------------------
+B) Open Subject Booking
+--------------------------------------------------
+
+طالب:
+
+Subject
+→ Stage
+→ Duration
+→ Date
+→ Time
+→ Submit
+
+بدون اختيار معلم.
+
+يجب:
+
+1. تحديد جميع المعلمين المؤهلين.
+2. التحقق من المادة.
+3. التحقق من الاعتماد.
+4. التحقق من availability.
+5. إرسال الطلب للمعلمين المؤهلين.
+6. أول معلم يقبل يصبح صاحب الحجز.
+7. باقي المعلمين لا يستطيعون قبول نفس الطلب.
+
+ممنوع تحويله إلى random teacher.
+
+==================================================
+خامساً: First Accept Wins
+==================================================
+
+لا تكتب أن RPC MATCHED يعني أن النظام يعمل.
+
+اختبر من الكود وقاعدة البيانات:
+
+Teacher A
++
+Teacher B
+
+نفس booking_request.
+
+Accept في نفس الوقت.
+
+تحقق من DB:
+
+booking_requests
+bookings
+sessions
+notifications
+
+يجب أن يكون هناك قبول واحد فقط.
+
+إذا لم نستطع تنفيذ الاختبار الحقيقي:
+
+UNVERIFIED
+
+وليس PASS.
+
+==================================================
+سادساً: Race Conditions
+==================================================
+
+حدد هل المنصة الأصلية تحمي:
+
+- duplicate request
+- concurrent accept
+- double booking
+- duplicate payment
+- duplicate minutes deduction
+
+وأين تتم الحماية:
+
+Mobile
+API
+RPC
+Database constraint
+Transaction
+
+إذا كانت Production فقط:
+
+BLOCKED
+
+مع السبب الدقيق.
+
+==================================================
+سابعاً: Dashboard 502
+==================================================
+
+استخدم التشخيص الجديد.
+
+لا تكتفِ بقول:
+
+"dashboard 502"
+
+حدد اسم العملية الفاشلة بالضبط.
+
+مثال:
+
+profile
+subscription
+notifications
+bookings
+assignments
+points
+etc.
+
+اعرض:
+
+operation
+status
+errorCode
+errorName
+
+بدون:
+
+tokens
+cookies
+PII
+
+إذا كان الخطأ قابلًا للإصلاح داخل API بأمان:
+أصلحه.
+
+إذا كان Production:
+لا تعدل Production.
+
+==================================================
+ثامناً: لا تستخدم بيانات حساسة
+==================================================
+
+ممنوع طلب:
+
+- passwords
+- access tokens
+- refresh tokens
+- service role keys
+- payment card data
+
+إذا كان الاختبار يحتاج حسابات حقيقية، اطلب فقط إنشاء/تفويض حساب اختبار مناسب من صاحب المشروع بالطريقة الآمنة المتاحة، دون كشف بيانات الاعتماد داخل المحادثة.
+
+==================================================
+تاسعاً: إذا كان E2E ممكنًا
+==================================================
+
+نفذ الاختبارات الفعلية:
+
+1. Student login
+2. Student dashboard
+3. Teacher directory
+4. Availability
+5. Specific teacher booking
+6. Verify booking_request
+7. Teacher sees request
+8. Teacher accepts
+9. Verify booking
+10. Open subject booking
+11. Verify eligible teachers
+12. Teacher A accepts
+13. Teacher B attempts accept
+14. Verify First Accept Wins
+15. Reject
+16. Expiry
+17. Cancellation
+18. Notification
+19. Dashboard after booking
+
+كل اختبار يجب أن يكون:
+
+PASS
+FAIL
+BLOCKED
+UNVERIFIED
+
+مع الدليل.
+
+==================================================
+عاشراً: إذا لم يكن E2E ممكنًا
+==================================================
+
+لا تقل "تم".
+
+أنشئ:
+
+BOOKING_E2E_PRODUCTION_BLOCKER_REPORT.md
+
+ويجب أن يحتوي:
+
+- Exact blocker
+- Environment
+- Endpoint
+- Table
+- Column
+- RPC
+- RLS
+- Missing configuration
+- Required test account
+- Required permission
+- Required Production change إن وجد
+- Why Mobile/API cannot safely solve it
+- Exact next action
+
+==================================================
+الحادي عشر: أي تعديل جديد
+==================================================
+
+لا تعدل أي شيء إلا إذا كان:
+
+- mismatch مؤكد
+- داخل Mobile/API/OpenAPI
+- لا يحتاج تغيير Production
+- ولا يغير business rules
+
+قبل كل تعديل:
+
+اذكر:
+
+ROOT CAUSE
+EXPECTED
+ACTUAL
+FIX
+
+ثم نفذ الإصلاح.
+
+==================================================
+الثاني عشر: Production
+==================================================
+
+ممنوع تعديل:
+
+Database Schema
+RLS
+RPC
+Functions
+Triggers
+Auth
+Storage
+VPS
+
+إذا ثبت أن أحدها هو سبب المشكلة:
+
+توقف وسجل BLOCKED.
+
+لا تعمل workaround داخل Mobile.
+
+==================================================
+الثالث عشر: التقرير النهائي
+==================================================
+
+أنشئ:
+
+BOOKING_E2E_STAGE7_CLOSURE_REPORT.md
+
+ويجب أن يحتوي:
+
+A. Source of Truth
+B. Specific Teacher Booking
+C. Open Subject Booking
+D. Eligibility
+E. Availability
+F. Timezone
+G. Subscription
+H. Create Request
+I. Accept
+J. Reject
+K. Expiry
+L. Cancellation
+M. First Accept Wins
+N. Race Conditions
+O. Notifications
+P. Database
+Q. Dashboard 502
+R. Mobile/API parity
+S. Production blockers
+T. Exact next step
+
+وفي النهاية:
+
+STAGE 7 STATUS
+
+Specific Teacher Booking: ?
+Open Subject Booking: ?
+Availability: ?
+Timezone: ?
+Subscription: ?
+Create Request: ?
+Accept: ?
+Reject: ?
+First Accept Wins: ?
+Race Conditions: ?
+Notifications: ?
+Dashboard 502: ?
+Database: ?
+Android: ?
+iOS: ?
+
+ثم:
+
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+BLOCKED
+
+==================================================
+قاعدة مهمة جدًا
+==================================================
+
+لا تنتقل إلى:
+
+Sessions
+WebRTC
+Attendance
+Heartbeat
+Minutes Deduction
+Wallet
+Withdrawal
+Assignments
+
+حتى نغلق الحجز أو نثبت أن المتبقي Production BLOCKED بشكل لا يمكن حله من Mobile/API.
+
+الهدف ليس تقريرًا جميلًا.
+
+الهدف:
+
+طالب حقيقي
+→ حجز معلم محدد
+أو
+→ حجز مادة مفتوح
+→ معلم مؤهل
+→ قبول
+→ Booking صحيح
+→ First Accept Wins
+→ بيانات صحيحة في Database
+→ إشعار صحيح
+
+ثم فقط ننتقل إلى Stage 8.
+
+توقف عند نهاية Stage 7 ولا تبدأ Stage 8.

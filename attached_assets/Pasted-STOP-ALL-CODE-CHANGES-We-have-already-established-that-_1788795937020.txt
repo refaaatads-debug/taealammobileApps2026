@@ -1,0 +1,90 @@
+STOP ALL CODE CHANGES.
+
+We have already established that public internet connectivity from Replit works:
+- HTTPS to public websites works.
+- TCP 443 to 1.1.1.1 succeeds.
+- No proxy is required.
+- DNS for ajyalalmaerifa.com resolves to 72.61.23.237.
+
+However, the VPS destination itself fails from Replit:
+- 72.61.23.237:22 = TIMEOUT
+- 72.61.23.237:80 = TIMEOUT
+- 72.61.23.237:443 = TIMEOUT
+- 72.61.23.237:8000 = TIMEOUT
+- ajyalalmaerifa.com:443 = TIMEOUT
+
+Therefore DO NOT modify:
+- Expo
+- Mobile code
+- Supabase Auth
+- Supabase keys
+- API authentication
+- Database
+- RLS
+- OpenAPI
+- booking code
+- secrets
+- environment variables
+
+Your task now is NETWORK ROOT CAUSE ONLY.
+
+Perform a READ-ONLY investigation and determine exactly why the VPS at 72.61.23.237 is unreachable from an external network.
+
+Check and report:
+
+1. Whether 72.61.23.237 is actually the current public IPv4 of the VPS.
+2. Whether the VPS has a default route and correct public interface.
+3. Whether anything is listening on:
+   - 22
+   - 80
+   - 443
+   - 8000
+4. Whether services are bound to:
+   - 127.0.0.1 only
+   - private IP only
+   - 0.0.0.0
+   - public interface
+5. Nginx configuration and listen directives.
+6. Docker/container port publishing if Docker is used.
+7. UFW status and rules.
+8. iptables rules.
+9. nftables rules.
+10. Fail2ban or any IP-blocking mechanism.
+11. Hostinger Cloud Firewall / Network Firewall configuration if accessible.
+12. Whether the VPS provider has an external network/security layer blocking inbound traffic.
+13. Whether the VPS has another public IPv4 address.
+14. Whether IPv6 exists and whether DNS is incorrectly pointing to IPv4.
+15. Test connectivity locally from the VPS:
+    curl -vk --max-time 5 https://127.0.0.1/
+    curl -vk --max-time 5 https://72.61.23.237/
+    curl -vk --max-time 5 https://ajyalalmaerifa.com/
+16. Check:
+    ss -lntp
+    ip addr
+    ip route
+    nginx -t
+
+IMPORTANT:
+- READ ONLY.
+- Do not change firewall rules.
+- Do not restart services.
+- Do not edit files.
+- Do not change DNS.
+- Do not change secrets.
+- Do not modify Production.
+- Do not modify the application.
+
+At the end, give me ONE definitive diagnosis from the evidence.
+
+Classify the result as exactly one of:
+
+A) Wrong public IP / DNS
+B) VPS service not listening publicly
+C) VPS firewall blocking inbound traffic
+D) Hostinger/Cloud Firewall blocking inbound traffic
+E) Provider/network routing problem
+F) Other — explain with evidence
+
+Then give me the exact minimum action required to restore external TCP connectivity.
+
+Do NOT proceed to application debugging until TCP connectivity to 72.61.23.237 is proven.

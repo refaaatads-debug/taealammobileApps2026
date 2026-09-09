@@ -1,0 +1,105 @@
+سأجري فحصاً قرائياً فقط: أراجع كود التدفق، وأستخرج رابط OAuth الذي يبنيه Supabase فعلياً من نفس إعدادات التطبيق، ثم أطابق client_id وredirect_uri مع بيانات Google Cloud الظاهرة. لن أعدّل أي ملف ولن أطبع أي سر.
+
+
+
+4 actions
+سأكمل الفحص دون أي تعديل. سأشغّل استدعاء signInWithOAuth بنفس إعدادات التطبيق مع منع فتح المتصفح، وأستخرج منه معاملات الرابط فقط. سأخفي state وأي قيمة سرية، ثم أقارن client_id مع الصورة.
+
+
+
+7 actions
+Use a more capable model when needed for this request?
+Got it, staying on Free.
+
+Worked for 1 minute
+
+2 actions
+تم الفحص قراءةً فقط، ولم أعدّل أي ملف في هذا الفحص.
+
+القيم الفعلية في تدفق Google OAuth
+1. Supabase OAuth endpoint
+https://ajyalalmaerifa.com/auth/v1/authorize
+
+والطلب الذي يبنيه التطبيق يتضمن تقريباً:
+
+provider=google
+redirect_to=https://2a184f84-f507-46a5-a5e0-bb1bb782f8cf-00-3tiq8m8s56k4i.expo.sisko.replit.dev/auth/callback
+scopes=openid email profile
+code_challenge_method=s256
+
+قيمة code_challenge موجودة لأن التدفق يستخدم PKCE، ولم أعرض قيمتها.
+
+2. Google authorization endpoint
+بعد تحويل Supabase، ينتقل الطلب إلى:
+
+https://accounts.google.com/o/oauth2/v2/auth
+
+والقيم الفعلية التي أرسلها Supabase إلى Google هي:
+
+القيمة	القيمة الفعلية
+client_id	294986600823-9lpt5flc2e47287975sl7m63gdp4s9cv.apps.googleusercontent.com
+redirect_uri	https://ajyalalmaerifa.com/auth/v1/callback
+response_type	code
+scope	email profile openid email profile
+redirect_to	https://2a184f84-f507-46a5-a5e0-bb1bb782f8cf-00-3tiq8m8s56k4i.expo.sisko.replit.dev/auth/callback
+state	موجود، وتم إخفاؤه
+النطاقات الفعلية بدون التكرار هي:
+
+openid
+email
+profile
+
+التكرار ظاهر في رابط Google النهائي، لكنه لا يضيف صلاحيات جديدة.
+
+المقارنة مع Google Cloud
+الـclient_id الفعلي الذي يرسله التطبيق يطابق Client ID الظاهر في صورة Google Cloud:
+
+294986600823-9lpt5flc2e47287975sl7m63gdp4s9cv.apps.googleusercontent.com
+
+كما أن إعدادات Google Cloud الظاهرة تتوافق مع التدفق:
+
+Authorized JavaScript origins
+https://ajyalalmaerifa.com
+
+Authorized redirect URI
+https://ajyalalmaerifa.com/auth/v1/callback
+
+وهذا هو نفس redirect_uri الذي يرسله Supabase فعلياً إلى Google.
+
+هل يدخل رابط Replit أو Expo Preview في التدفق؟
+نعم، لكن في قيمة مختلفة اسمها redirect_to.
+
+التدفق الحالي هو:
+
+التطبيق
+  ↓
+https://ajyalalmaerifa.com/auth/v1/authorize
+  ↓
+Google
+  ↓
+https://ajyalalmaerifa.com/auth/v1/callback
+  ↓
+رابط Expo/Replit Preview
+  ↓
+/auth/callback داخل التطبيق
+
+رابط Replit/Expo Preview الحالي هو:
+
+https://2a184f84-f507-46a5-a5e0-bb1bb782f8cf-00-3tiq8m8s56k4i.expo.sisko.replit.dev/auth/callback
+
+إذن:
+
+Google لا يعيد النتيجة مباشرة إلى Replit.
+Google يعيدها أولاً إلى Supabase callback.
+Supabase يستخدم redirect_to لإرجاع الجلسة إلى التطبيق.
+في النسخة الأصلية من التطبيق، فرع الهاتف يستخدم:
+
+ajyal-mobile://auth/callback
+
+أما Expo Go فيستخدم رابط exp://.../--/auth/callback الذي يولّده Expo أثناء التشغيل.
+
+لم يتم عرض أي Client Secret أو مفتاح سري، ولم يتم الوصول إلى قيمتها.
+
+
+
+Worked for 43 seconds

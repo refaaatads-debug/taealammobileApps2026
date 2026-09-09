@@ -1,0 +1,512 @@
+نريد الآن الاستمرار في مشروع أجيال المعرفة Mobile/API بهدف الوصول إلى 100% Parity مع المنصة الأصلية.
+
+مهم جداً:
+لا أريد تقريراً عاماً جديداً ولا أريد اعتبار CODE VERIFIED = E2E SUCCESS.
+أريد معالجة النظام فعلياً مرحلة بعد مرحلة حتى يصبح مطابقاً للمنصة الأصلية والكود الموجود على GitHub وقاعدة البيانات.
+
+الحالة الحالية:
+- Stage 1 AUTH / PROFILE / ROLES / NAVIGATION: منجزة محلياً.
+- Stage 2 STUDENT DASHBOARD: منجزة محلياً.
+- Stage 3 TEACHERS / SUBJECTS / AVAILABILITY: منجزة محلياً.
+- Stage 4 SUBSCRIPTIONS / PLANS / PAYMENT RETURN: منجزة محلياً ضمن الحدود المثبتة.
+- Stage 5 BOOKING: تم تنفيذ إصلاحات الحجز محلياً.
+- Stage 6 SESSIONS/CALLS: بدأ التدقيق وتم تنفيذ إصلاحات عزل المكالمات.
+- Stage 7 E2E BOOKING AUDIT: انتهى بالتقرير، لكن E2E Production ما زال UNVERIFIED.
+
+التقارير الموجودة:
+- BOOKING_E2E_FINAL_PARITY_AUDIT.md
+- BOOKING_E2E_STAGE7_FINAL_REPORT.md
+- BOOKING_E2E_PRODUCTION_BLOCKER_REPORT.md
+- BOOKING_E2E_STAGE7_CLOSURE_REPORT.md
+- BOOKING_SYSTEM_FULL_ROOT_CAUSE_REPORT.md
+- BOOKING_PARITY_REPORT.md
+- SESSIONS_PARITY_REPORT.md
+- SUBSCRIPTIONS_PAYMENT_PARITY_REPORT.md
+
+الهدف الآن:
+إغلاق منظومة الحجز بالكامل قبل الانتقال إلى الجلسات والخصم والمحفظة.
+
+========================================
+أولاً: افهم نظام الحجز الحقيقي
+========================================
+
+النظام في المنصة الأصلية يحتوي على نظامين مختلفين للحجز:
+
+1) حجز معلم محدد:
+الطالب يختار معلماً محدداً + المادة + المرحلة + التاريخ + الوقت + البيانات المطلوبة.
+يتم إرسال الطلب لذلك المعلم فقط وفق قواعد المنصة الأصلية.
+
+2) حجز مادة / معلم مفتوح:
+الطالب لا يختار معلماً.
+يحدد المادة والمرحلة والتاريخ والوقت وباقي شروط الحجز.
+المنصة تبحث عن جميع المعلمين المؤهلين الذين تنطبق عليهم شروط الحجز والتوفر.
+يتم إرسال الطلب للمعلمين المؤهلين.
+أول معلم يقبل الطلب يصبح هو المعلم المرتبط بالجلسة وفق منطق المنصة الأصلي First Accept Wins.
+
+لا يجوز دمج النظامين في مسار واحد بطريقة تغير السلوك الأصلي.
+
+========================================
+ثانياً: المطلوب قبل أي تعديل
+========================================
+
+اعمل READ-ONLY AUDIT شامل للمسارات التالية:
+
+- GitHub / source الأصلي.
+- Mobile الحالي.
+- API الحالي.
+- OpenAPI.
+- Supabase schema.
+- booking_requests.
+- bookings.
+- sessions.
+- teacher_subjects.
+- subjects.
+- public_profiles.
+- availability fields.
+- RPCs.
+- RLS.
+- triggers.
+- notifications.
+- أي خدمة مرتبطة بالقبول أو إنشاء الجلسة.
+
+لا تعدل أي ملف قبل الانتهاء من المقارنة.
+
+أنشئ تقريراً:
+BOOKING_E2E_STAGE8_PRE_FIX_AUDIT.md
+
+يجب أن يحتوي على:
+
+- المصدر الأصلي للسلوك.
+- الكود الحالي.
+- المسار المطلوب.
+- الفرق.
+- Root Cause.
+- MATCHED / PARTIAL / MISMATCH / UNVERIFIED / BLOCKED.
+- الملفات المسؤولة.
+- هل الإصلاح ممكن داخل Mobile/API؟
+- أم يحتاج Production؟
+- سبب الحاجة إلى Production إن وجد.
+
+========================================
+ثالثاً: حجز معلم محدد
+========================================
+
+راجع المسار كاملاً من:
+
+Student UI
+→ API
+→ Auth
+→ Eligibility
+→ Teacher
+→ Subject
+→ Availability
+→ Date
+→ Time
+→ Duration
+→ booking_requests
+→ notification
+→ teacher acceptance
+→ RPC
+→ bookings
+→ session
+
+تحقق خصوصاً من:
+
+- عدم إضافة شروط غير موجودة في المنصة الأصلية.
+- عدم إرسال teaching_stage إذا لم يكن جزءاً من العقد الأصلي.
+- teacher_id / teacher profile mapping.
+- teacher_subjects.
+- subject_id.
+- availability.
+- available_days.
+- available_from.
+- available_to.
+- timezone.
+- مدة الجلسة.
+- الاشتراك.
+- remaining_minutes.
+- التعارض.
+- حالة الطلب.
+- إشعار المعلم.
+- قبول المعلم.
+- إنشاء booking.
+- إنشاء session إن كان ذلك جزءاً من العقد.
+
+لا تستخدم أي fallback وهمي للوقت أو التوفر.
+
+========================================
+رابعاً: الحجز المفتوح حسب المادة
+========================================
+
+هذا المسار مهم جداً ولا أريد اعتباره مجرد نسخة من حجز المعلم المحدد.
+
+يجب أن يعمل هكذا:
+
+Student:
+اختيار المادة + المرحلة + التاريخ + الوقت + المدة + الشروط المطلوبة
+↓
+API
+↓
+تحديد جميع المعلمين المؤهلين
+↓
+public_profiles
++
+teacher_subjects
++
+subjects
++
+أي شروط Eligibility أصلية
++
+Availability الحقيقية
+↓
+إرسال الطلب للمعلمين المؤهلين
+↓
+انتظار القبول
+↓
+First Accept Wins
+↓
+تثبيت المعلم المقبول
+↓
+إنشاء booking/session وفق عقد المنصة.
+
+ممنوع:
+- اختيار أول معلم عشوائياً من قاعدة البيانات.
+- اختيار معلم عشوائي بدون availability.
+- استخدام fallback ساعات ثابتة.
+- اعتبار قائمة /teachers وحدها مصدراً للحقيقة.
+- اختراع teacher_id داخل booking_requests إذا لم يكن موجوداً في Production.
+- تغيير First Accept Wins.
+- إنشاء booking مباشرة من Mobile.
+
+========================================
+خامساً: Availability
+========================================
+
+أريد تحديد المصدر الحقيقي في المنصة بالضبط.
+
+لا تقل:
+"المعلم متاح في الواجهة"
+
+بل أثبت:
+
+من أين تأتي البيانات؟
+
+ما أسماء الحقول؟
+
+كيف يتم تفسير:
+available_days
+available_from
+available_to
+
+كيف يتم التعامل مع timezone؟
+
+كيف تتحقق المنصة أن:
+start_time + session_duration <= available_to
+
+كيف يتم التعامل مع اليوم؟
+
+هل اليوم المخزن Monday/Tuesday أم أرقام أم صيغة أخرى؟
+
+لا تستخدم default hours.
+
+إذا كان التحقق الحقيقي يجب أن يحدث في Production/RPC:
+صنّف ذلك BLOCKED ولا تخترع حلاً محلياً.
+
+========================================
+سادساً: First Accept Wins
+========================================
+
+راجع RPCs والـdatabase logic.
+
+أريد إثبات:
+
+- ماذا يحدث عندما يقبل معلمان نفس الطلب في نفس اللحظة؟
+- هل يوجد transaction؟
+- هل يوجد row lock؟
+- هل يوجد unique constraint؟
+- هل RPC يرفض القبول الثاني؟
+- هل booking ينشأ مرة واحدة؟
+- هل session ينشأ مرة واحدة؟
+- هل الإشعارات صحيحة؟
+- هل الطلب ينتقل إلى accepted مرة واحدة فقط؟
+
+إذا كان الكود المحلي لا يستطيع ضمان ذلك:
+لا تقل إنه solved.
+
+صنفه:
+BLOCKED / PRODUCTION DEPENDENCY
+
+ثم وضح بالضبط ما الذي يحتاج تغييره في Production.
+
+========================================
+سابعاً: Race Conditions
+========================================
+
+اختبر منطق:
+
+Teacher A accepts
++
+Teacher B accepts
+في نفس الوقت.
+
+لا تنفذ Production بدون إذن.
+
+إذا لم يمكن تنفيذ الاختبار الحقيقي:
+أنشئ اختباراً محلياً/تكاملياً يحاكي التزامن ويثبت ما يمكن إثباته.
+
+لكن لا تدّعي أن ذلك يثبت Production.
+
+========================================
+ثامناً: قبول ورفض الطلب
+========================================
+
+راجع:
+
+accept_booking_request
+accept_booking_group
+reject_booking_request
+
+وتأكد من:
+
+- role guard.
+- ownership.
+- eligibility.
+- availability.
+- status transitions.
+- duplicate acceptance.
+- duplicate rejection.
+- notifications.
+- booking creation.
+- session creation.
+- financial side effects.
+
+لا تجعل API يعيد نجاحاً إذا لم تنجح العملية الأصلية.
+
+========================================
+تاسعاً: Database Integrity
+========================================
+
+أريد مقارنة صريحة بين:
+
+booking_requests
+bookings
+sessions
+subscriptions
+notifications
+
+مع RPCs وRLS وTriggers.
+
+حدد:
+
+ما يستطيع Mobile/API فعله.
+
+ما لا يستطيع فعله.
+
+ما الذي يملكه Production.
+
+ما الذي يحتاج تغييراً.
+
+لا تعدل Schema/RLS/RPC/Trigger/Production بدون إذني الصريح.
+
+========================================
+عاشراً: لا تتوقف عند التقرير
+========================================
+
+بعد إنشاء:
+
+BOOKING_E2E_STAGE8_PRE_FIX_AUDIT.md
+
+ابدأ بالإصلاحات الآمنة والمؤكدة فقط.
+
+الأولوية:
+
+P0:
+- إنشاء طلب حجز معلم محدد.
+- إنشاء طلب حجز مفتوح حسب المادة.
+- eligibility.
+- availability.
+- time/duration.
+- subscription/remaining_minutes.
+- accept.
+- reject.
+- First Accept Wins.
+- notifications.
+
+P1:
+- group booking.
+- cancellation.
+- expiration.
+- dashboard synchronization.
+
+P2:
+- UX/errors/loading/empty states.
+
+أي إصلاح لا يحتاج Production:
+نفذه.
+
+أي إصلاح يحتاج Production:
+لا تنفذه.
+وثقه كـBLOCKED مع السبب الدقيق.
+
+========================================
+الحادي عشر: لا تستخدم Mock/Fallback
+========================================
+
+ممنوع تماماً:
+
+- Mock availability.
+- default hours.
+- random teacher.
+- fake subscription.
+- fake balance.
+- fake booking success.
+- fake notification success.
+- local booking database بديلة عن Supabase.
+- bypass لـRLS.
+- تجاوز RPC.
+- hardcoded teacher.
+- hardcoded subject.
+- hardcoded timezone.
+
+========================================
+الثاني عشر: الاختبارات
+========================================
+
+بعد الإصلاحات:
+
+- API TypeScript.
+- Mobile TypeScript.
+- OpenAPI generation.
+- API build.
+- Android bundle.
+- iOS bundle.
+- git diff --check.
+- healthz.
+- auth guards.
+- booking endpoint بدون auth يجب أن يعيد 401.
+- teacher endpoints بدون auth يجب أن تعيد 401.
+- أي اختبار تكاملي محلي ممكن.
+- اختبار concurrency محلي إن أمكن.
+
+لا تستخدم بيانات شخصية حقيقية.
+
+========================================
+الثالث عشر: Production E2E
+========================================
+
+لا تنفذ أي كتابة Production تلقائياً.
+
+إذا كان يلزم اختبار Production الحقيقي، توقف قبل الكتابة وقدم لي:
+
+1. ما الحسابات المطلوبة:
+   - Student test account
+   - Teacher A test account
+   - Teacher B test account
+
+2. ما البيانات المطلوبة:
+   - profile
+   - subject
+   - teacher_subjects
+   - availability
+   - active subscription
+   - remaining_minutes
+
+3. ما الاختبار الذي سيتم تنفيذه.
+
+4. ما الجداول التي سيتم فحصها.
+
+5. كيف سيتم تنظيف بيانات الاختبار بأمان.
+
+ثم انتظر موافقتي الصريحة.
+
+========================================
+الرابع عشر: التقارير
+========================================
+
+أنشئ بعد الإصلاح:
+
+BOOKING_E2E_STAGE8_FINAL_REPORT.md
+
+ويجب أن يحتوي:
+
+- Before
+- Root Cause
+- Fix
+- Files Changed
+- Database Findings
+- Production Findings
+- Tests
+- Security
+- Remaining Blockers
+- Exact Next Step
+
+وفي النهاية جدول:
+
+Specific Teacher Booking
+Open Subject Booking
+Availability
+Timezone
+Eligibility
+Subscription
+Create Request
+Accept
+Reject
+First Accept Wins
+Race Conditions
+Notifications
+Group Booking
+Cancellation
+Expiration
+Database Integrity
+Android
+iOS
+
+لكل بند:
+
+MATCHED / PARTIAL / MISMATCH / UNVERIFIED / BLOCKED
+
+========================================
+القاعدة الأهم
+========================================
+
+لا تعلن:
+
+"100%"
+أو
+"E2E SUCCESS"
+
+إلا إذا تم إثبات المسار فعلياً.
+
+الهدف النهائي:
+
+SOURCE PLATFORM
+=
+GITHUB
+=
+DATABASE
+=
+API
+=
+MOBILE
+
+مع E2E حقيقي.
+
+إذا كان هناك اختلاف بين المنصة والكود:
+أثبت الاختلاف أولاً.
+
+إذا كان الإصلاح آمناً داخل Mobile/API:
+نفذه.
+
+إذا كان يحتاج Production:
+توقف وصنفه BLOCKED.
+
+لا تخترع أي سلوك.
+
+بعد إنهاء Stage 8 بالكامل، لا تبدأ Stage 9 تلقائياً.
+
+أعطني فقط:
+1. ما الذي تم إصلاحه.
+2. ما الذي ثبت.
+3. ما الذي بقي.
+4. ما الذي يحتاج Production.
+5. هل يمكن الانتقال للمرحلة التالية أم لا.

@@ -1,0 +1,134 @@
+أريد منك الآن حل مشكلة الاتصال بين Replit API والـVPS بشكل نهائي، وليس إنشاء تقرير جديد فقط.
+
+مهم جداً:
+- لا تعدّل Mobile أو Expo أو Supabase Auth أو Tokens كحل التفافي.
+- لا تغيّر Database أو RLS أو RPC أو Production business logic.
+- لا تفترض أن المشكلة من Replit.
+- لا تفترض أن المشكلة من VPS.
+- المطلوب أولاً تحديد مكان العطل بالدليل ثم إصلاحه إن كان لديك وصول فعلي للـVPS/Hostinger.
+- لا تكتفِ بقول "Production blocked"؛ أريد تنفيذ خطوات التشخيص والإصلاح الممكنة فعلياً.
+- لا تنشئ Prompts أو Tasks جديدة بدلاً من تنفيذ المطلوب.
+- لا تطلب مني Secret جديد طالما أن المشكلة TCP connectivity.
+- لا تنفذ أي حجز أو دفع أو جلسة حقيقية.
+
+السياق المثبت حتى الآن:
+
+Replit API يعمل محلياً:
+GET /api/healthz = 200
+
+الاتصال العام من Replit يعمل:
+HTTPS إلى مواقع عامة = SUCCESS
+TCP 1.1.1.1:443 = SUCCESS
+ولا يوجد Proxy مفعّل في بيئة API.
+
+DNS:
+ajyalalmaerifa.com → 72.61.23.237
+ولا يوجد IPv6.
+
+لكن جميع الاتصالات إلى الـVPS تفشل:
+72.61.23.237:22   = TIMEOUT
+72.61.23.237:80   = TIMEOUT
+72.61.23.237:443  = TIMEOUT
+72.61.23.237:8000 = TIMEOUT
+72.61.23.237:3001 = TIMEOUT
+72.61.23.237:5349 = TIMEOUT
+
+هذا يعني أن المشكلة ليست "HTTPS ممنوع من Replit" بشكل عام؛ الوجهة 72.61.23.237 تحديداً غير قابلة للوصول من Replit.
+
+لكن توجد أدلة سابقة أن الخدمات تعمل من داخل الـVPS، لذلك يجب الآن التحقق من السبب الحقيقي داخل VPS/Hostinger.
+
+نفّذ READ-ONLY أولاً داخل الـVPS إن كان لديك وصول:
+
+1. ip -4 addr
+2. ip route
+3. hostname -I
+4. ss -lntp
+5. sudo nginx -t
+6. sudo systemctl status nginx --no-pager
+7. curl -vk --max-time 5 https://127.0.0.1/
+8. curl -vk --max-time 5 https://72.61.23.237/
+9. sudo ufw status verbose
+10. sudo iptables -L -n -v
+11. sudo nft list ruleset
+12. docker ps
+13. docker compose ps إن كان المشروع يستخدم Docker
+14. تحقق من Cloud Firewall / Network Firewall في Hostinger إن كان متاحاً.
+
+لا تغيّر أي Firewall Rule قبل معرفة النتيجة.
+
+بعد الفحص، صنّف السبب بدقة إلى واحد فقط:
+
+A) DNS يشير إلى IP قديم/خاطئ
+B) الـVPS لديه Public IP مختلف
+C) لا يوجد Listener على 443/80
+D) Listener موجود محلياً لكنه مربوط على localhost فقط
+E) UFW/iptables/nftables يمنع الاتصال
+F) Hostinger Cloud Firewall يمنع الاتصال
+G) Provider/Network routing يمنع الوصول الخارجي
+H) سبب آخر مثبت بالدليل
+
+إذا كان السبب قابلاً للإصلاح من داخل الـVPS ولديك صلاحية فعلية، أصلحه.
+
+إذا كان السبب Hostinger Cloud Firewall أو Provider Network ولا يمكن إصلاحه من داخل الخادم، لا تخمّن. أعطني بالضبط:
+- ما الذي يمنع الاتصال
+- أين يوجد المنع
+- ما الإعداد الذي يجب تغييره في Hostinger
+- ما القيمة المطلوبة
+- كيف أتحقق بعد التغيير
+
+بعد أي إصلاح، يجب إجراء اختبار حقيقي من Replit:
+
+TCP:
+72.61.23.237:443 = CONNECTED
+
+ثم:
+curl إلى https://ajyalalmaerifa.com
+
+ثم:
+curl إلى endpoint Supabase/Auth المطلوب
+
+ثم اختبار:
+Replit API → Supabase
+
+ثم فقط بعد نجاح الشبكة:
+Expo → API → Supabase Auth → /api/me
+
+لا تعتبر المشكلة محلولة بناءً على أن Nginx يعمل محلياً فقط.
+ولا تعتبرها محلولة بناءً على healthz داخل Replit.
+
+معيار النجاح النهائي:
+
+1. Replit يستطيع فتح TCP إلى 72.61.23.237:443
+2. HTTPS إلى ajyalalmaerifa.com يعمل من Replit
+3. API يستطيع الوصول إلى Supabase
+4. GET /api/me مع Bearer Token يعمل
+5. تسجيل دخول التطبيق لا يظهر "تعذر التحقق من الحساب"
+6. لا يتم تغيير Mobile workaround لإخفاء المشكلة.
+
+أثناء التنفيذ:
+- لا تعدّل Production business logic.
+- لا تغير Secrets إلا إذا أثبت الفحص أن Secret خاطئ.
+- لا تغير DNS إلا إذا أثبت ip addr أن 72.61.23.237 ليس Public IP الحالي.
+- لا تفتح منافذ إضافية عشوائياً.
+- لا تضف Firewall rules عشوائية.
+- لا تستخدم عنوان Replit 34.180.8.129 كحل دائم لأنه غير مثبت كـStatic Egress.
+
+الأهم:
+أريد منك تنفيذ التشخيص على الـVPS/Hostinger إن كان لديك وصول، وليس إعادة نفس تقرير "Production BLOCKED".
+
+في النهاية أعطني فقط:
+
+ROOT CAUSE:
+FIX:
+FILES CHANGED:
+VPS CHANGES:
+HOSTINGER CHANGES:
+TEST RESULTS:
+REPLIT → VPS 443:
+REPLIT → HTTPS:
+REPLIT → SUPABASE:
+API /api/me:
+LOGIN:
+FINAL STATUS:
+
+ولا تعلن SUCCESS إلا إذا أثبتت الاتصال فعلياً من Replit إلى الـVPS.
