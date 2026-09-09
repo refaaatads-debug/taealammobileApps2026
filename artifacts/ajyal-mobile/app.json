@@ -1,0 +1,84 @@
+{
+  "expo": {
+    "name": "أجيال المعرفة",
+    "slug": "ajyal-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/ajyal-icon.png",
+    "scheme": "ajyalalmaerifa",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.ajyalalmaarefa.mobile",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية.",
+        "NSCameraUsageDescription": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
+        "NSPhotoLibraryUsageDescription": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
+      }
+    },
+    "android": {
+      "package": "com.ajyalalmaarefa.mobile",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/ajyal-icon.png"
+    },
+    "splash": {
+      "backgroundColor": "#F6F7F9",
+      "image": "./assets/images/ajyal-icon.png",
+      "resizeMode": "contain"
+    },
+    "updates": {
+      "checkAutomatically": "ON_ERROR_RECOVERY",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "extra": {
+      "updatePolicy": {
+        "mandatory": true,
+        "minimumSupportedVersion": "1.0.0"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
+          "microphonePermission": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#2E9E79",
+          "enableBackgroundRemoteNotifications": true,
+          "sounds": [
+            "./assets/audio/incoming-call.wav",
+            "./assets/audio/message-notification.wav",
+            "./assets/audio/session-notification.wav",
+            "./assets/audio/approval-notification.wav"
+          ]
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/ajyal-mobile/"
+title = "أجيال المعرفة — تطبيق الطالب والمعلم"
+description = "تطبيق جوال موحد لمنصة أجيال المعرفة، يقدم تجربة عربية احترافية للطلاب والمعلمين مع لوحات مخصصة حسب الدور، الحجوزات، الجلسات، الواجبات، الإشعارات، والاتصال الداخلي."
+version = "1.0.0"
+id = "artifacts/ajyal-mobile"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/ajyal-mobile/" ]
+localPort = 22030
+
+[services.development]
+run = "pnpm --filter @workspace/ajyal-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/ajyal-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/ajyal-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "22030"
+BASE_PATH = "/ajyal-mobile/"
