@@ -1,0 +1,477 @@
+نبدأ الآن مرحلة حسم Availability / Timezone / Booking Validation قبل أي انتقال إلى Sessions.
+
+مهم جداً:
+لا تبدأ Sessions.
+لا تبدأ WebRTC.
+لا تبدأ Attendance.
+لا تبدأ خصم الدقائق.
+لا تبدأ Wallet.
+لا تبدأ Withdrawals.
+لا تبدأ Assignments.
+
+الهدف الوحيد الآن هو إزالة آخر الغموض الذي يمنع إثبات الحجز الحقيقي.
+
+الحالة الحالية المثبتة:
+
+Availability = PARTIAL
+Timezone = BLOCKED
+Specific Teacher Booking = PARTIAL
+Open Subject Booking = UNVERIFIED
+Group Booking = PARTIAL
+Production E2E = PRODUCTION BLOCKED
+
+لدينا تقارير سابقة يجب اعتبارها baseline وعدم تجاوزها:
+
+AVAILABILITY_TIMEZONE_PRE_FIX_AUDIT.md
+AVAILABILITY_TIMEZONE_FINAL_REPORT.md
+BOOKING_E2E_FINAL_PARITY_AUDIT.md
+BOOKING_E2E_STAGE7_FINAL_REPORT.md
+BOOKING_E2E_STAGE8_FINAL_REPORT.md
+BOOKING_GROUP_STAGE_FINAL_REPORT.md
+
+أولاً READ-ONLY بالكامل.
+
+لا تعدل أي كود حتى تنتهي من التحقيق.
+
+==================================================
+A — تحديد Timezone الحقيقي
+==================================================
+
+راجع SOURCE PLATFORM + GitHub + Database + migrations + views + RPC + API + Mobile.
+
+أريد إجابة مؤكدة:
+
+1. هل يوجد timezone للمعلم في أي مكان؟
+2. هل يوجد timezone للطالب؟
+3. هل يوجد timezone في user/profile؟
+4. هل يوجد timezone في booking_requests؟
+5. هل يوجد timezone في bookings؟
+6. هل يوجد timezone في sessions؟
+7. هل يوجد timezone في أي جدول آخر؟
+8. هل المنصة تعتمد timezone الجهاز؟
+9. هل المنصة تعتمد timezone الخادم؟
+10. هل المنصة تعتمد UTC؟
+11. هل المنصة تستخدم browser local time؟
+12. أين يتم تحويل التاريخ والوقت إلى ISO؟
+13. أين تستخدم toISOString()؟
+14. هل هذا التحويل جزء من العقد الأصلي أم مجرد تنفيذ Frontend؟
+15. هل توجد قاعدة رسمية تحدد معنى available_from/available_to؟
+
+لا تفترض:
+Asia/Riyadh
+UTC
+local timezone
+teacher timezone
+student timezone
+
+إلا إذا وجدت دليلاً صريحاً.
+
+إذا لم يوجد timezone contract فعلياً:
+
+سجله صراحة:
+
+TIMEZONE CONTRACT = NOT DEFINED IN SOURCE
+
+ولا تخترع بديلاً.
+
+==================================================
+B — تحديد Availability Contract
+==================================================
+
+ثبت العقد الفعلي:
+
+teacher_profiles.available_days
+teacher_profiles.available_from
+teacher_profiles.available_to
+
+ثم حدد:
+
+- صيغة الأيام.
+- صيغة الوقت.
+- هل available_to شامل؟
+- هل available_to يمثل بداية آخر slot أم نهاية نافذة التوفر؟
+- هل مدة الجلسة تدخل في الحساب؟
+- هل 30 دقيقة و45 دقيقة و60 دقيقة تتعامل معها المنصة كيف؟
+- هل slot start + duration <= available_to؟
+- ماذا يحدث إذا كانت المدة تتجاوز availability؟
+- ماذا يحدث إذا كان اليوم غير موجود؟
+- ماذا يحدث إذا كانت Availability NULL؟
+- هل المنصة ترفض أم تعرض fallback؟
+- هل API يرفض أم Mobile فقط؟
+- هل Database/RPC تفرض ذلك؟
+
+كل إجابة يجب أن تكون مدعومة من الكود أو قاعدة البيانات.
+
+==================================================
+C — Specific Teacher Booking
+==================================================
+
+راجع المسار كاملاً:
+
+Student
+→ Teacher
+→ Subject
+→ Date
+→ Time
+→ Duration
+→ booking_requests
+→ Accept
+→ bookings
+
+ثبت:
+
+- هل المعلم المحدد فقط يستقبل الطلب؟
+- هل booking_requests تحتوي teacher_id؟
+- إذا لم تحتوي teacher_id، كيف تعرف المنصة المعلم المقصود؟
+- هل هناك metadata أو relation أخرى؟
+- هل API الحالي يرسل teacher_id؟
+- هل Database تحفظه؟
+- هل RLS تمنع باقي المعلمين؟
+- هل الإشعار فقط هو الذي يحدد المعلم؟
+- هل هذا يعني أن الطلب ليس معزولاً فعلياً؟
+
+هذه نقطة حرجة.
+
+إذا كانت المنصة نفسها لديها limitation في schema:
+
+لا تخترع workaround.
+
+صنف:
+
+PLATFORM LIMITATION
+
+ووضح أثرها.
+
+==================================================
+D — Open Subject Booking
+==================================================
+
+راجع المسار الأصلي حرفياً:
+
+Student
+→ Subject
+→ Stage
+→ Duration
+→ Date/Time
+→ Eligible Teachers
+→ booking_requests
+→ Notifications
+→ First Accept Wins
+
+أثبت:
+
+1. كيف تحدد المنصة المعلمين المؤهلين؟
+2. هل الاعتماد شرط؟
+3. هل المادة شرط؟
+4. هل Availability شرط؟
+5. هل المرحلة شرط؟
+6. هل subscription شرط؟
+7. هل الرصيد شرط؟
+8. هل يتم إرسال الطلب لكل المعلمين؟
+9. هل يتم إنشاء صف واحد؟
+10. هل يتم إنشاء صف لكل معلم؟
+11. كيف يعمل First Accept Wins؟
+12. ماذا يحدث عند قبول معلمين في نفس اللحظة؟
+13. ما RPC المسؤول؟
+14. أين يتم فرض السباق؟
+15. هل Mobile/API الحالي مطابق؟
+
+لا تقل "عشوائي" إلا إذا المصدر نفسه يستخدم هذا المصطلح.
+استخدم "Open Subject Booking" أو المصطلح الموجود في المنصة.
+
+==================================================
+E — Group Booking
+==================================================
+
+راجع Stage السابقة.
+
+أثبت:
+
+- هل عدة slots يجب أن تنجح كلها؟
+- هل كل slot ينشئ booking_request؟
+- هل لها group_id واحد؟
+- هل teacher_id موجود؟
+- كيف يتم القبول؟
+- كيف يتم الرفض؟
+- كيف تعمل expiration؟
+- كيف تعمل cancellation؟
+- كيف تعمل First Accept Wins؟
+- هل قبول slot واحد يؤثر على بقية المجموعة؟
+- هل يوجد transaction؟
+- هل يوجد RPC؟
+- هل Mobile مطابق؟
+- هل API مطابق؟
+
+==================================================
+F — Server-side Validation
+==================================================
+
+هذه أهم نقطة.
+
+حدد أين يجب أن يتم التحقق من:
+
+- available_days
+- available_from
+- available_to
+- duration
+- date
+- timezone
+- conflicts
+- subscription
+- remaining_minutes
+- teacher eligibility
+
+أريد فصل:
+
+CLIENT VALIDATION
+API VALIDATION
+RPC VALIDATION
+DATABASE CONSTRAINT
+RLS
+
+لا تعتبر Client validation كافية.
+
+إذا كانت المنصة الأصلية تعتمد RPC أو Database:
+
+أثبت ذلك.
+
+إذا كان لا يوجد enforcement:
+
+قل ذلك صراحة ولا تخترع واحداً.
+
+==================================================
+G — Race Conditions
+==================================================
+
+راجع First Accept Wins.
+
+أريد تحديد:
+
+- هل RPC الحالي atomic؟
+- هل يستخدم transaction؟
+- هل يستخدم conditional update؟
+- هل يتحقق من status قبل القبول؟
+- هل يمكن طلبين قبول نفس الطلب؟
+- ماذا يحدث إذا ضغط معلمان Accept في نفس اللحظة؟
+- هل booking يتم إنشاؤه قبل أو بعد تغيير status؟
+- هل توجد UNIQUE constraints؟
+- هل يوجد locking؟
+- هل يمكن إنشاء booking مزدوج؟
+
+إذا لم نستطع إثبات ذلك بدون Production:
+
+صنف:
+
+RACE CONDITION = PRODUCTION UNVERIFIED
+
+ولا تدعي أنه BLOCKED إلا إذا كان هناك سبب محدد يمنع الاختبار.
+
+==================================================
+H — التقرير الإلزامي
+==================================================
+
+قبل أي تعديل أنشئ:
+
+BOOKING_AVAILABILITY_TIMEZONE_FINAL_GAP_AUDIT.md
+
+ويجب أن يحتوي:
+
+1. Executive Summary
+2. Source of Truth
+3. Availability Contract
+4. Timezone Contract
+5. Specific Teacher Booking
+6. Open Subject Booking
+7. Group Booking
+8. Server-side Validation
+9. RPC
+10. RLS
+11. Race Conditions
+12. Mobile vs API vs Platform
+13. Confirmed Mismatches
+14. Production Blockers
+15. Safe Fixes
+16. Unsafe Fixes
+17. Exact E2E Requirements
+
+==================================================
+I — بعد التقرير فقط
+==================================================
+
+لا تصلح إلا الفروقات المؤكدة التي يمكن إصلاحها بأمان داخل:
+
+Mobile
+API
+OpenAPI
+
+ممنوع:
+
+Database schema
+RLS
+RPC
+Triggers
+Production Auth
+Production settings
+
+إلا إذا كان هناك إذن صريح لاحقاً.
+
+ولا تضف:
+
+timezone افتراضي
+UTC افتراضي
+Asia/Riyadh
+default availability
+default hours
+mock teachers
+mock slots
+
+==================================================
+J — E2E TEST PLAN
+==================================================
+
+بعد الإصلاح المحلي، جهز خطة E2E حقيقية تشمل:
+
+TEST 1
+Specific Teacher:
+طالب + معلم محدد + مادة + Availability صحيحة + slot صحيح.
+
+TEST 2
+Specific Teacher:
+slot خارج Availability = رفض.
+
+TEST 3
+Specific Teacher:
+مدة تتجاوز available_to = رفض.
+
+TEST 4
+Open Subject:
+مادة + شروط الحجز → جميع المعلمين المؤهلين.
+
+TEST 5
+Open Subject:
+معلمان مؤهلان → First Accept Wins.
+
+TEST 6
+Open Subject:
+معلمان يقبلان في نفس الوقت → لا يوجد booking مزدوج.
+
+TEST 7
+Group Booking:
+عدة slots صحيحة.
+
+TEST 8
+Group Booking:
+slot واحد غير صالح.
+
+TEST 9
+Group Booking:
+قبول/رفض/expiration.
+
+TEST 10
+Subscription:
+الرصيد غير كافٍ.
+
+TEST 11
+Subscription:
+الرصيد كافٍ.
+
+TEST 12
+Conflict:
+موعد متعارض.
+
+TEST 13
+Notifications:
+المعلمون المؤهلون يستقبلون الطلب.
+
+TEST 14
+Persistence:
+فحص booking_requests وbookings بعد العملية.
+
+TEST 15
+Timezone:
+اختبار timezone فقط إذا كان هناك contract مثبت من المصدر.
+
+==================================================
+K — الاختبارات البرمجية
+==================================================
+
+شغل:
+
+OpenAPI codegen
+API TypeScript
+Mobile TypeScript
+Workspace typecheck
+API build
+Android bundle
+iOS bundle
+git diff --check
+API restart
+Expo restart
+healthz
+auth guards
+
+ولا تعتبر هذه الاختبارات E2E.
+
+==================================================
+L — التقرير النهائي
+==================================================
+
+بعد التنفيذ أنشئ:
+
+BOOKING_AVAILABILITY_TIMEZONE_FINAL_REPORT.md
+
+ويجب أن يوضح:
+
+Before
+Root Cause
+Exact Platform Contract
+Fixes
+Files Changed
+Tests
+E2E Tests
+Production Tests
+Database Evidence
+Remaining Blockers
+Next Step
+
+وفي النهاية أعطني هذه الحالة حرفياً:
+
+Availability =
+Timezone =
+Specific Teacher Booking =
+Open Subject Booking =
+Group Booking =
+First Accept Wins =
+Race Conditions =
+Server-side Validation =
+Production E2E =
+
+ثم:
+
+1. هل الحجز الآن مطابق للمنصة؟
+2. ما الشيء الوحيد المتبقي قبل Production E2E؟
+3. هل يمكن الانتقال للجلسات؟
+
+ممنوع الإجابة بـ100% إذا لم يتم E2E الحقيقي.
+
+إذا كان هناك نقص في Production:
+
+اكتب بوضوح:
+
+PRODUCTION BLOCKED
+
+ولا تعمل workaround يخالف المصدر.
+
+الهدف النهائي:
+
+SOURCE PLATFORM
+=
+GITHUB
+=
+DATABASE
+=
+API
+=
+MOBILE
+
+ولا ننتقل إلى Sessions إلا بعد إغلاق كل فجوات الحجز أو توثيقها كقيود حقيقية من المنصة نفسها.

@@ -1,0 +1,301 @@
+نبدأ الآن المرحلة 3 فقط:
+
+TEACHERS / SUBJECTS / TEACHING STAGES / AVAILABILITY
+
+الهدف هو الوصول إلى أعلى تطابق ممكن مع المنصة الأصلية في هذه الوحدة فقط، بناءً على المخططات الهندسية + كود المنصة + كود التطبيق + Production read-only عندما يكون ذلك ممكناً.
+
+مهم جداً — قواعد إلزامية:
+
+1. المنصة الأصلية وProduction هما مصدر الحقيقة.
+2. التطبيق مشروع مستقل.
+3. ممنوع تعديل كود المنصة الأصلية.
+4. ممنوع تعديل Production Database.
+5. ممنوع تعديل Schema أو Tables أو Columns.
+6. ممنوع تعديل RLS.
+7. ممنوع تعديل RPC.
+8. ممنوع تعديل Functions أو Triggers.
+9. ممنوع تعديل Auth/OAuth.
+10. ممنوع تعديل Storage Policies أو Realtime.
+11. ممنوع تعديل VPS أو Nginx أو Kong.
+12. ممنوع Migration أو Deploy إلى Production.
+13. ممنوع إنشاء Mock Data أو بيانات بديلة.
+14. ممنوع التخمين.
+15. أي نقطة تحتاج تغيير Production صنفها BLOCKED ولا تنفذها.
+16. لا تستخدم Password أو Access Token أو Refresh Token من المحادثة.
+17. لا تنفذ Booking حقيقي أو دفع أو عملية مالية.
+18. لا تنتقل إلى مرحلة الاشتراكات أو الحجز بعد انتهاء هذه المرحلة.
+
+النطاق المسموح فقط:
+
+- قائمة المعلمين.
+- ملف المعلم.
+- المواد.
+- المراحل الدراسية.
+- التوفر.
+- البحث.
+- الفلاتر.
+- الترتيب.
+- حالة اعتماد المعلم.
+- العلاقات بين المعلم والمواد.
+- علاقات المعلم بالمراحل.
+- available_days.
+- available_from.
+- available_to.
+- السعر والتقييم إذا كانت جزءاً من هذه الوحدة.
+- حالات عدم وجود معلمين.
+- حالات عدم وجود مواد.
+- حالات عدم وجود توفر.
+- صلاحية الطالب في رؤية البيانات.
+
+========================================
+أولاً — استخراج الحقيقة من المنصة الأصلية
+========================================
+
+راجع كود المنصة الأصلية والمخططات الهندسية المتاحة.
+
+حدد بدقة:
+
+1. مصدر قائمة المعلمين.
+2. مصدر Profile المعلم.
+3. مصدر اسم المعلم وصورته.
+4. مصدر المواد.
+5. مصدر ربط المعلم بالمواد.
+6. مصدر المراحل الدراسية.
+7. مصدر ربط المعلم بالمراحل.
+8. شرط ظهور المعلم.
+9. شرط is_approved.
+10. طريقة البحث.
+11. الحقول التي يبحث فيها البحث.
+12. الفلاتر.
+13. ترتيب النتائج.
+14. مصدر التقييم.
+15. مصدر السعر.
+16. مصدر التوفر.
+17. معنى available_days.
+18. معنى available_from.
+19. معنى available_to.
+20. ماذا يحدث إذا كان التوفر فارغاً.
+21. ماذا يحدث إذا كانت الساعات فارغة.
+22. هل المنصة تنشئ توفر افتراضياً أم لا.
+23. حالات Empty.
+24. حالات Error.
+25. حالات Loading.
+26. أي Pagination أو Limit.
+27. أي ترتيب افتراضي.
+28. أي شروط صلاحيات أو RLS يمكن إثباتها.
+
+========================================
+ثانياً — تدقيق التطبيق الحالي
+========================================
+
+راجع:
+
+- artifacts/ajyal-mobile/app/find-teacher.tsx
+- artifacts/ajyal-mobile/app/booking.tsx
+- artifacts/api-server/src/routes/directory.ts
+- lib/api-spec
+- lib/api-client-react
+- أي hooks أو services مرتبطة بالمعلمين.
+- أي API endpoint متعلق بالمعلمين والمواد والتوفر.
+
+قارن كل عنصر مع المنصة.
+
+أنشئ جدولاً:
+
+FEATURE
+PLATFORM
+MOBILE
+API
+STATUS
+EVIDENCE
+RISK
+FIX
+
+والـSTATUS يجب أن يكون واحداً فقط:
+
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+NOT_APPLICABLE
+
+========================================
+ثالثاً — راجع الإصلاحات السابقة
+========================================
+
+لا تفترض أن التعديلات السابقة صحيحة لمجرد أنها نجحت في Build.
+
+تحقق تحديداً من:
+
+- public_teacher_profiles
+- public_profiles
+- teacher_subjects
+- subjects
+- is_approved
+- available_days
+- available_from
+- available_to
+- hourly_rate
+- avg_rating
+- teachingStages
+
+وتحقق أن API يستخدم Supabase Bearer Session عند الحاجة.
+
+تحقق أن التطبيق لا يستطيع الحصول على قائمة المعلمين بدون الصلاحية المطلوبة.
+
+تحقق من عدم وجود local fallback مخالف للمنصة.
+
+========================================
+رابعاً — اختبار الحالات الحدودية
+========================================
+
+راجع الكود واختبر ما يمكن اختباره read-only:
+
+1. معلم approved.
+2. معلم غير approved.
+3. معلم بدون مواد.
+4. معلم بمواد متعددة.
+5. معلم بدون available_days.
+6. معلم بدون available_from/to.
+7. معلم بتوفر صحيح.
+8. بحث باسم المعلم.
+9. بحث باسم المادة.
+10. فلتر المادة.
+11. فلتر المرحلة.
+12. ترتيب rating.
+13. ترتيب السعر.
+14. عدم وجود نتائج.
+15. طلب API بدون Bearer.
+
+لا تنشئ بيانات Production لاختبار الحالات.
+
+إذا كانت حالة معينة لا يمكن اختبارها بدون بيانات حقيقية، صنفها UNVERIFIED.
+
+========================================
+خامساً — الإصلاح
+========================================
+
+بعد اكتمال المقارنة فقط:
+
+أصلح MISMATCH وPARTIAL المؤكد داخل التطبيق/API فقط.
+
+استخدم نفس:
+
+- الجداول.
+- Views.
+- RPCs الموجودة.
+- الحقول الأصلية.
+- العلاقات الأصلية.
+- شروط المنصة.
+
+ممنوع إنشاء:
+
+- جدول بديل.
+- API بديل غير موجود في المنصة.
+- Availability افتراضي.
+- أسعار افتراضية.
+- تقييمات افتراضية.
+- مواد افتراضية.
+- صلاحيات بديلة.
+
+إذا كان الإصلاح يحتاج Production:
+
+BLOCKED — REQUIRES PRODUCTION CHANGE
+
+ولا تنفذه.
+
+========================================
+سادساً — الاختبارات التقنية
+========================================
+
+بعد أي إصلاح:
+
+- Mobile TypeScript
+- API TypeScript
+- API build
+- Expo startup
+- Android bundle
+- iOS bundle
+- OpenAPI generation إذا تغير العقد
+- git diff --check
+- API health
+- API بدون Auth يجب أن يرفض البيانات المحمية
+- مراجعة Logs
+- لا توجد أخطاء JavaScript جديدة.
+
+========================================
+سابعاً — ممنوع إعلان 100% بدون دليل
+========================================
+
+لا تقل:
+
+"مطابق 100%"
+
+إلا إذا كان ذلك مثبتاً فعلياً.
+
+فرّق بوضوح بين:
+
+MATCHED من الكود
+MATCHED من Production read-only
+UNVERIFIED لعدم وجود Session
+BLOCKED بسبب Production
+MISMATCH مؤكد
+PARTIAL مؤكد
+
+========================================
+التقرير النهائي
+========================================
+
+أنشئ ملف:
+
+TEACHERS_SUBJECTS_AVAILABILITY_PARITY_REPORT.md
+
+ويحتوي:
+
+1. Executive Summary
+2. Platform Reference
+3. API Comparison
+4. Mobile Comparison
+5. Teachers
+6. Subjects
+7. Teaching Stages
+8. Search
+9. Filters
+10. Sorting
+11. Approval
+12. Availability
+13. Empty/Error/Loading States
+14. Authentication & Authorization
+15. Confirmed MISMATCH
+16. Confirmed PARTIAL
+17. UNVERIFIED
+18. BLOCKED
+19. Files Changed
+20. Tests
+21. Production Safety
+22. Remaining Gaps
+23. Recommended Next Step
+
+وفي نهاية التقرير أكتب صراحة:
+
+Database changed: NO/YES
+Schema changed: NO/YES
+RLS changed: NO/YES
+RPC changed: NO/YES
+Functions changed: NO/YES
+Triggers changed: NO/YES
+Auth changed: NO/YES
+VPS changed: NO/YES
+Main platform code changed: NO/YES
+Production writes: NO/YES
+
+مهم جداً:
+
+بعد الانتهاء توقف تماماً.
+
+لا تبدأ المرحلة 4.
+لا تبدأ الاشتراكات.
+لا تبدأ الدفع.
+لا تبدأ الحجز.
+
+أرسل لي التقرير النهائي فقط وما تم إصلاحه وما بقي غير مثبت.

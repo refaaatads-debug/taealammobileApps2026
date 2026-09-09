@@ -1,0 +1,207 @@
+نبدأ الآن مرحلة Availability / Timezone فقط.
+
+الحالة الحالية:
+- Core Group Booking = MATCHED
+- Overall Group Booking = PARTIAL
+- Production E2E = BLOCKED / UNVERIFIED
+- Sessions/WebRTC = لم نبدأ
+- Minute Deduction = لم نبدأ
+- Wallet/Withdrawals = لم نبدأ
+- Assignments/Grades = لم نبدأ
+
+الهدف:
+إغلاق Availability وTimezone بالكامل ومطابقة المنصة الأصلية حرفياً قبل الانتقال لأي مرحلة أخرى.
+
+مهم جداً:
+لا تفترض أي منطق.
+لا تخترع Availability.
+لا تستخدم ساعات افتراضية.
+لا تستخدم fallback محلي.
+لا تنشئ جدولاً جديداً.
+لا تغير Schema.
+لا تغير RLS.
+لا تغير RPC.
+لا تغير Triggers.
+لا تغير Production.
+لا تنفذ Booking حقيقي أو Payment أو Session حقيقي.
+
+ابدأ READ-ONLY فقط.
+
+راجع ومطابق بدقة:
+
+1. SOURCE PLATFORM
+2. GitHub
+3. Database schema
+4. Supabase tables
+5. RPCs
+6. RLS
+7. API الحالي
+8. OpenAPI
+9. Mobile
+10. Group Booking الذي تم تنفيذه في Stage السابقة
+
+حدد المصدر الحقيقي الوحيد لـ Availability.
+
+أريد معرفة بالضبط:
+
+- أين يتم تخزين Availability للمعلم؟
+- اسم الجدول.
+- أسماء الحقول.
+- معنى كل حقل.
+- available_days
+- available_from
+- available_to
+- timezone إن وجد.
+- هل Availability مرتبطة بـ public_profiles؟
+- هل مرتبطة بـ teacher_subjects؟
+- هل المادة شرط في Availability أم مجرد Eligibility؟
+- كيف تتحقق المنصة من أن المعلم متاح فعلاً في يوم ووقت معين؟
+- هل المنصة تستخدم وقت المعلم أم وقت الطالب؟
+- أين تتم عملية تحويل timezone؟
+- هل التحويل يتم في Frontend أم Backend أم Database؟
+- ما صيغة الأيام؟
+- ما صيغة الوقت؟
+- هل نهاية availability شاملة أم غير شاملة؟
+- كيف يتم التعامل مع جلسة مدتها 30/45/60 دقيقة؟
+- هل يجب أن يكون:
+  start + duration <= available_to
+- كيف تتعامل المنصة مع عبور منتصف الليل؟
+- كيف تتعامل مع DST إن كان موجوداً؟
+- كيف تمنع الحجز خارج Availability؟
+- هل التحقق يتم قبل INSERT فقط أم داخل RPC أيضاً؟
+- هل الحجز المفتوح حسب المادة يفحص Availability لكل معلم قبل إرسال الطلب؟
+- هل الحجز المحدد لمعلم يفحص Availability لذلك المعلم؟
+- هل Group Booking يفحص Availability لكل slot؟
+- هل جميع slots يجب أن تكون صالحة؟
+- هل توجد أيام/أوقات افتراضية في المنصة؟
+- إن وجدت، أثبت مصدرها ولا تنقلها للتطبيق إلا إذا كانت جزءاً من العقد الأصلي.
+
+ثم قارن ذلك مع التطبيق الحالي.
+
+أريد جدول:
+
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+BLOCKED
+
+مع ذكر:
+- المصدر.
+- الملف.
+- السطر/الدالة إن أمكن.
+- السبب.
+
+أنشئ أولاً:
+
+AVAILABILITY_TIMEZONE_PRE_FIX_AUDIT.md
+
+ولا تعدل أي كود قبل إنشاء التقرير.
+
+بعد تثبيت التقرير فقط:
+
+أصلح الفروقات المؤكدة والقابلة للإصلاح داخل Mobile/API/OpenAPI فقط.
+
+خصوصاً:
+
+1. لا تعرض للطالب موعداً غير متاح.
+2. لا تسمح باختيار slot يتجاوز available_to بعد حساب duration.
+3. لا تستخدم default availability.
+4. لا تستخدم ساعات ثابتة.
+5. لا تستخدم fallback محلي.
+6. لا تعتمد على فلترة الواجهة فقط.
+7. إذا كان التحقق الخادمي موجوداً في عقد المنصة، طبقه بنفس العقد.
+8. إذا كان التحقق الخادمي يحتاج Production RPC/RLS/Schema فلا تخترع بديلاً، وسجله BLOCKED.
+9. وحّد timezone مع المنصة الأصلية.
+10. حافظ على الحجز الفردي.
+11. حافظ على الحجز المفتوح حسب المادة.
+12. حافظ على Group Booking متعدد المواعيد.
+13. كل slot يجب أن يمر بنفس قواعد Availability الأصلية.
+14. لا تغير First Accept Wins.
+15. لا تغير subscription/minutes logic إلا إذا كان مرتبطاً مباشرة بـAvailability وبالدليل.
+
+اختبارات إلزامية:
+
+- slot داخل Availability = PASS
+- slot يبدأ قبل Availability = FAIL
+- slot ينتهي بعد Availability = FAIL
+- slot يساوي نهاية Availability بالضبط حسب قاعدة المنصة = النتيجة الصحيحة
+- يوم غير موجود في available_days = FAIL
+- مدة غير صحيحة = FAIL
+- timezone مختلف بين الطالب والمعلم = مطابق للمنصة
+- Group Booking بعدة slots = كل slot يتحقق مستقلاً
+- Open Subject Booking = Availability لكل معلم مؤهل
+- Specific Teacher Booking = Availability للمعلم المحدد
+- لا توجد default hours
+- لا توجد mock availability
+- لا توجد fallback availability
+
+ثم شغّل:
+
+- OpenAPI codegen
+- API TypeScript
+- Mobile TypeScript
+- Workspace typecheck
+- API build
+- Android bundle
+- iOS bundle
+- git diff --check
+- API restart
+- Expo restart
+- /api/healthz
+- Auth guards
+- أي اختبارات unit/integration مناسبة
+- اختبارات timezone وavailability محلياً
+
+بعد ذلك أنشئ:
+
+AVAILABILITY_TIMEZONE_FINAL_REPORT.md
+
+ويجب أن يحتوي:
+
+1. Before
+2. Root Cause
+3. Exact Source of Availability
+4. Exact Timezone Source
+5. Platform vs GitHub vs DB vs API vs Mobile
+6. Fixes
+7. Files Changed
+8. Tests
+9. Production Verification
+10. Remaining Blockers
+11. Exact next stage
+
+مهم جداً:
+
+لا تقل إن Availability أصبحت 100% لمجرد أن TypeScript أو build نجح.
+
+لا تقل E2E PASS بدون تنفيذ E2E حقيقي.
+
+إذا كان Production هو العائق، اكتب:
+PRODUCTION BLOCKED
+
+ولا تعمل workaround يخالف المنصة.
+
+بعد إغلاق هذه المرحلة لا تبدأ Sessions.
+
+أعطني في النهاية:
+
+Availability = MATCHED / PARTIAL / MISMATCH / UNVERIFIED / BLOCKED
+
+Timezone = MATCHED / PARTIAL / MISMATCH / UNVERIFIED / BLOCKED
+
+Specific Teacher Booking = الحالة
+
+Open Subject Booking = الحالة
+
+Group Booking = الحالة
+
+Production E2E = الحالة
+
+ثم قل بوضوح:
+هل أصبح الحجز جاهزاً للانتقال إلى Production E2E أم ما زال هناك شيء يجب إصلاحه أولاً؟
+
+الهدف:
+SOURCE PLATFORM = GITHUB = DATABASE = API = MOBILE
+
+ولا نعتبر منظومة الحجز مكتملة 100% إلا بعد إثبات E2E الحقيقي.

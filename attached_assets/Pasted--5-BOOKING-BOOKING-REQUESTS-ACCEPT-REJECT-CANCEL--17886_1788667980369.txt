@@ -1,0 +1,496 @@
+نبدأ الآن المرحلة 5 فقط:
+
+BOOKING / BOOKING REQUESTS / ACCEPT / REJECT / CANCEL
+
+هذه مرحلة تدقيق وإصلاح داخل التطبيق وAPI فقط.
+
+ممنوع منعاً باتاً:
+- تعديل قاعدة بيانات Production.
+- تعديل Schema.
+- تعديل RLS.
+- تعديل RPC.
+- تعديل Functions.
+- تعديل Triggers.
+- تعديل Auth.
+- تعديل VPS.
+- تعديل Nginx/Kong.
+- تعديل كود المنصة الأصلية.
+- تنفيذ حجز حقيقي على Production.
+- تنفيذ عملية مالية.
+- استخدام Password أو Access Token أو Refresh Token من المحادثة.
+- إنشاء Mock Data أو fallback بديل.
+- اختراع منطق غير موجود في المنصة.
+
+المنصة الأصلية + المخططات الهندسية + الكود الأصلي هي مصدر الحقيقة.
+
+==================================================
+1 — اقرأ مصادر الحقيقة أولاً
+==================================================
+
+راجع الملفات الهندسية المتاحة، خصوصاً:
+
+- full-session-booking-finance-assignments-architecture.md
+- platform-master-integrated-architecture.md
+- student-dashboard-architecture.md
+- teacher-dashboard-architecture(1).md
+
+وراجع كود المنصة الأصلي الخاص بـ:
+
+- SearchTeacher
+- Booking
+- BookingRequests
+- TeacherSchedule
+- CancelSessionDialog
+- أي RPC أو Trigger أو Function متعلق بالحجز.
+
+لا تبدأ التعديل قبل إنهاء المقارنة.
+
+==================================================
+2 — دورة الطالب
+==================================================
+
+استخرج بدقة:
+
+الطالب
+→ اختيار المعلم
+→ اختيار المادة
+→ اختيار المرحلة
+→ اختيار التاريخ
+→ اختيار الوقت
+→ اختيار المدة
+→ اختيار الاشتراك
+→ إنشاء booking_request
+→ حالة الطلب
+→ انتظار المعلم
+→ قبول/رفض
+→ إنشاء booking
+→ إنشاء session
+→ الإشعارات.
+
+حدد لكل خطوة:
+
+- الجدول.
+- الحقول.
+- API/RPC.
+- الحالة قبل العملية.
+- الحالة بعدها.
+- مصدر الحقيقة.
+- شروط الصلاحية.
+
+==================================================
+3 — Booking Request
+==================================================
+
+راجع بدقة:
+
+- booking_requests
+- request_id
+- group_id / groupId
+- student_id
+- teacher_id
+- subject_id
+- booking date
+- start/end time
+- duration
+- subscription
+- expires_at
+- status
+
+استخرج كل حالات الطلب الموجودة فعلياً، مثل:
+
+open
+accepted
+rejected
+expired
+cancelled
+
+ولا تفترض حالات إضافية.
+
+تحقق من:
+
+- إنشاء طلب فردي.
+- إنشاء مجموعة طلبات.
+- عرض المجموعة للمعلم كطلب واحد.
+- منع الطلبات غير الصحيحة.
+- منع الطلب المنتهي.
+- التعامل مع expires_at.
+- التكرار duplicate request.
+- التعارض.
+
+==================================================
+4 — الرصيد والاشتراك
+==================================================
+
+راجع كيف تتحقق المنصة من:
+
+- وجود اشتراك فعال.
+- remaining_minutes.
+- مدة الجلسة.
+- تكلفة الجلسة.
+- حجز/حجز الرصيد.
+- اختيار الاشتراك الصحيح.
+
+مهم جداً:
+
+لا تنفذ أي خصم مالي.
+
+فقط طابق منطق التطبيق مع المصدر.
+
+إذا كان المنطق الحقيقي موجوداً داخل RPC/Trigger:
+
+صنفه authoritative ولا تحاول إعادة تنفيذه في Mobile.
+
+==================================================
+5 — Availability
+==================================================
+
+طابق:
+
+- available_days
+- available_from
+- available_to
+- timezone
+- start time
+- end time
+- duration
+- التاريخ المختار.
+
+تحقق من:
+
+- عدم إنشاء وقت افتراضي.
+- عدم السماح بوقت خارج توفر المعلم.
+- عدم السماح بيوم غير متاح.
+- عدم السماح بمدة تتجاوز نهاية التوفر.
+- عدم السماح بوقت في الماضي.
+- التعامل مع timezone كما في المنصة.
+
+إذا كانت timezone غير مثبتة:
+
+UNVERIFIED
+
+ولا تخمن.
+
+==================================================
+6 — التعارض
+==================================================
+
+راجع كيف تمنع المنصة:
+
+- تعارض الطالب.
+- تعارض المعلم.
+- تعارض الجلسات المؤكدة.
+- تعارض الطلبات المفتوحة.
+- طلبين متزامنين.
+
+مهم:
+
+المخطط يشير إلى خطر race condition عند إجراء الفحص من العميل قبل الإدراج.
+
+لا تضف RPC أو constraint جديد.
+
+لا تعدل Production.
+
+حدد:
+
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+BLOCKED
+
+إذا كان الحل الحقيقي يحتاج Transaction/RPC/Constraint في Production:
+
+BLOCKED — REQUIRES PRODUCTION CHANGE
+
+==================================================
+7 — قبول المعلم
+==================================================
+
+طابق:
+
+accept_booking_request
+accept_booking_group
+
+وحدد:
+
+- من يستطيع القبول؟
+- هل يجب أن يكون teacher_id مطابقاً؟
+- ماذا يحدث للطلبات داخل group؟
+- هل يتم قبول المجموعة كلها؟
+- ماذا يحدث للطلبات الأخرى؟
+- هل يتم إنشاء booking؟
+- هل يتم إنشاء session؟
+- ما الحالة الناتجة؟
+- هل توجد حماية من double acceptance؟
+- هل يوجد تحقق من الرصيد؟
+- هل يوجد تحقق من التعارض؟
+- هل توجد جلسة نشطة للمعلم؟
+- نافذة آخر 4 ساعات إن كانت مثبتة بالمصدر.
+
+مهم:
+
+لا تستدعِ RPC كتابةً على Production.
+
+حلل الكود فقط.
+
+==================================================
+8 — الرفض
+==================================================
+
+طابق:
+
+reject_booking_request
+
+وحدد:
+
+- الحالة الناتجة.
+- سبب الرفض إن وجد.
+- إشعار الطالب.
+- إشعار المجموعة.
+- هل يمكن إعادة الطلب؟
+- هل يتغير الرصيد؟
+- هل ينتهي الطلب؟
+
+لا تخترع سلوكاً.
+
+==================================================
+9 — الإلغاء
+==================================================
+
+راجع:
+
+Student Cancel
+Teacher Cancel
+
+طابق:
+
+- من يستطيع الإلغاء؟
+- متى يسمح؟
+- الحالة الناتجة.
+- سبب الإلغاء.
+- بيانات cancellation.
+- الإشعار.
+- حد الإلغاءات الشهري.
+- تنبيه الإدارة.
+- أثر الإلغاء على الجلسة.
+- أثر الإلغاء على الرصيد.
+
+مهم:
+
+لا تضف refund أو restore minutes من التخمين.
+
+إذا كان غير مثبت:
+
+UNVERIFIED
+
+==================================================
+10 — التطبيق الحالي
+==================================================
+
+راجع:
+
+- artifacts/ajyal-mobile/app/booking.tsx
+- أي شاشة اختيار المعلم.
+- أي شاشة تأكيد الحجز.
+- أي API booking routes.
+- lib/api-spec
+- lib/api-client-react
+- hooks/services المتعلقة بالحجز.
+
+قارن كل شيء مع المنصة.
+
+ابحث عن:
+
+- local fallback.
+- hard-coded values.
+- duration ثابت.
+- teacher data محلية.
+- availability مصطنعة.
+- subscription مصطنع.
+- bypass للصلاحيات.
+- client-side financial decisions.
+- duplicate requests.
+- navigation قبل اكتمال العملية.
+- حالات loading/error ناقصة.
+
+==================================================
+11 — جدول parity
+==================================================
+
+أنشئ جدولاً:
+
+FEATURE
+PLATFORM
+API
+MOBILE
+STATUS
+EVIDENCE
+RISK
+FIX
+
+STATUS فقط:
+
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+BLOCKED
+NOT_APPLICABLE
+
+افصل بوضوح بين:
+
+Confirmed mismatch
+Confirmed partial
+Unverified
+Blocked by Production
+
+==================================================
+12 — الإصلاح
+==================================================
+
+بعد انتهاء التدقيق فقط:
+
+أصلح MISMATCH/PARTIAL المؤكد داخل:
+
+- Mobile
+- API الخاص بالتطبيق
+
+فقط.
+
+استخدم نفس:
+
+- الجداول.
+- RPCs الموجودة.
+- Functions الموجودة.
+- حالات الحجز.
+- الحقول.
+- شروط المنصة.
+
+ممنوع إنشاء:
+
+- RPC جديد.
+- Trigger جديد.
+- جدول جديد.
+- Constraint جديد.
+- منطق مالي بديل.
+- Availability بديل.
+- Booking engine مستقل.
+
+إذا كان الإصلاح يحتاج Production:
+
+BLOCKED — REQUIRES PRODUCTION CHANGE
+
+ولا تنفذه.
+
+==================================================
+13 — الاختبارات
+==================================================
+
+نفذ بدون كتابة Production:
+
+- Mobile TypeScript.
+- API TypeScript.
+- API build.
+- Expo startup.
+- Android bundle.
+- iOS bundle.
+- OpenAPI generation إذا تغير العقد.
+- git diff --check.
+- healthz.
+- unauthorized booking API → يجب رفضه.
+- teacher-only operations → يجب رفضها للطالب.
+- student-only operations → يجب رفضها للمعلم.
+- التحقق من عدم وجود Mock/fallback.
+- مراجعة Logs.
+
+لا تنفذ:
+
+POST حقيقي على Production.
+PATCH حقيقي.
+RPC write.
+حجز حقيقي.
+خصم دقائق.
+دفع.
+
+==================================================
+14 — التقرير النهائي
+==================================================
+
+أنشئ:
+
+BOOKING_PARITY_REPORT.md
+
+ويحتوي:
+
+1. Executive Summary
+2. Booking Architecture
+3. Student Booking Flow
+4. Booking Requests
+5. Group Requests
+6. Availability
+7. Subscription Selection
+8. Balance Validation
+9. Conflict Detection
+10. Accept Individual
+11. Accept Group
+12. Reject
+13. Expiration
+14. Student Cancellation
+15. Teacher Cancellation
+16. Notifications
+17. API Comparison
+18. Mobile Comparison
+19. MATCHED
+20. PARTIAL
+21. MISMATCH
+22. UNVERIFIED
+23. BLOCKED
+24. Files Changed
+25. Tests
+26. Remaining Risks
+27. Production Verification Needed
+28. Next Step
+
+وفي نهاية التقرير اكتب حرفياً:
+
+Database changed: NO/YES
+Schema changed: NO/YES
+RLS changed: NO/YES
+RPC changed: NO/YES
+Functions changed: NO/YES
+Triggers changed: NO/YES
+Auth changed: NO/YES
+VPS changed: NO/YES
+Main platform code changed: NO/YES
+Production writes: NO/YES
+Real booking executed: NO/YES
+Financial operation executed: NO/YES
+
+==================================================
+15 — قاعدة الإيقاف
+==================================================
+
+بعد إنهاء المرحلة:
+
+توقف.
+
+لا تبدأ:
+- الجلسات.
+- المكالمات.
+- الخصم.
+- المحفظة.
+- السحب.
+- الواجبات.
+
+أرسل لي:
+
+1. ملخص التنفيذ.
+2. كل MISMATCH.
+3. كل PARTIAL.
+4. كل UNVERIFIED.
+5. كل BLOCKED.
+6. الملفات التي تغيرت.
+7. الاختبارات.
+8. تقرير BOOKING_PARITY_REPORT.md.
+
+ولا تقل "100%" إلا إذا كان الدليل يثبت ذلك فعلياً.

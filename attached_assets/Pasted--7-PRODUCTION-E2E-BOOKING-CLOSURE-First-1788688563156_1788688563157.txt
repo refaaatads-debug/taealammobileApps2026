@@ -1,0 +1,743 @@
+نبدأ الآن المرحلة 7 فقط:
+
+PRODUCTION E2E BOOKING CLOSURE
+معلم محدد + حجز مفتوح حسب المادة + First Accept Wins + Availability + Timezone + Race Conditions
+
+مهم جدًا:
+لا تبدأ بتعديل الكود مباشرة.
+أولاً اقرأ وفهم المنصة الأصلية بالكامل من GitHub والكود الحالي وSupabase schema/RPC/RLS والمخططات والملفات المرفقة، ثم أنشئ تقرير تدقيق قبل أي تعديل.
+
+الهدف النهائي:
+جعل نظام الحجز في تطبيق Mobile مطابقًا 100% لسلوك المنصة الأصلية والكود الموجود على GitHub وقاعدة البيانات، وليس إنشاء منطق جديد من عندك.
+
+==================================================
+1) قواعد العمل الإلزامية
+==================================================
+
+- لا تخمّن أي Business Rule.
+- لا تخترع fallback غير موجود في المنصة.
+- لا تستخدم Mock Data.
+- لا تستخدم Availability وهمية.
+- لا تستخدم ساعات افتراضية.
+- لا تغير Production بدون إثبات أن التغيير مطلوب وموافقة صريحة.
+- لا تغير Database Schema أو RLS أو RPC أو Trigger أو Function لمجرد جعل الاختبار يمر.
+- لا تعتبر TypeScript أو Build نجاحًا وظيفيًا.
+- لا تعتبر HTTP 200 وحده إثباتًا للحجز.
+- لا تعلن أن المرحلة مكتملة إلا بعد اختبار E2E فعلي أو إثبات واضح أن الاختبار محجوب بسبب Production.
+- إذا وجدت اختلافًا بين GitHub والمنصة الحالية، سجله بوضوح ولا تخترع حلًا.
+- أي بند لا يمكن إثباته يصنف:
+  MATCHED
+  PARTIAL
+  MISMATCH
+  UNVERIFIED
+  BLOCKED
+
+ممنوع إنهاء المرحلة بعبارة عامة مثل "يعمل".
+يجب إثبات كل مرحلة من دورة الحجز.
+
+==================================================
+2) اقرأ المصادر أولاً
+==================================================
+
+راجع بالكامل:
+
+A) المنصة الأصلية / GitHub
+B) Mobile الحالي
+C) API الحالي
+D) OpenAPI
+E) Supabase schema
+F) RLS policies
+G) RPCs
+H) Functions
+I) Triggers
+J) notifications
+K) subscriptions
+L) teachers
+M) teacher availability
+N) booking_requests
+O) bookings
+P) sessions
+Q) أي ملفات أو مخططات مرفقة
+
+ابحث تحديدًا عن كل منطق متعلق بـ:
+
+booking
+booking_requests
+bookings
+teacher availability
+available_days
+available_from
+available_to
+timezone
+teacher_id
+subject_id
+student_id
+duration
+subscription
+remaining_minutes
+accept
+reject
+expire
+cancel
+notifications
+First Accept Wins
+Group Booking
+race conditions
+transactions
+RPC
+locking
+idempotency
+
+==================================================
+3) أنشئ التقرير قبل التعديل
+==================================================
+
+أنشئ:
+
+BOOKING_E2E_STAGE7_PRE_FIX_AUDIT.md
+
+ويجب أن يحتوي:
+
+1. Source of Truth
+2. Student Booking Flow
+3. Specific Teacher Booking
+4. Open Subject Booking
+5. Eligibility
+6. Availability
+7. Timezone
+8. Subscription / Minutes
+9. booking_requests
+10. Accept
+11. Reject
+12. Expiry
+13. Cancellation
+14. Group Booking
+15. First Accept Wins
+16. Race Conditions
+17. Notifications
+18. Database writes
+19. Mobile/API/OpenAPI parity
+20. Production blockers
+
+لكل بند:
+
+- المطلوب في المنصة
+- الموجود في GitHub
+- الموجود في API
+- الموجود في Mobile
+- الموجود في Database
+- الحالة
+- الدليل
+- الملف
+- السطر/المسار إن أمكن
+- الخطورة
+- الإصلاح المقترح
+
+==================================================
+4) النظام الأول: حجز معلم محدد
+==================================================
+
+يجب أن يعمل:
+
+طالب
+→ اختيار "معلم محدد"
+→ اختيار المعلم
+→ اختيار المادة
+→ المرحلة
+→ مدة الجلسة
+→ اليوم
+→ الوقت
+→ إنشاء طلب الحجز
+
+يجب التأكد من:
+
+- الطالب مصادق.
+- الدور student.
+- المعلم موجود.
+- المعلم معتمد.
+- المادة مرتبطة بالمعلم.
+- الطالب مؤهل.
+- الاشتراك صالح.
+- remaining_minutes كافية.
+- الموعد متاح فعليًا.
+- المدة لا تتجاوز نهاية availability.
+- timezone مطابق للمنصة.
+- لا يوجد وقت افتراضي.
+- لا يتم إرسال teaching_stage إذا لم يكن جزءًا من العقد الأصلي.
+- لا يتم اختراع teacher matching logic.
+
+ثم تحقق من نتيجة قاعدة البيانات فعليًا.
+
+==================================================
+5) النظام الثاني: الحجز المفتوح حسب المادة
+==================================================
+
+هذا جزء أساسي ولا يجوز تجاهله.
+
+الطالب لا يختار معلمًا.
+
+يختار فقط مثلًا:
+
+- المادة
+- المرحلة
+- مدة الجلسة
+- اليوم
+- الوقت
+- وأي شروط أخرى موجودة أصلًا في المنصة.
+
+ثم:
+
+الطالب
+→ booking request
+→ بدون teacher_id إذا كان هذا هو عقد المنصة
+→ النظام يبحث عن جميع المعلمين المؤهلين
+→ المعلمون الذين تنطبق عليهم الشروط
+→ المادة
+→ الاعتماد
+→ availability
+→ المرحلة/الشروط التي تثبتها المنصة
+→ يتم إرسال الطلب للمعلمين المؤهلين
+→ أول معلم يقبل
+→ يصبح هو صاحب الجلسة/الحجز
+→ باقي المعلمين لا يستطيعون قبول نفس الطلب.
+
+لا تحول الحجز المفتوح إلى حجز معلم عشوائي واحد.
+
+لا تختار معلمًا من الهاتف.
+
+لا تستخدم أول معلم في Array.
+
+لا تستخدم Random محلي.
+
+لا تستخدم fallback.
+
+يجب مطابقة First Accept Wins مع المنصة الأصلية.
+
+==================================================
+6) Availability
+==================================================
+
+حدد بدقة مصدر Availability الحقيقي.
+
+تحقق من:
+
+available_days
+available_from
+available_to
+timezone
+
+حدد:
+
+- أين تحفظ؟
+- أين تقرأ؟
+- هل المنصة تحسبها Server-side؟
+- هل Mobile يحسبها؟
+- هل API يتحقق منها؟
+- هل هناك RPC؟
+- هل هناك SQL function؟
+- هل هناك timezone conversion؟
+
+ممنوع اعتبار ظهور المعلم "متاح" في UI دليلًا على إمكانية إنشاء الحجز.
+
+يجب أن يكون هناك تحقق نهائي Server-side إذا كان هذا هو سلوك المنصة.
+
+اختبر:
+
+- بداية availability.
+- وسط availability.
+- نهاية availability.
+- مدة جلسة تتجاوز النهاية.
+- يوم غير متاح.
+- timezone مختلف.
+- وقت سابق.
+- وقت متعارض مع جلسة أخرى.
+
+==================================================
+7) Subscription / Minutes
+==================================================
+
+طابق تمامًا:
+
+- active subscription
+- remaining_minutes
+- expiry
+- depleted
+- duration
+- plan rules
+
+تأكد أن:
+
+remaining_minutes >= duration
+
+ولكن لا تضف أي شرط غير موجود في المنصة.
+
+حدد أين يتم حسم الرصيد:
+
+Mobile؟
+API؟
+RPC؟
+Database transaction؟
+
+إذا كان الحسم يتم عند إنشاء الطلب فقط، سجل ذلك.
+إذا كان عند قبول المعلم، سجل ذلك.
+إذا كان عند بدء/إنهاء الجلسة، سجل ذلك.
+
+لا تغير السلوك بالتخمين.
+
+==================================================
+8) ACCEPT
+==================================================
+
+اختبر:
+
+Teacher
+→ يرى الطلب
+→ Accept
+
+ثم تحقق فعليًا من:
+
+booking_request status
+booking creation
+session creation
+teacher_id
+student_id
+subject_id
+duration
+scheduled time
+notifications
+
+يجب تحديد بالضبط أي عملية تتم أولاً.
+
+إذا كان هناك RPC أو transaction:
+استخدم نفس المنطق.
+
+إذا لم يكن موجودًا:
+لا تخترع transaction محلية.
+
+==================================================
+9) FIRST ACCEPT WINS
+==================================================
+
+هذا اختبار إلزامي.
+
+استخدم معلمين مؤهلين لنفس الطلب المفتوح.
+
+حاول:
+
+Teacher A → Accept
+Teacher B → Accept
+
+في نفس الوقت أو بفارق زمني ضئيل جدًا.
+
+يجب أن يكون:
+
+ONE ACCEPTED
+
+والباقي:
+
+REJECTED / ALREADY_ACCEPTED / CONFLICT
+
+حسب سلوك المنصة الحقيقي.
+
+لا يكفي اختبار UI.
+
+يجب فحص Database بعد العملية.
+
+إذا كان النظام يسمح بقبولين:
+صنفها:
+
+CRITICAL / BLOCKED
+
+ولا تصلحها من Mobile فقط.
+
+==================================================
+10) RACE CONDITIONS
+==================================================
+
+اختبر على الأقل:
+
+A) معلمان يقبلان نفس الطلب.
+B) طلبان لنفس الموعد.
+C) إنشاء حجزين لنفس الطالب في نفس الوقت.
+D) آخر دقائق subscription مع طلبين متزامنين.
+E) نفس request يتم إرساله مرتين.
+F) retry بعد timeout.
+G) double tap على زر الحجز.
+
+تحقق من:
+
+- duplicate bookings
+- duplicate charges
+- duplicate notifications
+- duplicate sessions
+- negative remaining_minutes
+- inconsistent statuses
+
+يجب تحديد هل الحماية:
+
+Mobile
+API
+RPC
+Database constraint
+Transaction
+Lock
+
+إذا كانت Database/RPC مطلوبة:
+سجلها BLOCKED بدل عمل workaround في Mobile.
+
+==================================================
+11) REJECT
+==================================================
+
+Teacher
+→ Reject
+
+تحقق من:
+
+- status
+- notification
+- إمكانية إعادة الإرسال إن كانت المنصة تسمح
+- إمكانية قبول معلم آخر في open booking
+- عدم إنشاء booking/session بالخطأ.
+
+==================================================
+12) EXPIRY
+==================================================
+
+حدد من المنصة:
+
+- متى ينتهي الطلب؟
+- من يغير الحالة؟
+- Cron؟
+- Edge Function؟
+- Trigger؟
+- API؟
+- Database؟
+
+لا تضف expiry timer محلي.
+
+==================================================
+13) CANCELLATION
+==================================================
+
+طابق:
+
+Student cancellation
+Teacher cancellation
+
+وتحقق من:
+
+- status
+- refund/minutes
+- notification
+- booking
+- session
+- financial impact
+
+لا تغير أي شيء مالي في هذه المرحلة إذا كان مرتبطًا بمرحلة لاحقة.
+
+فقط وثق مصدر الحقيقة.
+
+==================================================
+14) GROUP BOOKING
+==================================================
+
+حدد من المنصة:
+
+- ما هو Group Booking؟
+- كيف ينشأ؟
+- كيف تقبل المجموعة؟
+- من يملك القرار؟
+- كيف تمنع القبول المتزامن؟
+- هل هناك RPC؟
+- هل هناك transaction؟
+
+إذا كان التنفيذ الحالي جزئيًا:
+
+PARTIAL
+
+ولا تحوله إلى نظام جديد.
+
+==================================================
+15) Notifications
+==================================================
+
+اختبر:
+
+Booking Created
+Teacher Notified
+Accept
+Reject
+Expiry
+Cancellation
+
+حدد:
+
+Database notification
+Push notification
+Realtime
+
+ولا تعتبر إرسال API request نجاح Push.
+
+==================================================
+16) Dashboard 502
+==================================================
+
+قبل إعلان المرحلة مكتملة:
+
+تحقق من:
+
+GET /api/student/dashboard
+
+إذا 502:
+
+لا تخفِ الخطأ داخل Promise.all/catch عام.
+
+حدد:
+
+أي Supabase request يفشل؟
+
+سجل داخليًا:
+
+request name
+status
+error code
+
+بدون كشف tokens أو بيانات شخصية للمستخدم.
+
+إذا كان السبب داخل Mobile/API ويمكن إصلاحه بأمان:
+أصلحه.
+
+إذا كان Production:
+BLOCKED.
+
+==================================================
+17) الإصلاح
+==================================================
+
+بعد التقرير فقط:
+
+أصلح الفروقات المؤكدة داخل:
+
+Mobile
+API
+OpenAPI
+generated clients
+
+فقط.
+
+لا تعدل:
+
+Production DB
+Schema
+RLS
+RPC
+Triggers
+Functions
+Auth
+Storage
+VPS
+
+إلا إذا كان هناك دليل قطعي أن المشكلة لا يمكن حلها إلا هناك.
+
+وفي هذه الحالة:
+
+توقف.
+وثق السبب.
+لا تنفذ التغيير.
+
+==================================================
+18) الاختبارات المطلوبة
+==================================================
+
+نفذ:
+
+1. Unauthenticated booking → 401
+2. Authenticated student booking
+3. Specific teacher booking
+4. Open subject booking
+5. Eligible teacher discovery
+6. Availability validation
+7. Timezone validation
+8. Subscription validation
+9. Teacher accept
+10. Teacher reject
+11. First Accept Wins
+12. Concurrent accept
+13. Duplicate request
+14. Double booking
+15. Cancellation
+16. Expiry
+17. Notifications
+18. Dashboard
+19. Android bundle
+20. iOS bundle
+
+ولا تعتبر build test بديلًا عن E2E.
+
+==================================================
+19) تقرير ما بعد الإصلاح
+==================================================
+
+أنشئ:
+
+BOOKING_E2E_STAGE7_FINAL_REPORT.md
+
+ويحتوي:
+
+- Before
+- Root Cause
+- Fix
+- Files Changed
+- Tests
+- Database Results
+- Production Results
+- Remaining Blockers
+- Security Findings
+- Exact next step
+
+==================================================
+20) معيار النجاح
+==================================================
+
+لا تقل:
+
+"المرحلة مكتملة"
+
+إلا إذا ثبت:
+
+Specific Teacher Booking
+PASS
+
+Open Subject Booking
+PASS
+
+Eligibility
+PASS
+
+Availability
+PASS
+
+Timezone
+PASS
+
+Subscription
+PASS
+
+Accept
+PASS
+
+Reject
+PASS
+
+First Accept Wins
+PASS
+
+Race Conditions
+PASS
+
+Notifications
+PASS
+
+Database consistency
+PASS
+
+Dashboard
+PASS
+
+Android
+PASS
+
+iOS
+PASS
+
+إذا تعذر أي اختبار بسبب Production:
+
+اكتب:
+
+E2E PRODUCTION BLOCKED
+
+مع ذكر:
+
+- السبب
+- الجدول
+- RPC
+- RLS
+- الحقل
+- البيئة
+- ما يلزم لإثباته
+
+==================================================
+21) ممنوع الادعاء
+==================================================
+
+ممنوع كتابة:
+
+"الحجز يعمل"
+
+إذا لم يتم إنشاء حجز حقيقي.
+
+ممنوع كتابة:
+
+"First Accept Wins يعمل"
+
+إذا لم يتم اختبار معلمين متزامنين.
+
+ممنوع كتابة:
+
+"Availability صحيحة"
+
+إذا تم إثباتها فقط من UI.
+
+ممنوع كتابة:
+
+"Database آمنة"
+
+إذا لم تتم مراجعة RLS/RPC/transaction.
+
+==================================================
+22) التسليم النهائي
+==================================================
+
+في النهاية أعطني تقريرًا مختصرًا بهذا الشكل:
+
+STAGE 7 STATUS
+
+Specific Teacher Booking: ?
+Open Subject Booking: ?
+Availability: ?
+Timezone: ?
+Subscription: ?
+Accept: ?
+Reject: ?
+First Accept Wins: ?
+Race Conditions: ?
+Notifications: ?
+Dashboard 502: ?
+Database: ?
+Android: ?
+iOS: ?
+
+ثم:
+
+MATCHED:
+...
+
+PARTIAL:
+...
+
+MISMATCH:
+...
+
+UNVERIFIED:
+...
+
+BLOCKED:
+...
+
+NEXT STAGE:
+Sessions / WebRTC / Attendance / Heartbeat
+
+مهم:
+لا تبدأ المرحلة الثامنة.
+توقف بعد إغلاق المرحلة السابعة وتقريرها النهائي.

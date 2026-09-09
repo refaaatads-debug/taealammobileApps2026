@@ -1,0 +1,210 @@
+مهمة عاجلة: إصلاح تعليق التطبيق بعد تسجيل الدخول إصلاحاً جذرياً، وليس ترقيعاً مؤقتاً.
+
+⚠️ قاعدة أمان إلزامية:
+هذا العمل خاص بتطبيق الهاتف فقط.
+ممنوع منعاً باتاً تعديل أو حذف أو إنشاء أي شيء في:
+- Production Database
+- Supabase Database
+- Schema
+- Tables
+- RLS
+- RPC
+- Functions
+- Triggers
+- Auth/OAuth settings
+- VPS
+- Nginx
+- Kong
+- GoTrue
+- PostgREST
+- كود المنصة الرئيسية
+- أي Production configuration
+
+ممنوع إجراء أي Migration أو Deploy على Production.
+ممنوع إنشاء بيانات اختبار داخل Production.
+إذا ظهر احتياج لتغيير أي شيء خارج تطبيق الهاتف: توقف فوراً ولا تنفذه.
+
+الهدف:
+بعد نجاح تسجيل الدخول بحساب طالب أو معلم، يجب أن ينتقل التطبيق بشكل ثابت إلى نفس واجهة ودور المنصة الأصلية، بدون Splash/Skeleton لا نهائي، وبدون وميض أو رجوع للخلف أو فقدان المستخدم.
+
+المشكلة الحالية:
+Login ينجح فعلياً، لكن التطبيق يبقى على شاشة التحميل/الشعار ثم تختفي أو تتكرر الشاشة.
+تم بالفعل تجربة عدة ترقيعات مثل:
+- timeout
+- تثبيت user بعد signIn
+- فصل loading styles
+- معالجة SecureStore
+- منع race في getSession
+
+لذلك لا تضف ترقيعاً جديداً قبل تحديد السبب الفعلي.
+
+نفّذ تشخيصاً كاملاً لتدفق Auth داخل تطبيق الهاتف فقط:
+
+1. تتبع التسلسل الكامل:
+App start
+→ Supabase initialization
+→ getSession()
+→ onAuthStateChange()
+→ signInWithPassword()
+→ session
+→ user
+→ /api/me
+→ profile
+→ role
+→ navigation
+→ dashboard
+
+2. ضع Logs تشخيصية مؤقتة وواضحة لكل مرحلة، بدون طباعة:
+- password
+- access_token
+- refresh_token
+- أي بيانات حساسة
+
+3. حدد بدقة:
+- هل signInWithPassword يرجع session؟
+- هل session.user موجود؟
+- هل getSession() يعيد نتيجة قديمة؟
+- هل onAuthStateChange يعيد الكتابة فوق الحالة؟
+- هل /api/me يرجع 200 أو 401 أو 403 أو 500 أو يتوقف؟
+- هل profile يرجع؟
+- هل role يرجع؟
+- هل navigation يتم استدعاؤه؟
+- هل يوجد Redirect loop؟
+- هل يوجد أكثر من AuthProvider أو أكثر من Supabase client؟
+- هل يوجد React state race؟
+- هل يوجد effect يعيد ضبط user إلى null؟
+- هل يوجد loading flag لا يتحول إلى false؟
+- هل يوجد AsyncStorage/SecureStore session corruption؟
+- هل يوجد استدعاء API ينتظر session غير موجودة؟
+
+4. افحص جميع الملفات المرتبطة بـ:
+- auth
+- _layout
+- AuthProvider
+- Supabase client
+- profile
+- /api/me
+- role detection
+- navigation
+- protected routes
+- dashboard initialization
+
+ولا تكتفِ بفحص ملف واحد.
+
+5. مهم جداً:
+لا تفترض أن المشكلة من Splash.
+لا تفترض أن المشكلة من CSS.
+لا تفترض أن المشكلة من SecureStore.
+لا تفترض أن المشكلة من getSession race.
+أثبت السبب من مسار التنفيذ الفعلي.
+
+6. قاعدة Auth:
+بعد نجاح signInWithPassword:
+- session تصبح المصدر الأساسي للحالة.
+- user يجب تثبيته فوراً.
+- يجب عدم السماح لأي getSession قديم أو Auth event قديم بإزالة المستخدم الجديد.
+- لا تجعل navigation ينتظر حدثاً آخر غير ضروري.
+- يجب أن يكون هناك مصدر واحد فقط لحالة Auth.
+
+7. قاعدة Profile/Role:
+استخدم نفس Supabase Production المستخدم في المنصة.
+عند وجود Supabase Bearer:
+- Profile من Supabase
+- Role من user_roles
+- لا تستخدم usersTable المحلية كبديل
+- لا تخترع Role
+- لا تعتمد على user_metadata كصلاحية نهائية
+
+8. بعد نجاح Auth:
+إذا فشل /api/me أو Profile:
+لا تعرض Splash إلى الأبد.
+اعرض شاشة خطأ واضحة مع:
+- إعادة المحاولة
+- تسجيل الخروج
+
+لكن لا تستخدم هذه الشاشة لإخفاء السبب؛ سجل السبب الحقيقي في Logs.
+
+9. Navigation:
+تحقق من عدم وجود:
+Login
+→ Loading
+→ Login
+→ Loading
+أو:
+Login
+→ Dashboard
+→ Loading
+→ Dashboard
+
+ويجب ألا يحدث إعادة Mount غير ضرورية لـAuthProvider.
+
+10. Expo Go:
+يجب أن يعمل التطبيق في Expo Go في كل ما هو مدعوم.
+أي وظائف Native غير مدعومة في Expo Go يجب عزلها تماماً ولا يجوز أن تمنع:
+- تشغيل التطبيق
+- Login
+- Logout
+- Navigation
+- تحميل Profile
+- Dashboard
+
+11. Logout:
+يجب أن يعمل حتى لو فشل API إضافي.
+لا تجعل unregisterPushToken أو أي API ثانوي يمنع signOut.
+تأكد من تنظيف الجلسة المحلية فعلياً.
+
+12. بعد تحديد السبب:
+أصلح السبب في تطبيق الهاتف فقط.
+لا تغير المنصة الرئيسية بأي شكل.
+
+13. بعد الإصلاح نفذ:
+- TypeScript
+- API build
+- Mobile build
+- Android bundle
+- iOS bundle
+- Expo startup
+- فحص Console
+- فحص Auth flow
+- فحص navigation flow
+
+14. لا تقل "تم الإصلاح" اعتماداً على نجاح Build فقط.
+Build ناجح لا يعني أن Login يعمل.
+
+15. أريد في النهاية تقريراً مختصراً بهذا الشكل:
+
+ROOT CAUSE:
+السبب الجذري الحقيقي هو: ...
+
+FILES CHANGED:
+...
+
+WHY IT HAPPENED:
+...
+
+FIX:
+...
+
+AUTH FLOW AFTER FIX:
+Login → Session → User → Profile → Role → Dashboard
+
+VERIFICATION:
+TypeScript: PASS/FAIL
+Android: PASS/FAIL
+iOS: PASS/FAIL
+Expo Go: PASS/FAIL
+Login flow: PASS/FAIL
+Navigation: PASS/FAIL
+Logout: PASS/FAIL
+
+PRODUCTION SAFETY:
+Database changed: NO
+Schema changed: NO
+RLS changed: NO
+RPC changed: NO
+Auth settings changed: NO
+VPS changed: NO
+Main platform code changed: NO
+
+⚠️ إذا لم تستطع إثبات السبب من Logs/code:
+توقف ولا تعمل تخميناً جديداً، وقل لي تحديداً أين توقف التدفق وما الدليل.

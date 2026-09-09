@@ -1,0 +1,145 @@
+ابدأ المرحلة 1 فقط: BASELINE AUDIT + AUTH/ROLE/NAVIGATION PARITY.
+
+ممنوع تنفيذ أي تعديل على Production تحت أي ظرف.
+
+قواعد إلزامية:
+1. لا تعدّل قاعدة البيانات.
+2. لا تعدّل Schema.
+3. لا تعدّل RLS Policies.
+4. لا تعدّل RPC.
+5. لا تعدّل Functions.
+6. لا تعدّل Triggers.
+7. لا تعدّل Auth/OAuth settings في Supabase.
+8. لا تعدّل VPS أو Docker أو Nginx أو Kong أو GoTrue أو PostgREST.
+9. لا تعدّل كود المنصة الرئيسية.
+10. لا تنشئ جداول أو API بديلة لمحاكاة Production.
+11. لا تستخدم بيانات تجريبية لتغطية فجوة في المنصة.
+12. كل تعديل مسموح به داخل تطبيق الهاتف وAPI الخاص بالتطبيق فقط.
+13. إذا كانت أي معلومة غير مثبتة من المخططات أو كود المنصة الأصلية، لا تخمّن. سجّلها كـ UNVERIFIED وتوقف عندها.
+14. لا تنفذ أي عملية كتابة على Production.
+15. لا تنفذ Login/Signup/Logout بحسابات حقيقية آلياً إذا كان ذلك يتطلب كلمة مرور أو Token مني.
+
+المطلوب:
+
+أولاً:
+راجع المخططات الهندسية وكود المنصة الأصلية المتاح، ثم راجع كود تطبيق الهاتف وAPI الحالي.
+
+أنشئ مقارنة دقيقة للآتي:
+
+AUTH:
+- Supabase URL
+- Auth client
+- session persistence
+- access token
+- refresh token
+- PKCE
+- getSession
+- onAuthStateChange
+- signInWithPassword
+- signUp
+- signOut
+- OAuth
+- deep links
+- callback handling
+- forgot password
+
+PROFILE:
+- auth.users.id
+- profiles.user_id
+- full_name
+- avatar_url
+- phone
+- student fields
+- teacher fields
+
+ROLES:
+- user_roles
+- role priority
+- admin
+- teacher
+- student
+- parent إن كان موجوداً في المنصة
+- role guards
+- approval guards للمعلم
+
+NAVIGATION:
+- بعد Login
+- بعد Logout
+- student → /student أو الصفحة المقابلة
+- teacher → /teacher
+- admin → /admin
+- parent إن كان موجوداً
+- منع إعادة تركيب نفس المسار
+- التعامل مع session restoration
+- التعامل مع loading/error states
+
+DASHBOARD:
+- endpoint
+- البيانات
+- الصلاحيات
+- profile loading
+- role loading
+- notifications
+- dashboard queries
+
+راجع أيضاً المشكلة التي تم إصلاحها مؤخراً في:
+- _layout.tsx
+- auth.tsx
+
+وتأكد أن الإصلاح الحالي لا يعيد مشكلة:
+- same-path router.replace
+- getSession race condition
+- loading forever
+- Splash hang
+- SecureStore session issue
+
+لا تغيّر الكود أولاً.
+
+أريد منك أولاً تقريراً قبل التنفيذ يحتوي على جدول:
+
+| المجال | المنصة الأصلية | التطبيق الحالي | الحالة | الملف | الخطورة |
+
+استخدم الحالات:
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+
+بعد التقرير:
+- أصلح فقط MISMATCH المؤكد داخل التطبيق/API.
+- لا تصلح UNVERIFIED بالتخمين.
+- لا تغيّر Production.
+
+بعد الإصلاح:
+نفذ:
+- TypeScript
+- API typecheck
+- API build
+- Expo/Metro startup
+- Android bundle
+- iOS bundle
+- أي اختبارات موجودة
+
+ثم أعد تقريراً نهائياً يحتوي على:
+1. ما كان غير مطابق.
+2. ما تم إصلاحه.
+3. الملفات التي تغيرت.
+4. ما بقي PARTIAL.
+5. ما بقي UNVERIFIED.
+6. الاختبارات التي نجحت.
+7. أي تحذير متبقٍ.
+8. تأكيد صريح:
+
+Database changed: NO
+Schema changed: NO
+RLS changed: NO
+RPC changed: NO
+Functions changed: NO
+Triggers changed: NO
+Auth settings changed: NO
+VPS changed: NO
+Main platform code changed: NO
+Production writes: NO
+
+لا تنتقل إلى المرحلة 2.
+توقف بعد إنهاء هذه المرحلة وانتظر التعليمات التالية.

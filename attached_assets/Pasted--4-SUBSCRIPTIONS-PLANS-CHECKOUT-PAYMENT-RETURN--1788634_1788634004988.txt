@@ -1,0 +1,348 @@
+نبدأ الآن المرحلة 4 فقط:
+
+SUBSCRIPTIONS / PLANS / CHECKOUT / PAYMENT RETURN
+
+الهدف:
+مطابقة دورة الاشتراكات والباقات والدفع في تطبيق الهاتف مع المنصة الأصلية بأقصى دقة ممكنة، اعتماداً على المخططات الهندسية وكود المنصة والكود الحالي للتطبيق، مع Production read-only حيث يمكن.
+
+قواعد أمان إلزامية:
+
+1. المنصة الأصلية وProduction هما مصدر الحقيقة.
+2. التطبيق مشروع مستقل.
+3. ممنوع تعديل كود المنصة الأصلية.
+4. ممنوع تعديل Production Database.
+5. ممنوع تعديل Schema أو Tables أو Columns.
+6. ممنوع تعديل RLS.
+7. ممنوع تعديل RPC.
+8. ممنوع تعديل Functions.
+9. ممنوع تعديل Triggers.
+10. ممنوع تعديل Auth/OAuth.
+11. ممنوع تعديل Storage.
+12. ممنوع تعديل Realtime.
+13. ممنوع تعديل VPS أو Nginx أو Kong.
+14. ممنوع Migration.
+15. ممنوع Deploy إلى Production.
+16. ممنوع تنفيذ دفع حقيقي.
+17. ممنوع إنشاء اشتراك حقيقي على Production.
+18. ممنوع تعديل رصيد أو دقائق أو محفظة.
+19. ممنوع استخدام Password أو Access Token أو Refresh Token من المحادثة.
+20. لا تخترع أي سياسة دفع أو استرداد أو خصم.
+21. إذا كان الإصلاح يحتاج تغيير Production: توقف وصنفه BLOCKED.
+22. لا تبدأ مرحلة الحجز بعد انتهاء هذه المرحلة.
+
+================================
+أولاً — استخراج منطق المنصة الأصلية
+================================
+
+راجع المخططات الهندسية وكود المنصة الأصلية وحدد بدقة:
+
+PLANS:
+
+- subscription_plans
+- جميع الحقول المستخدمة.
+- tier.
+- duration.
+- price.
+- minutes.
+- features.
+- أي limits.
+- ترتيب الباقات.
+- الباقة الافتراضية إن وجدت.
+- حالات active/inactive إن وجدت.
+
+USER SUBSCRIPTIONS:
+
+- user_subscriptions.
+- علاقة user_id.
+- علاقة plan_id.
+- status.
+- starts_at.
+- ends_at.
+- أي cancelled_at.
+- أي payment/provider identifiers.
+- طريقة تحديد الاشتراك الفعال.
+
+حدد بالضبط:
+كيف تختار المنصة الاشتراك الفعال إذا كان لدى المستخدم أكثر من اشتراك؟
+
+حدد:
+- هل تعتمد على status؟
+- ends_at؟
+- أقرب انتهاء؟
+- أحدث اشتراك؟
+- ترتيب آخر؟
+
+لا تفترض.
+
+================================
+ثانياً — شروط الاشتراك
+================================
+
+حدد من كود المنصة:
+
+- متى يسمح للمستخدم بالاشتراك؟
+- هل يجب اكتمال:
+  - full_name
+  - phone
+  - education stage
+  - أي حقول أخرى؟
+- ماذا يحدث إذا كانت البيانات ناقصة؟
+- هل يستطيع الطالب شراء أكثر من باقة؟
+- هل توجد باقة فعالة تمنع شراء أخرى؟
+- هل توجد ترقية؟
+- هل توجد تمديد؟
+- هل توجد تجديدات؟
+- هل توجد promo codes؟
+- كيف يتم التحقق منها؟
+- هل التحقق Client أم Server أم RPC؟
+- لا تضف أي تحقق غير موجود في المصدر.
+
+================================
+ثالثاً — Checkout
+================================
+
+راجع كود المنصة وحدد:
+
+- endpoint أو route الخاص بالـcheckout.
+- payload الحقيقي.
+- plan_id.
+- success_url.
+- cancel_url.
+- promo_code.
+- أي customer/user identifiers.
+- provider.
+- طريقة إنشاء checkout session.
+- طريقة التعامل مع الأخطاء.
+- طريقة التعامل مع الإلغاء.
+- هل يوجد redirect خارجي؟
+- ماذا يحدث بعد العودة؟
+
+مهم:
+لا تنفذ Checkout حقيقي.
+
+استخدم read-only analysis فقط، أو اختباراً محلياً لا يصل إلى Production.
+
+================================
+رابعاً — Payment Return
+================================
+
+راجع ما يحدث بعد عودة المستخدم من بوابة الدفع:
+
+- success.
+- cancel.
+- failure.
+- pending.
+- expired.
+- duplicate return.
+- refresh.
+- إغلاق التطبيق أثناء الدفع.
+- فتح رابط العودة من Android.
+- فتح رابط العودة من iOS.
+
+حدد كيف تعرف المنصة أن الدفع نجح فعلاً.
+
+مهم جداً:
+لا تعتبر مجرد الرجوع إلى success_url دليلاً على نجاح الدفع.
+
+حدد مصدر الحقيقة الحقيقي:
+webhook / provider / database / RPC / backend
+حسب ما يثبته الكود.
+
+================================
+خامساً — التطبيق الحالي
+================================
+
+راجع:
+
+- شاشة الاشتراكات.
+- شاشة تفاصيل الباقة.
+- checkout screen.
+- payment screen.
+- payment callback.
+- deep links.
+- auth/session.
+- API routes.
+- API contracts.
+- lib/api-client.
+- lib/api-spec.
+- أي payment service.
+
+قارنها حرفياً مع المنصة.
+
+================================
+سادساً — جدول المقارنة
+================================
+
+أنشئ جدولاً:
+
+FEATURE
+PLATFORM SOURCE
+API SOURCE
+MOBILE SOURCE
+STATUS
+EVIDENCE
+RISK
+FIX
+
+STATUS فقط:
+
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+BLOCKED
+NOT_APPLICABLE
+
+================================
+سابعاً — ركز على المخاطر
+================================
+
+ابحث تحديداً عن:
+
+1. التطبيق يقرر نجاح الدفع من redirect فقط.
+2. التطبيق يغير subscription محلياً.
+3. التطبيق يعتمد على بيانات plan ثابتة.
+4. plan_id مختلف عن المنصة.
+5. السعر مختلف.
+6. مدة الباقة مختلفة.
+7. الدقائق مختلفة.
+8. tier مختلف.
+9. اختيار subscription الفعال مختلف.
+10. promo code مختلف.
+11. checkout payload مختلف.
+12. success_url مختلف.
+13. cancel_url مختلف.
+14. payment status مختلف.
+15. webhook غير مستخدم رغم استخدامه في المنصة.
+16. التطبيق يعرض اشتراكاً فعالاً رغم انتهائه.
+17. التطبيق يسمح بالشراء رغم عدم اكتمال profile.
+18. التطبيق يستخدم local fallback.
+19. أي بيانات مالية hard-coded.
+20. أي منطق مالي داخل Mobile يجب أن يكون Server-authoritative.
+
+================================
+ثامناً — الإصلاح
+================================
+
+بعد إكمال المقارنة فقط:
+
+أصلح MISMATCH/PARTIAL المؤكد داخل:
+
+- Mobile
+- API الخاص بالتطبيق
+
+فقط.
+
+استخدم نفس:
+
+- الجداول.
+- endpoints.
+- RPCs الموجودة.
+- provider flow.
+- الحقول.
+- الحالات.
+- قواعد المنصة.
+
+ممنوع:
+
+- إنشاء payment logic بديل.
+- إنشاء subscription logic مستقل.
+- تعديل RPC.
+- تعديل Trigger.
+- تعديل Database.
+- تعديل RLS.
+- تغيير provider.
+- اختراع refund policy.
+
+إذا كان الإصلاح يحتاج Production:
+
+BLOCKED — REQUIRES PRODUCTION CHANGE
+
+ولا تنفذه.
+
+================================
+تاسعاً — الاختبارات
+================================
+
+نفذ بدون دفع حقيقي:
+
+- Mobile TypeScript.
+- API TypeScript.
+- API build.
+- Expo startup.
+- Android bundle.
+- iOS bundle.
+- OpenAPI generation إذا تغير العقد.
+- git diff --check.
+- API health.
+- Unauthorized API tests.
+- فحص أن بيانات الباقات لا تأتي من Mock.
+- فحص عدم وجود أسعار/دقائق مالية hard-coded.
+- فحص success/cancel routes.
+- فحص deep-link route إن أمكن بدون دفع حقيقي.
+
+لا تستخدم بطاقة دفع.
+لا تنشئ اشتراكاً حقيقياً.
+لا تعدل Production.
+
+================================
+عاشراً — التقرير
+================================
+
+أنشئ:
+
+SUBSCRIPTIONS_PAYMENT_PARITY_REPORT.md
+
+ويحتوي:
+
+1. Executive Summary
+2. Subscription Plans
+3. User Subscriptions
+4. Active Subscription Selection
+5. Profile Completion Rules
+6. Promo Codes
+7. Checkout
+8. Payment Provider
+9. Payment Return
+10. Success
+11. Cancel
+12. Failure
+13. Pending
+14. Deep Links
+15. Android
+16. iOS
+17. API
+18. Mobile
+19. MATCHED
+20. PARTIAL
+21. MISMATCH
+22. UNVERIFIED
+23. BLOCKED
+24. Files Changed
+25. Tests
+26. Remaining Risks
+27. Next Step
+
+وفي النهاية:
+
+Database changed: NO/YES
+Schema changed: NO/YES
+RLS changed: NO/YES
+RPC changed: NO/YES
+Functions changed: NO/YES
+Triggers changed: NO/YES
+Auth changed: NO/YES
+Payment Provider changed: NO/YES
+VPS changed: NO/YES
+Main platform code changed: NO/YES
+Production writes: NO/YES
+Real payment executed: NO/YES
+
+مهم جداً:
+
+لا تبدأ الحجز.
+لا تبدأ الجلسات.
+لا تبدأ المحفظة.
+لا تبدأ السحب.
+
+توقف بعد إنهاء المرحلة 4 وأرسل لي التقرير النهائي كاملاً.

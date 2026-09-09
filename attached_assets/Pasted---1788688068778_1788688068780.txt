@@ -1,0 +1,600 @@
+نريد الآن إكمال تدقيق وإصلاح نظام الحجز حتى الوصول إلى تطابق فعلي مع المنصة الأصلية، وليس مجرد نجاح Build.
+
+ممنوع تماماً تعديل Production Database أو Schema أو RLS أو RPC أو Functions أو Triggers أو VPS أو Auth أو أي كود من المنصة الرئيسية بدون إثبات الحاجة والحصول على موافقة صريحة.
+
+ممنوع استخدام Mock Data أو fallback أو hardcoded availability.
+
+ممنوع إعلان أن الحجز يعمل إلا بعد إثبات المسار الفعلي.
+
+==================================================
+الهدف
+==================================================
+
+أريد الوصول إلى:
+
+CODE PARITY = 100%
+ثم
+E2E VERIFICATION = 100%
+
+مع الحفاظ على المنصة الأصلية كمصدر الحقيقة.
+
+نظام الحجز في المنصة يحتوي على نظامين مستقلين:
+
+1. حجز معلم محدد.
+2. حجز مفتوح حسب المادة/المرحلة بحيث ترسل المنصة الطلب إلى جميع المعلمين المؤهلين والمتاحين، وأول معلم يقبل يصبح صاحب الطلب.
+
+يجب أن يكون النظامان موجودين ويعملان في تطبيق الهاتف بنفس منطق المنصة.
+
+==================================================
+أولاً: توقف عن أي تعديل
+==================================================
+
+ابدأ READ-ONLY فقط.
+
+لا تعدل أي ملف قبل إنهاء التحقيق.
+
+راجع:
+
+- GitHub / الكود الأصلي للمنصة.
+- Mobile الحالي.
+- API الحالي.
+- OpenAPI.
+- Supabase schema المتاح.
+- RPCs المتاحة.
+- Functions.
+- Triggers.
+- RLS.
+- العلاقات بين الجداول.
+- نظام الإشعارات.
+
+لا تفترض أي شيء.
+
+==================================================
+1 — حجز المعلم المحدد
+==================================================
+
+أثبت من الكود الأصلي:
+
+كيف يتم:
+
+Student
+→ اختيار Teacher
+→ Subject
+→ Stage
+→ Goal
+→ Date
+→ Time
+→ Duration
+→ Submit
+
+ثم:
+
+Teacher
+→ receives request
+→ accepts/rejects
+
+أريد تحديد المصدر الحقيقي لكل خطوة.
+
+خصوصاً:
+
+هل المنصة تستخدم teacher_id داخل booking_requests؟
+
+إذا كان لا:
+
+حدد كيف تميز المنصة طلب المعلم المحدد عن الطلب المفتوح.
+
+إذا كانت تعتمد على:
+- metadata
+- RPC
+- notification recipient
+- relation أخرى
+- booking
+- request mapping
+
+أثبت ذلك من الكود.
+
+لا تقترح إضافة teacher_id إلى Production قبل إثبات أن المنصة نفسها تحتاجه.
+
+==================================================
+2 — الحجز المفتوح
+==================================================
+
+أثبت بالضبط كيف تعمل المنصة الأصلية في:
+
+Student
+→ لا يختار Teacher
+→ يحدد Subject
+→ Stage
+→ Goal
+→ Date
+→ Time
+→ Duration
+→ Submit
+
+ثم:
+
+Server
+→ يجد جميع المعلمين المؤهلين
+→ يتحقق من availability
+→ يرسل الطلب للمعلمين المؤهلين
+→ أول Teacher يقبل
+→ يصبح هو صاحب الطلب.
+
+حدد كل شرط Eligibility.
+
+مثلاً:
+
+- approved teacher
+- subject relation
+- teaching stage
+- availability
+- account status
+- أي شروط أخرى
+
+لا تضف شرطاً غير موجود في المنصة.
+
+==================================================
+3 — AVAILABILITY
+==================================================
+
+هذه نقطة حرجة جداً.
+
+المشكلة السابقة:
+
+"لم تصل أيام توفر المعلم من المنصة"
+
+يجب إنهاؤها من الجذر.
+
+حدد:
+
+- أين تخزن availability؟
+- ما الجدول؟
+- ما الأعمدة؟
+- ما format الأيام؟
+- ما timezone؟
+- هل الأيام مخزنة كأسماء أم أرقام؟
+- كيف تحول المنصة اليوم إلى قيمة قاعدة البيانات؟
+- كيف تحسب from/to؟
+- كيف تتعامل مع مدة الجلسة؟
+
+قارن حرفياً بين:
+
+PLATFORM
+vs
+API
+vs
+MOBILE
+
+حدد أي اختلاف.
+
+لا تستخدم:
+
+- default days
+- default hours
+- 17:00
+- 08:00
+- 23:00
+- fake availability
+- local availability
+
+إذا لم توجد availability:
+→ يجب أن تظهر حالة واضحة.
+
+إذا كانت موجودة:
+→ يجب أن تظهر نفس الأيام والأوقات الموجودة في المنصة.
+
+==================================================
+4 — FIRST ACCEPT WINS
+==================================================
+
+هذه أهم نقطة في النظام المفتوح.
+
+أثبت من المنصة الأصلية كيف تمنع:
+
+Teacher A accepts
++
+Teacher B accepts
+
+في نفس اللحظة.
+
+أريد معرفة هل المنصة تستخدم:
+
+- RPC
+- transaction
+- conditional update
+- unique constraint
+- locking
+- function
+- trigger
+- atomic update
+- أو آلية أخرى.
+
+لا تقم بتنفيذ:
+
+SELECT pending
+ثم
+UPDATE pending
+
+إذا كان ذلك يسمح race condition.
+
+يجب أن تكون النتيجة:
+
+Teacher A = winner
+Teacher B = rejected
+
+ولا يمكن إنشاء:
+
+Booking A
++
+Booking B
+
+لنفس booking request.
+
+==================================================
+5 — BOOKING CREATION
+==================================================
+
+تتبع العملية كاملة:
+
+booking_request
+→ acceptance
+→ booking
+→ session
+
+حدد:
+
+- متى ينشأ booking؟
+- من ينشئه؟
+- API؟
+- RPC؟
+- Trigger؟
+- Function؟
+- Mobile؟
+- Server؟
+
+حدد ترتيب العمليات.
+
+لا تنشئ booking من الهاتف إذا كانت المنصة تنشئه server-side.
+
+ولا تنشئ session مبكراً.
+
+==================================================
+6 — NOTIFICATIONS
+==================================================
+
+قارن المنصة والتطبيق.
+
+Specific Teacher:
+
+Student
+→ Teacher فقط
+
+Open Booking:
+
+Student
+→ جميع Eligible Teachers
+
+After First Accept:
+
+Winner
+→ confirmation
+
+Others
+→ request closed / unavailable
+
+أثبت mechanism الحقيقي.
+
+==================================================
+7 — المشكلة الحالية في إنشاء الحجز
+==================================================
+
+التطبيق حالياً كان غير قادر على إنشاء حجز بشكل طبيعي.
+
+لا تقبل أي تفسير عام.
+
+تتبع الزر:
+
+"تأكيد الحجز"
+
+حتى النهاية.
+
+سجل داخلياً أثناء التشخيص:
+
+- request start
+- endpoint
+- status
+- response
+- database result
+- error code
+- error message
+- navigation result
+
+ثم احذف كل logs التشخيصية بعد الانتهاء.
+
+أريد Root Cause حقيقياً.
+
+==================================================
+8 — dashboard 502
+==================================================
+
+هناك مشكلة مستقلة ظهرت:
+
+GET /api/student/dashboard
+→ 502
+
+لا تخلطها مع الحجز.
+
+حدد:
+
+- لماذا 502؟
+- أي upstream يفشل؟
+- هل المشكلة في Supabase؟
+- query؟
+- relation؟
+- schema?
+- API mapping?
+- timeout?
+- error handling?
+
+إذا كانت المشكلة Production:
+لا تغير Production.
+
+وثّقها:
+
+BLOCKED / UNVERIFIED
+
+إذا كانت داخل Mobile/API:
+أصلحها.
+
+==================================================
+9 — تقرير إلزامي قبل التعديل
+==================================================
+
+أنشئ:
+
+BOOKING_E2E_FINAL_PARITY_AUDIT.md
+
+يحتوي على:
+
+A. PLATFORM SOURCE OF TRUTH
+
+B. SPECIFIC TEACHER BOOKING
+
+C. OPEN TEACHER BOOKING
+
+D. AVAILABILITY SOURCE
+
+E. ELIGIBILITY RULES
+
+F. FIRST ACCEPT WINS
+
+G. BOOKING CREATION
+
+H. SESSION CREATION
+
+I. NOTIFICATIONS
+
+J. DATABASE FLOW
+
+K. MOBILE FLOW
+
+L. API FLOW
+
+M. OPENAPI CONTRACT
+
+N. CURRENT ROOT CAUSES
+
+O. EXACT FILES REQUIRING CHANGES
+
+P. PRODUCTION BLOCKERS
+
+Q. TEST PLAN
+
+لكل بند استخدم:
+
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+BLOCKED
+
+==================================================
+10 — بعد التقرير فقط أصلح
+==================================================
+
+بعد إنشاء التقرير:
+
+أصلح فقط الفروقات التي يمكن إصلاحها بأمان في:
+
+- Mobile
+- API
+- OpenAPI
+- generated client contracts
+
+بدون تغيير Production.
+
+إذا اكتشفت أن إصلاح نقطة معينة يتطلب:
+
+- Schema
+- RLS
+- RPC
+- Function
+- Trigger
+- Auth
+- Production API
+- VPS
+
+توقف عند هذه النقطة ولا تنفذها.
+
+اكتب:
+
+PRODUCTION CHANGE REQUIRED
+
+ثم حدد:
+
+- ما الذي يحتاج التغيير؟
+- لماذا؟
+- ما البديل؟
+- لماذا البديل غير مطابق؟
+- ما الخطر؟
+- ما التغيير المطلوب بالضبط؟
+
+==================================================
+11 — اختبارات إلزامية
+==================================================
+
+بعد الإصلاح اختبر:
+
+TEST 1
+Specific Teacher Booking
+
+TEST 2
+Open Booking
+
+TEST 3
+No eligible teachers
+
+TEST 4
+Teacher unavailable
+
+TEST 5
+Teacher available
+
+TEST 6
+Two teachers accept simultaneously
+
+TEST 7
+First teacher wins
+
+TEST 8
+Second teacher cannot create booking
+
+TEST 9
+No duplicate booking
+
+TEST 10
+Insufficient balance
+
+TEST 11
+Expired subscription
+
+TEST 12
+Student logout/login ثم booking
+
+TEST 13
+App restart ثم booking
+
+TEST 14
+Notifications
+
+TEST 15
+Dashboard
+
+==================================================
+12 — مهم جداً
+==================================================
+
+إذا لم يمكن تنفيذ E2E Production بحسابات حقيقية:
+
+لا تقل:
+
+"تم إصلاح الحجز"
+
+قل:
+
+CODE VERIFIED
+E2E PRODUCTION UNVERIFIED
+
+إذا أمكن اختبار بيئة Development/Staging مطابقة للمنصة:
+اذكر ذلك بوضوح.
+
+==================================================
+13 — BUILD
+==================================================
+
+بعد الانتهاء:
+
+- Mobile TypeScript
+- API TypeScript
+- API build
+- Android bundle
+- iOS bundle
+- OpenAPI generation
+- git diff --check
+- Expo startup
+- API health
+- Auth checks
+
+لكن لا تعتبر Build دليلاً على نجاح الحجز.
+
+==================================================
+14 — ممنوع التكرار
+==================================================
+
+لا أريد أي إصلاحات سطحية مثل:
+
+- تغيير النص.
+- تغيير UI فقط.
+- timeout جديد بدون سبب.
+- fallback.
+- hardcoded availability.
+- fake teacher.
+- fake booking.
+- fake success.
+- retry فقط.
+- إخفاء الخطأ.
+
+أريد إصلاح Root Cause.
+
+==================================================
+15 — شرط مهم جداً
+==================================================
+
+لا تنتقل إلى مرحلة الجلسات والمكالمات والخصم أو الواجبات حتى يصبح:
+
+Specific Booking
++
+Open Booking
++
+Availability
++
+Matching
++
+First Accept Wins
++
+Booking Creation
+
+واضحاً ومطابقاً ومثبتاً.
+
+==================================================
+النتيجة المطلوبة
+==================================================
+
+أريد في نهاية هذه المرحلة تقريراً نهائياً يوضح:
+
+1. أين يوجد نظام الحجز المحدد في المنصة.
+2. أين يوجد نظام الحجز المفتوح.
+3. كيف يتم اختيار المعلمين المؤهلين.
+4. من أين تأتي availability.
+5. لماذا كان التطبيق يقول إن availability غير موجودة.
+6. لماذا كان الحجز يفشل.
+7. كيف يتم First Accept Wins.
+8. كيف يتم إنشاء booking.
+9. كيف يتم منع duplicate booking.
+10. كيف تعمل notifications.
+11. ما الذي تم إصلاحه.
+12. ما الذي بقي BLOCKED.
+13. ما الذي يحتاج Production.
+14. نتائج كل اختبار.
+15. الملفات التي تغيرت.
+
+والأهم:
+
+لا تكتفِ بقول:
+"Build ناجح".
+
+أريد إثباتاً أن منطق التطبيق أصبح مطابقاً للمنصة.
+
+ابدأ الآن READ-ONLY.
+لا تعدل أي كود حتى تنشئ:
+BOOKING_E2E_FINAL_PARITY_AUDIT.md

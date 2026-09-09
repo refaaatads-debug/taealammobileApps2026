@@ -1,0 +1,511 @@
+أريد منك حل مشكلة الاتصال الحالية بشكل نهائي ومنهجي، وليس تجربة تعديلات عشوائية على الكود.
+
+المشكلة الحالية:
+
+التطبيق Expo يحصل على Supabase Bearer Token بشكل صحيح، ثم يرسل الطلب إلى API الموجود حالياً داخل Replit.
+
+التدفق:
+
+Expo
+↓
+Supabase Auth
+↓
+Bearer Token
+↓
+Replit API
+↓
+محاولة التحقق من المستخدم عبر Supabase
+↓
+فشل اتصال الشبكة
+↓
+401 / "تعذر التحقق من الحساب"
+
+الأدلة الحالية تشير إلى أن المشكلة ليست في:
+- شاشة Login
+- SecureStore
+- Bearer Token
+- Supabase Auth
+- Supabase URL
+- Publishable Key
+- RLS
+- Database credentials
+
+المشكلة الأساسية المشتبه بها هي Network Connectivity من بيئة Replit إلى الـVPS/Supabase.
+
+المعلومات التي ثبتت سابقاً:
+
+VPS IP:
+72.61.23.237
+
+Replit outbound IP الذي ظهر أثناء الفحص:
+34.180.8.129
+
+الاتصالات من Replit إلى VPS فشلت بـ TCP TIMEOUT على:
+- 22 SSH
+- 80 HTTP
+- 443 HTTPS
+- 8000 HTTP
+
+بينما من داخل الـVPS:
+- Nginx يعمل.
+- 80 و443 عليهما listeners.
+- HTTPS للدومين يعمل محلياً.
+- /api/healthz يعمل.
+- Firewall/UFW يحتويان على السماح لـ443.
+
+كما أن PostgreSQL الموجود عبر DATABASE_URL يستخدم:
+hostname = helium
+database = heliumdb
+
+ولا أريد منك افتراض أن heliumdb هو Supabase أو أنه بديل عنه؛ تحقق من العلاقة الفعلية أولاً.
+
+==================================================
+القاعدة الأساسية
+==================================================
+
+ممنوع تعديل التطبيق لمجرد إخفاء المشكلة.
+
+ممنوع:
+- تغيير Login logic بدون دليل.
+- تغيير Supabase Auth.
+- تغيير Bearer Token.
+- تغيير RLS.
+- تغيير Supabase schema.
+- تغيير Production database.
+- تغيير RPC.
+- إضافة fallback وهمي.
+- تعطيل authentication.
+- استخدام Mock Data.
+- تخزين service_role key داخل Mobile.
+- وضع secrets داخل Git.
+- تجاوز TLS/SSL.
+- اعتبار نجاح localhost دليلاً على نجاح الاتصال الخارجي.
+- تغيير Production لمجرد جعل الاختبار يمر.
+
+أريد Root Cause حقيقي مثبت بالأدلة.
+
+==================================================
+المرحلة 1 — تشخيص الشبكة
+==================================================
+
+ابدأ READ-ONLY.
+
+افحص من داخل Replit:
+
+DNS resolution للـVPS والدومين.
+
+ثم اختبر TCP connection بشكل واضح إلى:
+
+72.61.23.237:22
+72.61.23.237:80
+72.61.23.237:443
+72.61.23.237:8000
+
+ثم اختبر:
+
+domain:443
+
+وسجل لكل اختبار:
+
+DNS
+TCP
+TLS
+HTTP
+
+ولا تكتفِ برسالة curl النهائية.
+
+أريد تحديد هل الفشل:
+- DNS
+- TCP
+- TLS
+- HTTP
+- Authentication
+- Application
+
+إذا فشل TCP، لا تعدّل JavaScript بحثاً عن حل.
+
+==================================================
+المرحلة 2 — فحص الـVPS من الداخل
+==================================================
+
+إذا كانت هناك قناة وصول متاحة للـVPS، افحص READ-ONLY:
+
+ss -lntp
+
+على الأقل:
+
+:22
+:80
+:443
+:8000
+
+وتحقق هل الخدمات تستمع على:
+
+0.0.0.0
+
+أم:
+
+127.0.0.1
+
+إذا كان listener على localhost فقط، سجّل ذلك كسبب محتمل.
+
+افحص:
+
+Nginx
+Kong/Supabase gateway إن وجد
+API service
+Docker containers
+iptables
+UFW
+Hostinger firewall/cloud firewall إن أمكن من الأدوات المتاحة.
+
+لا تغيّر أي Rule قبل إثبات أن هذه هي المشكلة.
+
+==================================================
+المرحلة 3 — تحديد مكان Supabase الحقيقي
+==================================================
+
+لا تفترض أن Supabase موجود على نفس VPS.
+
+حدد من إعدادات المشروع والمصادر الحالية:
+
+SUPABASE_URL
+DATABASE_URL
+Supabase REST endpoint
+Supabase Auth endpoint
+
+ثم حدد:
+
+هل Supabase:
+1. مستضاف على نفس VPS؟
+2. مستضاف خارج VPS؟
+3. خلف Nginx؟
+4. خلف Kong؟
+5. خلف Cloudflare؟
+6. خدمة Supabase Cloud؟
+
+أريد جدولاً واضحاً:
+
+Component | Host | Port | Protocol | Current Access
+
+==================================================
+المرحلة 4 — فحص Replit Connector
+==================================================
+
+تحقق من Replit Supabase Connector الموجود حالياً.
+
+لا تفترض أنه Proxy عاماً.
+
+اختبر بدقة ما الذي يستطيع الوصول إليه.
+
+إذا كان Connector يسمح فقط بمسارات معينة مثل:
+
+/rest/v1
+/auth/v1/health
+
+فلا تعتبره بديلاً عن:
+
+/auth/v1/user
+
+ولا تغيّر API لاستخدام Connector بطريقة غير مدعومة.
+
+إذا كان Connector لا يحل المشكلة، وثّق ذلك ولا تضف workaround وهمي.
+
+==================================================
+المرحلة 5 — تحديد سبب TCP TIMEOUT
+==================================================
+
+بما أن الاتصال إلى:
+
+22
+80
+443
+8000
+
+يفشل من Replit، بينما الخدمات تعمل من داخل VPS، أريد تحديد مكان إسقاط الحزمة.
+
+افحص بالترتيب:
+
+Replit outbound networking
+↓
+Internet routing
+↓
+Hostinger firewall
+↓
+VPS firewall
+↓
+VPS interface
+↓
+listener
+
+إذا كانت المشكلة خارج صلاحيات Replit Agent، لا تدّعي أنك أصلحتها.
+
+قل بوضوح:
+
+BLOCKED BY EXTERNAL NETWORK CONTROL
+
+وحدد بالضبط ما الذي يجب تغييره في Hostinger/VPS.
+
+==================================================
+المرحلة 6 — لا تستخدم Static Replit IP كحل دائم بدون تحقق
+==================================================
+
+الـIP الذي ظهر:
+
+34.180.8.129
+
+لا تفترض أنه ثابت.
+
+تحقق هل هو:
+- static
+- ephemeral
+- shared
+- egress NAT
+
+إذا كان غير مضمون، لا تبنِ Production firewall عليه.
+
+==================================================
+المرحلة 7 — افحص architecture المقترح
+==================================================
+
+أريد مقارنة حقيقية بين:
+
+OPTION A
+
+Expo
+↓
+Replit API
+↓
+Internet
+↓
+Supabase/VPS
+
+OPTION B
+
+Expo
+↓
+VPS API
+↓
+Private/local network
+↓
+Supabase
+
+OPTION C
+
+Expo
+↓
+Replit API
+↓
+Supabase Cloud
+
+حدد أي architecture يتوافق فعلياً مع المشروع الحالي.
+
+لا تنقل الـAPI إلى VPS تلقائياً.
+
+لا تنفذ migration.
+
+فقط حدد أفضل architecture بناءً على الأدلة.
+
+==================================================
+المرحلة 8 — افحص الـSecrets
+==================================================
+
+تحقق من أسماء secrets المطلوبة فقط.
+
+مثلاً:
+
+SUPABASE_URL
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+DATABASE_URL
+وأي secrets أخرى مستخدمة فعلياً.
+
+لا تطلب مني إرسال:
+- passwords
+- service_role keys
+- access tokens
+- private keys
+
+ولا تعرض secret values في logs.
+
+إذا كان:
+
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+
+مفقوداً، وضّح ذلك فقط.
+
+ولا تضع القيمة في الكود.
+
+==================================================
+المرحلة 9 — اختبر المسار الصحيح
+==================================================
+
+بعد التشخيص، لا تختبر Login فقط.
+
+اختبر:
+
+1. DNS
+2. TCP
+3. TLS
+4. Supabase Auth health
+5. Supabase Auth user endpoint
+6. API health
+7. API authentication
+8. Database access
+
+ثم:
+
+Expo
+↓
+Login
+↓
+Bearer
+↓
+API
+↓
+Supabase verification
+↓
+User profile
+
+حدد بالضبط أين يتوقف التدفق.
+
+==================================================
+المرحلة 10 — إذا وجدت إصلاحاً آمناً
+==================================================
+
+إذا كان الإصلاح داخل Replit فقط وآمن ولا يغير Production:
+
+نفذه.
+
+ثم:
+
+- TypeScript
+- API build
+- Mobile TypeScript
+- Expo bundle
+- git diff --check
+- API restart
+- Expo restart
+- health check
+- auth check
+
+أما إذا كان الإصلاح يتطلب:
+
+Hostinger
+Firewall
+VPS
+Nginx
+DNS
+Supabase production
+Cloud networking
+
+فتوقف قبل التعديل وقدم لي الأمر/الخطوة المطلوبة بالضبط.
+
+==================================================
+المرحلة 11 — لا تخلط هذه المشكلة بمشاكل أخرى
+==================================================
+
+هناك مشاكل سابقة مثل:
+
+/api/student/dashboard 502
+/api/assignments
+
+لا تعتبرها سبباً لمشكلة Authentication إلا إذا أثبتت العلاقة.
+
+افصل:
+
+AUTH CONNECTIVITY
+
+عن:
+
+DASHBOARD 502
+
+عن:
+
+BOOKING
+
+عن:
+
+SESSIONS
+
+==================================================
+التقرير النهائي
+==================================================
+
+أنشئ:
+
+NETWORK_CONNECTIVITY_ROOT_CAUSE_REPORT.md
+
+ويجب أن يحتوي على:
+
+1. Current Architecture
+2. DNS Results
+3. TCP Results
+4. TLS Results
+5. HTTP Results
+6. VPS Listener Results
+7. Firewall Results
+8. Supabase Location
+9. Replit Connector Findings
+10. Secrets Check
+11. Root Cause
+12. Evidence
+13. Fix Applied
+14. Fix Not Possible From Replit
+15. Exact External Action Required
+16. Security Considerations
+17. Verification Results
+18. Final Architecture Recommendation
+
+وفي النهاية أعطني status واضحاً:
+
+NETWORK:
+PASS / PARTIAL / BLOCKED
+
+SUPABASE:
+PASS / PARTIAL / BLOCKED
+
+API:
+PASS / PARTIAL / BLOCKED
+
+AUTH:
+PASS / PARTIAL / BLOCKED
+
+MOBILE:
+PASS / PARTIAL / BLOCKED
+
+PRODUCTION:
+READY / BLOCKED
+
+==================================================
+الهدف النهائي
+==================================================
+
+لا أريد workaround مؤقتاً.
+
+أريد أن نعرف بدقة:
+
+لماذا Replit API لا يستطيع الوصول إلى Supabase/VPS؟
+
+أين يتم إسقاط الاتصال؟
+
+ما الذي يمكن إصلاحه من داخل المشروع؟
+
+ما الذي يحتاج Hostinger/VPS؟
+
+وما هو التصميم الصحيح للإنتاج؟
+
+ولا تعتبر المشكلة محلولة إلا إذا ثبت فعلياً:
+
+Expo
+↓
+API
+↓
+Supabase Auth
+↓
+Profile
+↓
+200 authenticated response
+
+مع عدم كشف أي Secret أو بيانات شخصية.
+
+ابدأ READ-ONLY، وأنشئ التقرير قبل أي تعديل.

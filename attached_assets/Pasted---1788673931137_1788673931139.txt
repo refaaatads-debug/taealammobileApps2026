@@ -1,0 +1,1040 @@
+بالضبط، وهذه **نقطة جوهرية جداً**؛ لأن الحجز في المنصة ليس نظاماً واحداً. هناك مساران مختلفان ويجب أن يطابقهما تطبيق الهاتف والكود وقاعدة البيانات:
+
+1. **حجز معلم محدد** → الطلب يذهب لهذا المعلم فقط.
+2. **حجز مادة** → الطلب يذهب إلى **جميع المعلمين المؤهلين للمادة**، وأول معلم يقبل يصبح هو صاحب الجلسة، مع منع قبول معلمين آخرين لنفس الطلب.
+
+أضفت هذه النقطة داخل البرومبت، مع إلزام الوكيل بفحص **المنصة + GitHub + قاعدة البيانات + API** وعدم اختراع نظام جديد.
+
+انسخ البرومبت التالي **كاملاً**:
+
+```text
+هذه المهمة أولوية قصوى ويجب حلها نهائياً، وليس عمل workaround أو تعديل واجهة فقط.
+
+==================================================
+المشكلة الحالية — CRITICAL
+==================================================
+
+تطبيق الهاتف حالياً غير قادر على إنشاء حجز جلسة للطالب بشكل طبيعي.
+
+المشكلة تظهر في شاشة إنشاء الحجز:
+
+- المعلم يظهر.
+- المادة تظهر.
+- الرصيد يظهر.
+- يمكن الوصول إلى شاشة اختيار اليوم والوقت.
+- لكن أيام وساعات توفر المعلم لا تصل بشكل صحيح من المنصة الأصلية.
+- تظهر رسالة مثل:
+
+"لم تصل أيام توفر المعلم من المنصة. تأكد من توفر المعلم ومواعيده."
+
+والنتيجة النهائية أن الطالب لا يستطيع إكمال إنشاء الحجز بشكل طبيعي.
+
+المعلم لديه Availability ومواعيد فعلية في المنصة الأصلية، والمواعيد متاحة فعلياً، لكن تطبيق الهاتف لا يعكسها بشكل صحيح وبالتالي لا يستطيع الطالب إنشاء الحجز.
+
+لكن هناك نقطة أهم يجب عدم إغفالها:
+
+==================================================
+الحجز في المنصة له نظامان مختلفان
+==================================================
+
+المنصة الأصلية تحتوي على نظامين مختلفين للحجز، ويجب الحفاظ عليهما كما هما وعدم دمجهما في مسار واحد:
+
+------------------------------------------
+النظام الأول: حجز معلم محدد
+------------------------------------------
+
+الطالب يختار:
+
+Teacher
++
+Subject
++
+Day
++
+Time
++
+Duration
+
+ثم ينشئ طلب حجز موجهاً إلى ذلك المعلم المحدد فقط.
+
+أي أن الطلب لا يذهب إلى جميع المعلمين.
+
+يجب أن يبقى teacher_id محدداً في الطلب وفق عقد المنصة الأصلية.
+
+------------------------------------------
+النظام الثاني: حجز مادة / طلب مفتوح
+------------------------------------------
+
+الطالب يختار المادة بدون اختيار معلم محدد.
+
+في هذه الحالة:
+
+Student
+→ Subject
+→ Day
+→ Time
+→ Duration
+→ Create Open Booking Request
+
+ثم تقوم المنصة بإرسال/إتاحة الطلب إلى جميع المعلمين المؤهلين لهذه المادة وفق منطق المنصة الأصلية.
+
+المطلوب تحديداً:
+
+- جميع المعلمين المؤهلين للمادة.
+- المعلمون الذين تنطبق عليهم شروط المنصة.
+- availability الخاصة بكل معلم حسب منطق المنصة.
+- أي شروط role / approval / subject assignment.
+- ثم أول معلم يقبل الطلب يصبح هو المعلم المرتبط بالحجز/الجلسة.
+
+أي أن:
+
+FIRST VALID TEACHER TO ACCEPT
+=
+OWNER OF THE SESSION
+
+ولا يجوز أن يؤدي قبول معلمين اثنين في نفس اللحظة إلى إنشاء جلستين لنفس الطلب.
+
+يجب فحص كيف تمنع المنصة الأصلية هذا الـrace condition، وهل تستخدم:
+
+- RPC
+- transaction
+- conditional update
+- unique constraint
+- status transition
+- row lock
+- server-side validation
+- أو آلية أخرى.
+
+لا تخترع آلية جديدة.
+
+يجب قراءة implementation الحقيقي في المنصة والكود وقاعدة البيانات.
+
+==================================================
+المطلوب النهائي
+==================================================
+
+أريد مطابقة تطبيق الهاتف مع المنصة الأصلية 100% في نظامي الحجز.
+
+الهدف النهائي:
+
+A) حجز معلم محدد:
+
+Student
+→ Teacher
+→ Subject
+→ Real Availability
+→ Day
+→ Time
+→ Duration
+→ Booking Request
+→ Correct API
+→ Booking Created
+
+B) حجز مادة بدون معلم:
+
+Student
+→ Subject
+→ Real Availability / Valid Slot
+→ Open Booking Request
+→ Eligible Teachers
+→ Request Delivered/Available To Teachers
+→ First Teacher Accepts
+→ Atomic Assignment
+→ Session/Booking Owner = First Teacher
+→ Other teachers cannot accept
+→ Student sees assigned teacher
+→ Booking/session proceeds normally
+
+==================================================
+ممنوعات مهمة جداً
+==================================================
+
+ممنوع تماماً:
+
+- fallback محلي.
+- mock availability.
+- hardcoded days.
+- hardcoded times.
+- default availability.
+- افتراض الساعة 17:00.
+- افتراض أن المعلم متاح.
+- إنشاء Availability من الهاتف.
+- اختراع بيانات غير موجودة في المنصة.
+- تغيير رسالة الخطأ فقط.
+- إخفاء رسالة الخطأ بدون إصلاح السبب.
+- تعديل UI فقط.
+- استخدام بيانات تجريبية لإظهار أن الشاشة تعمل.
+- اعتبار TypeScript PASS دليلاً على نجاح الحجز.
+- اعتبار Android/iOS build PASS دليلاً على نجاح الحجز.
+- دمج نظام حجز المعلم المحدد مع نظام حجز المادة.
+- تحويل حجز المادة إلى حجز لمعلم عشوائي.
+- اختيار أول معلم من قائمة الهاتف بشكل محلي.
+- تعيين teacher_id محلياً في الهاتف في حجز المادة.
+- إرسال الطلب إلى معلم واحد فقط إذا كان نوع الحجز "مادة".
+- إنشاء جلسة قبل قبول المعلم بالطريقة التي تختلف عن المنصة.
+- السماح لأكثر من معلم بقبول نفس الطلب.
+- إنشاء race-condition workaround في Mobile.
+- تغيير منطق قاعدة البيانات بدون إثبات أن المنصة تستخدمه.
+- إنشاء API جديد لا علاقة له بمصدر المنصة لمجرد جعل الشاشة تعمل.
+
+==================================================
+المرحلة 1 — READ ONLY ROOT CAUSE INVESTIGATION
+==================================================
+
+ممنوع تعديل الكود في البداية.
+
+ابدأ بتحقيق كامل READ-ONLY.
+
+تتبع عملية الحجز من البداية للنهاية في:
+
+1. المنصة الأصلية.
+2. GitHub / Git history.
+3. API.
+4. Supabase.
+5. قاعدة البيانات.
+6. تطبيق الهاتف.
+
+لا تغير أي ملف قبل معرفة السبب الحقيقي.
+
+==================================================
+المرحلة 2 — افحص GitHub والكود الأصلي بالكامل
+==================================================
+
+ابحث في GitHub والمشروع والتاريخ عن كل ما يتعلق بـ:
+
+booking
+bookings
+booking request
+open booking
+teacher booking
+subject booking
+specific teacher
+broadcast booking
+teacher acceptance
+accept booking
+reject booking
+availability
+teacher availability
+schedule
+teacher_subjects
+subjects
+public_profiles
+sessions
+active_sessions
+attendance
+status
+pending
+accepted
+rejected
+expired
+cancelled
+
+استخدم:
+
+git log
+git blame
+git diff
+git show
+
+وابحث عن النسخة التي كانت تعمل سابقاً.
+
+إذا وجدت implementation سابقاً كان يعمل:
+
+قارن:
+
+WORKING VERSION
+ضد
+CURRENT VERSION
+
+حدد ما الذي تغير.
+
+==================================================
+المرحلة 3 — أثبت نوع الحجز
+==================================================
+
+يجب اكتشاف كيف تحدد المنصة نوع الحجز.
+
+ابحث عن الحقل أو enum أو flag الحقيقي.
+
+قد يكون مثلاً:
+
+booking_type
+
+أو:
+
+teacher_id nullable
+
+أو:
+
+specific_teacher
+
+أو:
+
+open_request
+
+أو أي implementation آخر.
+
+لا تفترض اسم الحقل.
+
+أثبت من الكود.
+
+أنشئ جدول:
+
+| الحالة | كيف تمثلها المنصة | كيف يمثلها الهاتف |
+|---|---|---|
+| معلم محدد | | |
+| مادة فقط | | |
+| teacher_id | | |
+| subject_id | | |
+| booking status | | |
+| request status | | |
+
+==================================================
+المرحلة 4 — حجز معلم محدد
+==================================================
+
+تتبع المسار الأصلي بالكامل:
+
+Student
+→ Select Teacher
+→ Select Subject
+→ Availability
+→ Date
+→ Time
+→ Duration
+→ Confirm
+
+ثم:
+
+API
+→ Database
+→ Booking
+
+حدد بالضبط:
+
+- endpoint.
+- HTTP method.
+- request body.
+- teacher_id.
+- subject_id.
+- date.
+- start time.
+- end time.
+- duration.
+- subscription.
+- remaining minutes.
+- status.
+- أي حقول أخرى.
+
+ثم قارن مع الهاتف.
+
+==================================================
+المرحلة 5 — حجز المادة / Open Booking
+==================================================
+
+هذه نقطة CRITICAL.
+
+تتبع المسار الأصلي:
+
+Student
+→ Select Subject
+→ No Specific Teacher
+→ Date
+→ Time
+→ Duration
+→ Submit Request
+
+ثم اكتشف ماذا يحدث في المنصة.
+
+هل يتم:
+
+1. إنشاء booking request واحد؟
+2. إنشاء request في bookings؟
+3. إنشاء teacher_requests؟
+4. استخدام RPC؟
+5. broadcast عبر Realtime؟
+6. إرسال notifications للمعلمين؟
+7. إنشاء سجلات مرتبطة بالمعلمين؟
+8. استخدام جدول وسيط؟
+
+حدد التنفيذ الحقيقي.
+
+==================================================
+المرحلة 6 — كيف يصل طلب المادة إلى المعلمين؟
+==================================================
+
+أريد معرفة implementation الحقيقي.
+
+حدد:
+
+- كيف يتم تحديد المعلمين المؤهلين؟
+- هل يتم الاعتماد على teacher_subjects؟
+- هل يجب أن يكون المعلم approved؟
+- هل يجب أن يكون active؟
+- هل availability شرط؟
+- هل يوجد rating/level/subject restriction؟
+- هل يوجد location/language restriction؟
+- هل الطلب يصل لجميع المعلمين؟
+- هل يصل فقط للمعلمين المتاحين؟
+- هل يتم إرسال Push؟
+- هل يتم استخدام Realtime؟
+- هل يتم استخدام notifications table؟
+- هل يتم broadcast من API؟
+
+لا تخترع.
+
+==================================================
+المرحلة 7 — أول معلم يقبل
+==================================================
+
+هذه نقطة CRITICAL جداً.
+
+يجب إثبات من الكود وقاعدة البيانات كيف تعمل:
+
+FIRST ACCEPT WINS
+
+مثلاً إذا كان:
+
+Teacher A
+Teacher B
+Teacher C
+
+كلهم يستطيعون رؤية الطلب.
+
+إذا ضغط:
+
+Teacher A → Accept
+
+وفي نفس اللحظة:
+
+Teacher B → Accept
+
+يجب أن يكون هناك معلم واحد فقط هو الفائز.
+
+حدد كيف تمنع المنصة:
+
+Double Acceptance
+Race Condition
+Duplicate Session
+Duplicate Booking
+
+ابحث عن:
+
+- RPC
+- transaction
+- conditional UPDATE
+- status = pending شرطاً
+- unique constraint
+- row locking
+- atomic state transition
+- database function
+- server-side compare-and-set
+
+واستخدم نفس آلية المنصة.
+
+ممنوع حل هذا في Mobile.
+
+==================================================
+المرحلة 8 — بعد قبول أول معلم
+==================================================
+
+حدد ماذا يحدث بعد أول Accept:
+
+- booking status؟
+- request status؟
+- teacher_id؟
+- session؟
+- active session؟
+- notifications؟
+- هل تختفي الطلبات من باقي المعلمين؟
+- هل يصبح Accept ممنوعاً لباقي المعلمين؟
+- هل يتم إخطار الطالب؟
+- هل يتم إنشاء الجلسة فوراً أم لاحقاً؟
+- هل يبدأ timer؟
+- هل يبدأ billing؟
+- هل يتم خصم الدقائق؟
+
+لا تفترض.
+
+استخرج السلوك الحقيقي.
+
+==================================================
+المرحلة 9 — Availability
+==================================================
+
+حدد مصدر Availability الحقيقي في المنصة الأصلية.
+
+حدد:
+
+- الجدول.
+- view.
+- RPC.
+- endpoint.
+- service.
+- hook.
+- query.
+- relation.
+
+خصوصاً:
+
+public_profiles
+teacher_subjects
+subjects
+
+وأي جدول فعلي متعلق بـ:
+
+availability
+schedule
+teacher schedule
+
+حدد:
+
+teacher ID
+profile ID
+subject ID
+availability owner ID
+
+وتأكد أن الهاتف يستخدم نفس IDs.
+
+==================================================
+المرحلة 10 — الأيام
+==================================================
+
+اكتشف convention الحقيقي.
+
+لا تفترض:
+
+0 = Sunday
+
+أو:
+
+0 = Monday
+
+قد تكون:
+
+sun
+mon
+tue
+...
+
+أو أرقام.
+
+استخدم نفس implementation الموجود في المنصة.
+
+==================================================
+المرحلة 11 — الوقت
+==================================================
+
+حدد:
+
+available_from
+available_to
+
+وduration الحقيقي.
+
+إذا:
+
+from = 16:00
+to = 22:00
+duration = 60
+
+فلا تعرض بداية تؤدي إلى انتهاء الجلسة بعد 22:00.
+
+لكن لا تفترض duration.
+
+استخرجها من المنصة.
+
+==================================================
+المرحلة 12 — TIMEZONE
+==================================================
+
+حدد:
+
+- teacher timezone.
+- student timezone.
+- server timezone.
+- database timezone.
+- availability timezone.
+- booking timezone.
+- conversion logic.
+
+يجب أن يكون الوقت في الهاتف مطابقاً للمنصة الأصلية.
+
+==================================================
+المرحلة 13 — EXISTING BOOKINGS / CONFLICTS
+==================================================
+
+تحقق من كيفية منع المنصة:
+
+- overlapping bookings
+- overlapping sessions
+- unavailable time
+- accepted requests
+- pending requests
+- expired requests
+
+يجب أن يتبع الهاتف نفس قواعد المنصة.
+
+==================================================
+المرحلة 14 — API CONTRACT
+==================================================
+
+قارن API حرفياً.
+
+لكل مسار:
+
+SPECIFIC TEACHER BOOKING
+
+و:
+
+OPEN SUBJECT BOOKING
+
+حدد:
+
+endpoint
+method
+headers
+authorization
+body
+response
+errors
+status codes
+
+لا تفترض أن المسارين يستخدمان نفس endpoint.
+
+==================================================
+المرحلة 15 — افحص الهاتف الحالي
+==================================================
+
+تتبع شاشة الحجز في:
+
+artifacts/ajyal-mobile
+
+حدد:
+
+- كيف يحدد نوع الحجز.
+- كيف يحدد teacher_id.
+- كيف يحدد subject_id.
+- كيف يجلب availability.
+- كيف يبني slots.
+- كيف يرسل booking request.
+- كيف يتعامل مع response.
+- كيف يعرض success.
+- كيف يتعامل مع failure.
+
+حدد أي اختلاف عن المنصة.
+
+==================================================
+المرحلة 16 — أصلح ROOT CAUSE
+==================================================
+
+بعد إثبات السبب فقط.
+
+الأولوية:
+
+1. Availability source.
+2. Teacher/Subject IDs.
+3. Booking type.
+4. Specific teacher flow.
+5. Open subject flow.
+6. Eligible teacher discovery.
+7. Teacher acceptance.
+8. First-accept atomicity.
+9. Conflict checking.
+10. Timezone.
+11. Slot generation.
+12. Booking request.
+13. Notifications.
+14. UI فقط إذا كان ضرورياً.
+
+==================================================
+المرحلة 17 — مهم جداً: لا تحول Open Booking إلى Specific Booking
+==================================================
+
+إذا الطالب اختار:
+
+"حجز مادة"
+
+فلا يجوز أن يقوم الهاتف:
+
+- باختيار أول معلم في القائمة.
+- اختيار معلم عشوائي.
+- وضع teacher_id من UI.
+- إرسال الطلب إلى معلم واحد.
+
+بل يجب أن يبقى:
+
+teacher_id = null / حسب عقد المنصة
+
+أو يستخدم نفس representation الحقيقي في المنصة.
+
+ثم يمر الطلب عبر مسار المنصة الذي يوزعه على المعلمين المؤهلين.
+
+==================================================
+المرحلة 18 — لا تحول Specific Booking إلى Open Booking
+==================================================
+
+إذا الطالب اختار معلماً محدداً:
+
+لا يجوز إرسال الطلب لجميع المعلمين.
+
+يجب أن يذهب فقط للمعلم الذي اختاره الطالب.
+
+==================================================
+المرحلة 19 — END-TO-END TESTING
+==================================================
+
+لا تكتفِ بـTypeScript وBuild.
+
+يجب اختبار المسارين.
+
+------------------------------------------
+TEST A — Specific Teacher
+------------------------------------------
+
+Student
+→ Teacher A
+→ Subject
+→ Available Day
+→ Available Time
+→ Confirm
+
+Expected:
+
+Booking Request
+→ Teacher A فقط
+→ Success
+
+------------------------------------------
+TEST B — Open Subject Booking
+------------------------------------------
+
+Student
+→ Subject
+→ No Teacher
+→ Available Day
+→ Available Time
+→ Confirm
+
+Expected:
+
+Open Booking Request
+→ Eligible Teachers
+
+وليس Teacher واحداً فقط.
+
+------------------------------------------
+TEST C — First Teacher Accept
+------------------------------------------
+
+Teacher A accepts.
+
+Expected:
+
+Teacher A = assigned teacher.
+
+------------------------------------------
+TEST D — Second Teacher Accept
+------------------------------------------
+
+Teacher B tries to accept بعد A.
+
+Expected:
+
+Rejected because request already accepted.
+
+------------------------------------------
+TEST E — Simultaneous Accept
+------------------------------------------
+
+إذا أمكن اختبار concurrency:
+
+Teacher A + Teacher B
+في نفس الوقت.
+
+Expected:
+
+Exactly ONE succeeds.
+
+Exactly ONE teacher becomes owner.
+
+No duplicate session.
+
+No duplicate booking.
+
+------------------------------------------
+TEST F — Availability
+------------------------------------------
+
+Teacher has real availability.
+
+Expected:
+
+Days appear.
+
+Times appear.
+
+------------------------------------------
+TEST G — Outside Availability
+------------------------------------------
+
+Expected:
+
+Cannot select.
+
+------------------------------------------
+TEST H — Existing Conflict
+------------------------------------------
+
+Expected:
+
+Same as platform.
+
+------------------------------------------
+TEST I — Student Re-login
+------------------------------------------
+
+Expected:
+
+Booking remains visible.
+
+------------------------------------------
+TEST J — Unauthorized
+------------------------------------------
+
+Expected:
+
+401.
+
+==================================================
+المرحلة 20 — Production Safety
+==================================================
+
+لا تعدل تلقائياً:
+
+- Production Database
+- Schema
+- RLS
+- RPC
+- Functions
+- Triggers
+- Auth
+- VPS
+- Stripe
+
+إذا كان إصلاح Availability أو Open Booking يحتاج تغيير Production:
+
+توقف واكتب:
+
+PRODUCTION BLOCKER
+
+ثم اشرح:
+
+1. السبب.
+2. الجدول/RPC/function المسؤول.
+3. لماذا لا يمكن حل المشكلة في Mobile/API.
+4. التغيير المطلوب.
+5. المخاطر.
+6. هل توجد طريقة آمنة بدون Production.
+
+==================================================
+المرحلة 21 — التقرير النهائي
+==================================================
+
+أنشئ:
+
+BOOKING_SYSTEM_ROOT_CAUSE_AND_PARITY_REPORT.md
+
+ويجب أن يحتوي:
+
+1. EXECUTIVE SUMMARY
+2. CURRENT BLOCKER
+3. ROOT CAUSE
+4. ORIGINAL PLATFORM BOOKING ARCHITECTURE
+5. SPECIFIC TEACHER BOOKING
+6. OPEN SUBJECT BOOKING
+7. FIRST ACCEPT WINS
+8. RACE CONDITION PROTECTION
+9. SOURCE OF TRUTH FOR AVAILABILITY
+10. TEACHER ID FLOW
+11. SUBJECT ID FLOW
+12. DATABASE TABLES
+13. DATABASE RELATIONSHIPS
+14. API ENDPOINTS
+15. REQUEST CONTRACT
+16. RESPONSE CONTRACT
+17. DAY MAPPING
+18. TIME MAPPING
+19. TIMEZONE
+20. CONFLICT CHECKING
+21. MOBILE IMPLEMENTATION
+22. EXACT MISMATCHES
+23. GIT HISTORY FINDINGS
+24. FILES CHANGED
+25. EXACT FIX
+26. BEFORE
+27. AFTER
+28. SPECIFIC BOOKING TEST
+29. OPEN BOOKING TEST
+30. FIRST ACCEPT TEST
+31. DOUBLE ACCEPT TEST
+32. END-TO-END RESULTS
+33. REMAINING BLOCKERS
+34. PRODUCTION CHANGES = YES/NO
+
+==================================================
+النتيجة النهائية المطلوبة
+==================================================
+
+لا أريد منك أن تقول:
+
+"تم إصلاح شاشة الحجز."
+
+ولا:
+
+"تم إصلاح Availability."
+
+ولا:
+
+"Build نجح."
+
+أريد إثباتاً كاملاً.
+
+مثال النتيجة المطلوبة:
+
+ROOT CAUSE:
+
+المنصة الأصلية تحصل على Availability من ______.
+
+الهاتف كان يحصل عليها من ______.
+
+الاختلاف كان ______.
+
+لذلك كانت الأيام فارغة.
+
+تم إصلاح ______.
+
+الآن Availability تصل كالتالي:
+
+days = ______
+from = ______
+to = ______
+
+ثم:
+
+SPECIFIC TEACHER BOOKING
+
+teacher_id = ______
+subject_id = ______
+endpoint = ______
+
+Booking Created = SUCCESS
+
+ثم:
+
+OPEN SUBJECT BOOKING
+
+teacher_id = null / representation الحقيقي = ______
+
+Eligible Teachers:
+
+A
+B
+C
+
+تم إرسال الطلب وفق مسار المنصة.
+
+Teacher A accepted first.
+
+Teacher A became owner.
+
+Teacher B attempted accept.
+
+Result = rejected because request was already accepted.
+
+Exactly one booking/session was created.
+
+==================================================
+قاعدة عدم الانتقال
+==================================================
+
+لا تنتقل إلى مرحلة أخرى.
+
+لا تعتبر المهمة مكتملة.
+
+لا تقل SUCCESS.
+
+إلا بعد إثبات أن:
+
+1. المعلم المتاح في المنصة يظهر متاحاً في الهاتف.
+2. أيامه تظهر.
+3. ساعاته تظهر.
+4. timezone مطابق.
+5. الطالب يستطيع اختيار الموعد.
+6. حجز المعلم المحدد يعمل.
+7. حجز المادة بدون معلم يعمل.
+8. طلب المادة يصل إلى المعلمين المؤهلين وفق المنصة.
+9. أول معلم يقبل يصبح صاحب الطلب.
+10. باقي المعلمين لا يستطيعون قبول الطلب بعد ذلك.
+11. لا توجد duplicate bookings.
+12. لا توجد duplicate sessions.
+13. لا توجد race-condition غير محمية.
+14. الحجز يظهر للطالب.
+15. الحجز يظهر للمعلم الصحيح.
+16. تسجيل الخروج والدخول لا يفقد الحجز.
+17. لا يوجد fallback.
+18. لا يوجد mock.
+19. لا يوجد hardcoded availability.
+20. لا يوجد اختيار محلي عشوائي للمعلم.
+21. مسار Specific Teacher منفصل فعلياً عن Open Subject Booking.
+22. جميع النتائج مطابقة للمنصة الأصلية.
+
+==================================================
+قاعدة أخيرة شديدة الأهمية
+==================================================
+
+إذا وجدت أن المنصة الأصلية تستخدم قاعدة بيانات أو RPC أو API معيناً لحسم أول معلم يقبل، فلا تعيد تنفيذ هذه القاعدة في Mobile.
+
+يجب أن يبقى القرار الخادمي/قاعدة البيانات هو مصدر الحقيقة.
+
+إذا كان هناك RPC أو transaction أو conditional update في المنصة، استخدم نفس العقد.
+
+إذا كان موجوداً بالفعل في Production ولا يحتاج تعديل:
+استخدمه.
+
+إذا كان غير موجود في API الحالي لكن موجود في المنصة:
+حدد الفرق بدقة.
+
+إذا كان يتطلب تعديل Production:
+توقف واكتب PRODUCTION BLOCKER.
+
+لا تنشئ نظام قبول جديداً من عندك.
+
+==================================================
+ابدأ الآن
+==================================================
+
+ابدأ READ-ONLY.
+
+أولاً أثبت:
+
+1. كيف تعمل المنصة الأصلية في Specific Teacher Booking.
+2. كيف تعمل في Open Subject Booking.
+3. كيف يتم توزيع طلب المادة على المعلمين.
+4. كيف يعمل FIRST ACCEPT WINS.
+5. كيف يتم منع Double Acceptance.
+6. من أين تأتي Availability.
+7. لماذا تطبيق الهاتف الحالي لا يستطيع إنشاء الحجز.
+
+بعد ذلك فقط أصلح ROOT CAUSE.
+
+ثم اختبر المسارين End-to-End.
+
+ولا تتوقف عند Build.
+
+المطلوب النهائي هو:
+
+STUDENT CAN CREATE A REAL BOOKING SUCCESSFULLY
+IN BOTH BOOKING MODES
+WITH THE SAME BEHAVIOR AS THE ORIGINAL PLATFORM.
+```

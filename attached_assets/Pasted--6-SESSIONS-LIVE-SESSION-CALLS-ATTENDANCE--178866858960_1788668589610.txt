@@ -1,0 +1,545 @@
+نبدأ الآن المرحلة 6 فقط:
+
+SESSIONS / LIVE SESSION / CALLS / ATTENDANCE
+
+ممنوع منعاً باتاً:
+- تعديل Production Database.
+- تعديل Schema.
+- تعديل RLS.
+- تعديل RPC.
+- تعديل Functions.
+- تعديل Triggers.
+- تعديل Auth.
+- تعديل VPS.
+- تعديل كود المنصة الرئيسية.
+- تنفيذ جلسة حقيقية على Production.
+- تنفيذ خصم دقائق حقيقي.
+- تنفيذ عملية مالية.
+- استخدام أي Password أو Token من المحادثة.
+- اختراع منطق بديل عن المنصة.
+
+مصدر الحقيقة هو:
+1. المخططات الهندسية.
+2. كود المنصة الأصلية.
+3. كود التطبيق الحالي.
+4. قاعدة البيانات فقط للقراءة إن كانت الأدلة المتاحة تسمح بذلك.
+
+==================================================
+1 — التدقيق قبل أي تعديل
+==================================================
+
+راجع بدقة:
+
+- sessions
+- bookings
+- active_sessions
+- attendance
+- session heartbeats
+- call records
+- call participants
+- session status
+- booking session_status
+
+وراجع كود المنصة الأصلي الخاص بـ:
+
+- بدء الجلسة.
+- إنهاء الجلسة.
+- دخول الطالب.
+- دخول المعلم.
+- المكالمة.
+- heartbeat.
+- active session.
+- attendance.
+- session duration.
+- أي Trigger/Function مرتبط بانتهاء الجلسة.
+
+لا تعدل أي ملف قبل إنشاء جدول parity.
+
+==================================================
+2 — دورة الجلسة
+==================================================
+
+استخرج التدفق الحقيقي:
+
+booking
+→ session
+→ scheduled
+→ teacher joins
+→ student joins
+→ call starts
+→ active session
+→ heartbeat
+→ call ends
+→ teacher ends session
+→ session completed
+→ duration
+→ downstream settlement
+
+حدد لكل مرحلة:
+
+- الجدول.
+- الحقول.
+- الحالة.
+- من يستطيع الكتابة.
+- مصدر الحقيقة.
+- RPC/API/Function/Trigger إن وجد.
+
+==================================================
+3 — Session Status
+==================================================
+
+استخرج الحالات الفعلية من المنصة.
+
+لا تفترض حالات.
+
+قارن:
+
+- scheduled
+- in_progress
+- completed
+- cancelled
+- أي حالات أخرى مثبتة.
+
+راجع العلاقة بين:
+
+bookings.session_status
+
+و
+
+sessions
+
+ولا تسمح للتطبيق بإنشاء حالة غير موجودة في المنصة.
+
+==================================================
+4 — بدء الجلسة
+==================================================
+
+طابق بدقة:
+
+- من يبدأ الجلسة؟
+- هل الطالب يستطيع بدء المكالمة؟
+- هل المعلم هو الذي يثبت started_at؟
+- متى يصبح status = in_progress؟
+- هل توجد active_sessions؟
+- هل يوجد شرط أن الحجز confirmed؟
+- هل يوجد تحقق من الوقت؟
+- هل يوجد grace period؟
+- هل يوجد تحقق من participant identity؟
+
+إذا لم يكن الشرط مثبتاً:
+
+UNVERIFIED
+
+ولا تخمن.
+
+==================================================
+5 — المكالمة
+==================================================
+
+راجع:
+
+- callId
+- sessionId
+- teacherId
+- studentId
+- participants
+- join/leave
+- incoming call
+- accept/reject
+- call end
+- call reconnect
+- permissions
+- deep links
+- notifications
+
+تحقق أن:
+
+callId
+→ session
+→ booking
+→ الطالب والمعلم الصحيحين
+
+ولا تسمح بتخمين الهوية من client state فقط إذا كان المصدر الأصلي يعتمد على server validation.
+
+==================================================
+6 — Attendance
+==================================================
+
+طابق:
+
+- دخول الطالب.
+- دخول المعلم.
+- وقت الدخول.
+- وقت الخروج.
+- heartbeat.
+- active session.
+- حضور الطالب.
+- حضور المعلم.
+- التعامل مع انقطاع الاتصال.
+
+حدد ما إذا كان النظام يعتمد على:
+
+sessions.started_at
+sessions.ended_at
+duration_seconds
+duration_minutes
+
+أو جداول أخرى.
+
+==================================================
+7 — إنهاء الجلسة
+==================================================
+
+طابق بدقة:
+
+Teacher ends call
+→ session end
+→ duration calculation
+→ session status
+→ booking status
+→ downstream trigger/function
+
+إذا أنهى الطالب الاتصال أولاً:
+
+حدد السلوك الحقيقي من المصدر.
+
+ممنوع اختراع سلوك تلقائي إذا لم يكن مثبتاً.
+
+==================================================
+8 — مدة الجلسة
+==================================================
+
+راجع:
+
+- duration_seconds
+- duration_minutes
+- package duration
+- actual duration
+- rounding
+- minimum duration
+- maximum duration
+
+حدد هل المنصة تعتمد:
+
+planned duration
+
+أم:
+
+actual duration
+
+أم الاثنين.
+
+==================================================
+9 — الخصم المالي
+==================================================
+
+هذه نقطة حساسة جداً.
+
+لا تنفذ أي خصم.
+
+حدد فقط:
+
+هل الخصم يتم عند:
+
+- بدء الجلسة؟
+- نهاية الجلسة؟
+- Trigger؟
+- RPC؟
+- Function؟
+- webhook؟
+
+وكيف يتم حساب:
+
+remaining_minutes
+teacher earnings
+platform commission
+
+إذا لم يكن المصدر موثقاً:
+
+UNVERIFIED / BLOCKED
+
+ولا تعيد كتابة المنطق في Mobile أو API.
+
+==================================================
+10 — Idempotency
+==================================================
+
+تحقق من:
+
+- تكرار start.
+- تكرار end.
+- إعادة إرسال heartbeat.
+- انقطاع الشبكة ثم reconnect.
+- ضغط زر إنهاء مرتين.
+- فتح الجلسة من جهازين.
+- قبول المكالمة من أكثر من مكان.
+
+حدد هل الحماية موجودة في:
+
+DB
+RPC
+Function
+API
+Client
+
+إذا كانت تحتاج Production change:
+
+BLOCKED
+
+==================================================
+11 — صلاحيات الجلسة
+==================================================
+
+تحقق:
+
+Teacher A لا يستطيع فتح Session الخاصة بـ Teacher B.
+
+Student A لا يستطيع فتح Session الخاصة بـ Student B.
+
+Student لا يستطيع إنهاء جلسة المعلم.
+
+Teacher لا يستطيع إنهاء جلسة طالب آخر.
+
+أي endpoint متعلق بـsession يجب أن يتحقق من:
+
+authenticated user
+→ booking/session ownership
+→ participant role
+
+==================================================
+12 — Expo Go
+==================================================
+
+راجع الفرق بين:
+
+Expo Go
+Development Build
+Production Build
+
+خصوصاً:
+
+- WebRTC
+- Push Notifications
+- Call notifications
+- background tasks
+- native modules
+- audio/video permissions.
+
+لا تعتبر نجاح bundle دليلاً على نجاح مكالمة حقيقية.
+
+صنف:
+
+BUILD VERIFIED
+
+و
+
+REAL DEVICE UNVERIFIED
+
+بشكل منفصل.
+
+==================================================
+13 — التطبيق الحالي
+==================================================
+
+راجع:
+
+artifacts/ajyal-mobile/app/live-session.tsx
+
+وجميع:
+
+- call components
+- call providers
+- notification handlers
+- session hooks
+- API routes
+- API contracts
+
+وابحث عن:
+
+- Mock.
+- fallback.
+- hard-coded duration.
+- fake session.
+- client-only authorization.
+- duplicated session state.
+- race conditions.
+- optimistic completion.
+- incorrect navigation.
+- stale session.
+- incorrect participant.
+
+==================================================
+14 — parity table
+==================================================
+
+أنشئ:
+
+SESSIONS_PARITY_REPORT.md
+
+بجدول:
+
+FEATURE
+PLATFORM
+API
+MOBILE
+STATUS
+EVIDENCE
+RISK
+FIX
+
+STATUS:
+
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+BLOCKED
+NOT_APPLICABLE
+
+افصل بوضوح بين:
+
+Confirmed mismatch
+Confirmed partial
+Unverified
+Blocked by Production
+
+==================================================
+15 — الإصلاح
+==================================================
+
+بعد اكتمال التدقيق فقط:
+
+أصلح MISMATCH/PARTIAL المؤكد داخل:
+
+Mobile
+API الخاص بالتطبيق
+
+فقط.
+
+استخدم نفس:
+
+- tables
+- fields
+- existing RPC
+- existing Functions
+- existing status
+- existing session rules
+
+ممنوع:
+
+- RPC جديد.
+- Trigger جديد.
+- DB constraint جديد.
+- Session engine جديد.
+- Financial engine جديد.
+- Call authorization بديل غير مثبت.
+
+أي إصلاح يحتاج Production:
+
+BLOCKED — REQUIRES PRODUCTION CHANGE
+
+==================================================
+16 — الاختبارات
+==================================================
+
+نفذ:
+
+- Mobile TypeScript.
+- API TypeScript.
+- API build.
+- Android bundle.
+- iOS bundle.
+- Expo startup.
+- OpenAPI generation إذا تغير العقد.
+- git diff --check.
+- healthz.
+- unauthorized session request.
+- teacher/student authorization checks.
+- مراجعة logs.
+- التأكد من عدم وجود mock/fallback.
+
+ممنوع:
+
+- جلسة حقيقية Production.
+- خصم دقائق.
+- كتابة مالية.
+- تعديل DB.
+- RPC write.
+- Trigger execution.
+- اختبار حقيقي يتطلب Tokens/Passwords.
+
+==================================================
+17 — التقرير النهائي
+==================================================
+
+في نهاية:
+
+SESSIONS_PARITY_REPORT.md
+
+اكتب:
+
+Executive Summary
+Architecture
+Session Lifecycle
+Session Status
+Start Session
+Join Session
+Calls
+Participants
+Attendance
+Heartbeat
+End Session
+Duration
+Authorization
+Idempotency
+Notifications
+Expo Go limitations
+Development Build
+Financial boundary
+API
+Mobile
+MATCHED
+PARTIAL
+MISMATCH
+UNVERIFIED
+BLOCKED
+Files Changed
+Tests
+Remaining Risks
+Production Verification Needed
+Next Step
+
+وفي النهاية حرفياً:
+
+Database changed: NO/YES
+Schema changed: NO/YES
+RLS changed: NO/YES
+RPC changed: NO/YES
+Functions changed: NO/YES
+Triggers changed: NO/YES
+Auth changed: NO/YES
+VPS changed: NO/YES
+Main platform code changed: NO/YES
+Production writes: NO/YES
+Real session executed: NO/YES
+Real call executed: NO/YES
+Financial operation executed: NO/YES
+
+==================================================
+18 — قاعدة الإيقاف
+==================================================
+
+بعد إغلاق المرحلة السادسة توقف.
+
+لا تبدأ:
+
+- الخصم.
+- التسوية المالية.
+- المحفظة.
+- السحب.
+- الواجبات.
+- الدرجات.
+
+حتى أراجع التقرير والنتائج.
+
+ممنوع قول "100%" إلا إذا كان هناك دليل فعلي يثبت التطابق.
