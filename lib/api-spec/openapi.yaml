@@ -1,0 +1,1231 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: Ajyal Al-Maarifa platform API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: Auth
+    description: Browser and mobile authentication endpoints.
+  - name: profile
+    description: Current user profile
+  - name: bookings
+    description: Lessons and reservations
+  - name: assignments
+    description: Student assignments and teacher assessment
+  - name: notifications
+    description: User notifications
+  - name: push
+    description: Device push registration and internal call delivery
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /auth/user:
+    get:
+      tags: [Auth]
+      operationId: getCurrentAuthUser
+      summary: Get the currently authenticated user
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationSessionHeader"
+        - $ref: "#/components/parameters/SessionCookie"
+      responses:
+        "200":
+          description: Auth status resolved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUserEnvelope"
+  /login:
+    get:
+      tags: [Auth]
+      operationId: beginBrowserLogin
+      summary: Start the browser OIDC login flow
+      parameters:
+        - name: returnTo
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to the OIDC authorization endpoint.
+  /callback:
+    get:
+      tags: [Auth]
+      operationId: handleBrowserLoginCallback
+      summary: Complete the browser OIDC login flow
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect after login.
+  /logout:
+    get:
+      tags: [Auth]
+      operationId: logoutBrowserSession
+      summary: Clear the browser session
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationSessionHeader"
+        - $ref: "#/components/parameters/SessionCookie"
+        - name: returnTo
+          in: query
+          required: false
+          schema:
+            type: string
+            default: /
+      responses:
+        "302":
+          description: Redirect after logout.
+  /mobile-auth/token-exchange:
+    post:
+      tags: [Auth]
+      operationId: exchangeMobileAuthorizationCode
+      summary: Exchange a mobile OIDC code for a session token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MobileTokenExchangeRequest"
+      responses:
+        "200":
+          description: Session created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MobileTokenExchangeSuccess"
+        "400":
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: Invalid identity token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: Token exchange failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /mobile-auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logoutMobileSession
+      summary: Delete a mobile session token
+      parameters:
+        - $ref: "#/components/parameters/AuthorizationSessionHeader"
+      responses:
+        "200":
+          description: Logout processed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogoutSuccess"
+  /push-tokens:
+    post:
+      tags: [push]
+      operationId: registerPushToken
+      summary: Register the authenticated user's Expo push token
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterPushTokenRequest"
+      responses:
+        "200":
+          description: Push token registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushTokenRegistrationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [push]
+      operationId: unregisterPushToken
+      summary: Remove the authenticated user's Expo push token
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Push token removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushTokenRegistrationResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /calls/incoming:
+    post:
+      tags: [push]
+      operationId: sendIncomingCall
+      summary: Send a remote incoming-call notification to another user
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IncomingCallRequest"
+      responses:
+        "202":
+          description: Incoming call notification sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallDeliveryResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          description: Push provider rejected the notification.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /calls/{callId}/end:
+    post:
+      tags: [push]
+      operationId: sendCallEnded
+      summary: Stop ringing on another user's device
+      security:
+        - sessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallEndedRequest"
+      responses:
+        "202":
+          description: Call ended notification sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallDeliveryResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          description: Push provider rejected the notification.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /calls/{callId}/accept:
+    post:
+      tags: [push]
+      operationId: sendCallAccepted
+      summary: Notify another user that an incoming call was accepted
+      security:
+        - sessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallAcceptedRequest"
+      responses:
+        "202":
+          description: Call acceptance notification sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallDeliveryResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          description: Push provider rejected the notification.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /me:
+    get:
+      tags: [profile]
+      operationId: getMyProfile
+      summary: Get the current platform profile
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Current profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: The authenticated user cannot create this resource.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /teacher/dashboard:
+    get:
+      tags: [profile]
+      operationId: getTeacherDashboard
+      summary: Get the authenticated teacher dashboard summary
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Teacher dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TeacherDashboard"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /sessions:
+    get:
+      tags: [bookings]
+      operationId: listMySessions
+      summary: List the current user's lessons
+      security:
+        - sessionAuth: []
+      parameters:
+        - name: view
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [upcoming, past]
+            default: upcoming
+      responses:
+        "200":
+          description: User lessons
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /student/dashboard:
+    get:
+      tags: [profile]
+      operationId: getStudentDashboard
+      summary: Read the current student's dashboard data
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Student dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentDashboard"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "502":
+          description: Upstream dashboard read failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+    post:
+      tags: [bookings]
+      operationId: createSession
+      summary: Create a lesson booking
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionInput"
+      responses:
+        "201":
+          description: Created lesson
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /teachers:
+    get:
+      tags: [directory]
+      operationId: listTeachers
+      summary: List teachers available to the current student
+      security:
+        - sessionAuth: []
+      parameters:
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 80
+      responses:
+        "200":
+          description: Available teachers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TeacherSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /students:
+    get:
+      tags: [directory]
+      operationId: listMyStudents
+      summary: List students connected to the current teacher
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Connected students
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StudentSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Only teachers can list students.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /sessions/{id}/cancel:
+    patch:
+      tags: [bookings]
+      operationId: cancelSession
+      summary: Cancel a lesson
+      security:
+        - sessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelSessionInput"
+      responses:
+        "200":
+          description: Cancelled lesson
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /booking-requests:
+    get:
+      tags: [bookings]
+      operationId: listBookingRequests
+      summary: List booking requests visible to the authenticated student or teacher
+      security:
+        - sessionAuth: []
+      parameters:
+        - name: view
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [incoming, mine]
+            default: mine
+      responses:
+        "200":
+          description: Booking requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BookingRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [bookings]
+      operationId: createBookingRequest
+      summary: Create a student booking request
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingRequestInput"
+      responses:
+        "201":
+          description: Created booking request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /booking-requests/group:
+    post:
+      tags: [bookings]
+      operationId: createBookingRequestGroup
+      summary: Create a grouped student booking request
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingRequestGroupInput"
+      responses:
+        "201":
+          description: Created grouped booking requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BookingRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /booking-requests/{id}/decision:
+    patch:
+      tags: [bookings]
+      operationId: decideBookingRequest
+      summary: Accept or reject a booking request as the assigned teacher
+      security:
+        - sessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BookingRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingRequestDecisionInput"
+      responses:
+        "200":
+          description: Updated booking request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /booking-requests/{id}/cancel:
+    patch:
+      tags: [bookings]
+      operationId: cancelBookingRequest
+      summary: Cancel an open student booking request
+      security:
+        - sessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BookingRequestId"
+      responses:
+        "200":
+          description: Cancelled booking request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /booking-requests/{id}:
+    delete:
+      tags: [bookings]
+      operationId: deleteBookingRequest
+      summary: Delete a processed booking request owned by the authenticated user
+      security:
+        - sessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BookingRequestId"
+      responses:
+        "204":
+          description: Booking request deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /assignments:
+    get:
+      tags: [assignments]
+      operationId: listMyAssignments
+      summary: List assignments visible to the current user
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: User assignments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Assignment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /assignments/{id}/complete:
+    patch:
+      tags: [assignments]
+      operationId: completeAssignment
+      summary: Mark a student assignment complete
+      security:
+        - sessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AssignmentId"
+      responses:
+        "200":
+          description: Updated assignment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assignment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /notifications:
+    get:
+      tags: [notifications]
+      operationId: listMyNotifications
+      summary: List current user notifications
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: User notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Notification"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /notifications/{id}/read:
+    patch:
+      tags: [notifications]
+      operationId: markNotificationRead
+      summary: Mark one notification as read
+      security:
+        - sessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/NotificationId"
+      responses:
+        "200":
+          description: Updated notification
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /notifications/read-all:
+    patch:
+      tags: [notifications]
+      operationId: markAllNotificationsRead
+      summary: Mark all notifications as read
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Number of updated notifications
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadAllNotificationsResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+components:
+  securitySchemes:
+    sessionAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-session-token
+  parameters:
+    AuthorizationSessionHeader:
+      name: Authorization
+      in: header
+      required: false
+      schema:
+        type: string
+    SessionCookie:
+      name: sid
+      in: cookie
+      required: false
+      schema:
+        type: string
+    SessionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    BookingRequestId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    AssignmentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    NotificationId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    CallId:
+      name: callId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Forbidden:
+      description: The authenticated user is not allowed to perform this action.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Conflict:
+      description: Request conflicts with the current resource state
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+    AuthUser:
+      type: object
+      required: [id, email, firstName, lastName, profileImageUrl]
+      properties:
+        id:
+          type: string
+        email:
+          type: [string, "null"]
+        firstName:
+          type: [string, "null"]
+        lastName:
+          type: [string, "null"]
+        profileImageUrl:
+          type: [string, "null"]
+    AuthUserEnvelope:
+      type: object
+      required: [user]
+      properties:
+        user:
+          oneOf:
+            - $ref: "#/components/schemas/AuthUser"
+            - type: "null"
+    TeacherSummary:
+      type: object
+      required: [id, displayName, email, profileImageUrl, subjects]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        email:
+          type: [string, "null"]
+        profileImageUrl:
+          type: [string, "null"]
+        hourlyRate:
+          type: [number, "null"]
+        rating:
+          type: [number, "null"]
+        totalSessions:
+          type: [number, "null"]
+        teachingStages:
+          type: array
+          items:
+            type: string
+        availableDays:
+          type: array
+          items:
+            type: string
+        availableFrom:
+          type: [string, "null"]
+        availableTo:
+          type: [string, "null"]
+        subjects:
+          type: array
+          items:
+            type: string
+    StudentSummary:
+      type: object
+      required: [id, displayName, email, profileImageUrl, progress]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        email:
+          type: [string, "null"]
+        profileImageUrl:
+          type: [string, "null"]
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Average assignment progress, rounded to a whole percentage.
+    MobileTokenExchangeRequest:
+      type: object
+      required: [code, code_verifier, redirect_uri, state]
+      properties:
+        code:
+          type: string
+          minLength: 1
+        code_verifier:
+          type: string
+          minLength: 1
+        redirect_uri:
+          type: string
+          minLength: 1
+        state:
+          type: string
+          minLength: 1
+        nonce:
+          type: [string, "null"]
+          minLength: 1
+    MobileTokenExchangeSuccess:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+    RegisterPushTokenRequest:
+      type: object
+      required: [token, platform]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 512
+        platform:
+          type: string
+          enum: [ios, android]
+    PushTokenRegistrationResult:
+      type: object
+      required: [registered]
+      properties:
+        registered:
+          type: boolean
+          const: true
+    IncomingCallRequest:
+      type: object
+      required: [recipientId, roomId]
+      properties:
+        recipientId:
+          type: string
+          minLength: 1
+        roomId:
+          type: string
+          minLength: 1
+        callId:
+          type: string
+          minLength: 1
+          maxLength: 128
+    CallEndedRequest:
+      type: object
+      required: [recipientId]
+      properties:
+        recipientId:
+          type: string
+          minLength: 1
+    CallAcceptedRequest:
+      type: object
+      required: [recipientId]
+      properties:
+        recipientId:
+          type: string
+          minLength: 1
+    CallDeliveryResult:
+      type: object
+      required: [callId, delivered]
+      properties:
+        callId:
+          type: string
+        delivered:
+          type: boolean
+    LogoutSuccess:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+          const: true
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    Role:
+      type: string
+      enum: [student, teacher, parent, admin]
+    UserProfile:
+      type: object
+      required: [id, email, firstName, lastName, profileImageUrl, role, roles, displayName, roleLabel, teachingStage, teacherApproved, isBanned]
+      properties:
+        id: { type: string }
+        email: { type: [string, "null"] }
+        firstName: { type: [string, "null"] }
+        lastName: { type: [string, "null"] }
+        profileImageUrl: { type: [string, "null"] }
+        role: { $ref: "#/components/schemas/Role" }
+        roles:
+          type: array
+          items: { $ref: "#/components/schemas/Role" }
+        displayName: { type: string }
+        roleLabel: { type: string }
+        teachingStage: { type: [string, "null"] }
+        teacherApproved: { type: [boolean, "null"] }
+        isBanned: { type: boolean }
+    TeacherDashboard:
+      type: object
+      required: [teacherApproved, stats, openRequests, unreadNotifications, warningCount, upcomingSessions]
+      properties:
+        teacherApproved:
+          type: boolean
+        stats:
+          $ref: "#/components/schemas/TeacherDashboardStats"
+        openRequests:
+          type: number
+          minimum: 0
+        unreadNotifications:
+          type: number
+          minimum: 0
+        warningCount:
+          type: number
+          minimum: 0
+        upcomingSessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+    TeacherDashboardStats:
+      type: object
+      required: [earnings, students, sessions, rating]
+      properties:
+        earnings:
+          type: number
+        students:
+          type: number
+          minimum: 0
+        sessions:
+          type: number
+          minimum: 0
+        rating:
+          type: number
+          minimum: 0
+    Session:
+      type: object
+      required: [id, title, subject, person, date, time, scheduledAt, duration, tone, status]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        subject: { type: string }
+        person: { type: string }
+        date: { type: string }
+        time: { type: string }
+        scheduledAt: { type: string, format: date-time }
+        duration: { type: string }
+        tone:
+          type: string
+          enum: [teal, gold, navy]
+        status:
+          type: string
+          enum: [upcoming, done, cancelled, expired]
+        sessionStatus:
+          type: [string, "null"]
+          enum: [not_started, waiting_acceptance, in_progress, completed, cancelled, rejected, expired, null]
+    StudentDashboardStats:
+      type: object
+      required: [completedSessions, cancelledSessions, progress, points]
+      properties:
+        completedSessions:
+          type: number
+          minimum: 0
+        cancelledSessions:
+          type: number
+          minimum: 0
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+        points:
+          type: number
+          minimum: 0
+    StudentDashboardBalance:
+      type: object
+      required: [remainingMinutes, sessionsRemaining, endsAt, planName, planTier, sessionDurationMinutes]
+      properties:
+        remainingMinutes:
+          type: number
+          minimum: 0
+        sessionsRemaining:
+          type: number
+          minimum: 0
+        endsAt:
+          type: [string, "null"]
+          format: date-time
+        planName:
+          type: [string, "null"]
+        planTier:
+          type: [string, "null"]
+        sessionDurationMinutes:
+          type: [number, "null"]
+    StudentDashboard:
+      type: object
+      required: [profileComplete, missingProfileFields, stats, balance, openBookingRequests, unreadNotifications, upcomingSessions]
+      properties:
+        profileComplete:
+          type: boolean
+        missingProfileFields:
+          type: array
+          items:
+            type: string
+            enum: [fullName, phone, teachingStage]
+        stats:
+          $ref: "#/components/schemas/StudentDashboardStats"
+        balance:
+          oneOf:
+            - $ref: "#/components/schemas/StudentDashboardBalance"
+            - type: "null"
+        openBookingRequests:
+          type: number
+          minimum: 0
+        unreadNotifications:
+          type: number
+          minimum: 0
+        upcomingSessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+    SessionInput:
+      type: object
+      required: [teacherId, title, subject, startsAt, durationMinutes]
+      properties:
+        teacherId: { type: string, minLength: 1 }
+        title: { type: string, minLength: 1 }
+        subject: { type: string, minLength: 1 }
+        startsAt: { type: string, format: date-time }
+        durationMinutes: { type: number, minimum: 15, maximum: 180, description: Whole minutes }
+        tone:
+          type: string
+          enum: [teal, gold, navy]
+    CancelSessionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          minLength: 10
+          maxLength: 500
+          description: Required for teacher cancellations.
+    BookingRequest:
+      type: object
+      required: [id, studentId, subject, scheduledAt, durationMinutes, status]
+      properties:
+        id: { type: string }
+        studentId: { type: string }
+        studentName: { type: [string, "null"] }
+        teacherId: { type: [string, "null"] }
+        subject: { type: string }
+        scheduledAt: { type: string, format: date-time }
+        durationMinutes: { type: number }
+        price: { type: [number, "null"] }
+        status:
+          type: string
+          enum: [open, accepted, rejected, cancelled, expired]
+        acceptedBy: { type: [string, "null"] }
+        expiresAt: { type: [string, "null"], format: date-time }
+        groupId: { type: [string, "null"] }
+    BookingRequestInput:
+      type: object
+      required: [subject, startsAt, durationMinutes]
+      properties:
+        teacherId: { type: [string, "null"], minLength: 1, description: Optional for an open subject request }
+        subject: { type: string, minLength: 1 }
+        teachingStage: { type: [string, "null"], minLength: 1, description: Student teaching stage used to match eligible teachers }
+        startsAt: { type: string, format: date-time }
+        durationMinutes: { type: number, minimum: 15, maximum: 180, multipleOf: 1, description: Whole minutes }
+    BookingRequestGroupSlot:
+      type: object
+      required: [startsAt, durationMinutes]
+      properties:
+        startsAt: { type: string, format: date-time }
+        durationMinutes: { type: number, minimum: 15, maximum: 180, multipleOf: 1, description: Whole minutes }
+    BookingRequestGroupInput:
+      type: object
+      required: [subject, slots]
+      properties:
+        teacherId: { type: [string, "null"], minLength: 1, description: Optional for an open subject request }
+        subject: { type: string, minLength: 1 }
+        teachingStage: { type: [string, "null"], minLength: 1, description: Student teaching stage used to match eligible teachers }
+        slots:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/BookingRequestGroupSlot"
+    BookingRequestDecisionInput:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [accepted, rejected]
+        groupId:
+          type: string
+          description: Group identifier for an atomic group decision.
+    Assignment:
+      type: object
+      required: [id, title, subject, due, progress, kind, status]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        subject: { type: string }
+        due: { type: string }
+        progress: { type: number, minimum: 0, maximum: 100, description: Whole percentage }
+        kind:
+          type: string
+          enum: [واجب, اختبار]
+        status:
+          type: string
+          enum: [قيد التقدم, لم يبدأ, مكتمل]
+    Notification:
+      type: object
+      required: [id, title, body, time, icon, unread]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        body: { type: string }
+        time: { type: string }
+        icon: { type: string }
+        unread: { type: boolean }
+    ReadAllNotificationsResult:
+      type: object
+      required: [updated]
+      properties:
+        updated: { type: number, minimum: 0, description: Whole notification count }
