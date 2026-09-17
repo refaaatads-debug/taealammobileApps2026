@@ -4,14 +4,23 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
-import { EmptyState, Header, Icon, Screen, SectionHeading } from "@/components/AjyalUI";
+import { EmptyState, goBackOrHome, Header, Icon, Screen, SectionHeading } from "@/components/AjyalUI";
 import { markChatMessagesRead } from "@/lib/localChatReadState";
+import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 
 type Row = Record<string, unknown>;
 
 function value(row: Row, ...keys: string[]): string {
   for (const key of keys) if (typeof row[key] === "string" && row[key]) return row[key] as string;
   return "";
+}
+
+function nestedValue(row: Row, relation: string, key: string): string {
+  const related = row[relation];
+  const relatedRow = Array.isArray(related) ? related[0] : related;
+  return relatedRow && typeof relatedRow === "object" && typeof (relatedRow as Row)[key] === "string"
+    ? String((relatedRow as Row)[key])
+    : "";
 }
 
 function dateValue(row: Row): string {
@@ -202,6 +211,7 @@ export function SupportScreen() {
 export function RatingScreen() {
   const colors = useColors();
   const { user } = useAuth();
+  const { t, direction } = useAppPreferences();
   const params = useLocalSearchParams<{ booking?: string }>();
   const [bookings, setBookings] = useState<Row[]>([]);
   const [bookingId, setBookingId] = useState<string | null>(typeof params.booking === "string" ? params.booking : null);
@@ -210,17 +220,74 @@ export function RatingScreen() {
   const [loading, setLoading] = useState(true);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState(false);
+  const [completedBookingCount, setCompletedBookingCount] = useState(0);
+  const [teacherNames, setTeacherNames] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!supabase || !user) return;
+    if (!supabase || !user) {
+      setLoading(false);
+      return;
+    }
+    let mounted = true;
     void (async () => {
-      const result = await supabase.from("bookings").select("id,teacher_id,subject_id,scheduled_at").eq("student_id", user.id).eq("status", "completed").order("scheduled_at", { ascending: false });
-      if (result.error) setError(true);
-      const rows = (result.data ?? []) as Row[];
-      setBookings(rows);
-      setBookingId((current) => current && rows.some((row) => String(row.id) === current) ? current : rows[0] ? String(rows[0].id) : null);
+      const result = await supabase
+        .from("bookings")
+        .select("id,teacher_id,subject_id,subjects(name),scheduled_at")
+        .eq("student_id", user.id)
+        .eq("status", "completed")
+        .order("scheduled_at", { ascending: false });
+      if (result.error) {
+        if (mounted) {
+          setError(true);
+          setLoading(false);
+        }
+        return;
+      }
+      const completedRows = (result.data ?? []) as Row[];
+      if (!mounted) return;
+      setCompletedBookingCount(completedRows.length);
+      if (!completedRows.length) {
+        setBookings([]);
+        setBookingId(null);
+        setLoading(false);
+        return;
+      }
+
+      const bookingIds = completedRows.map((row) => String(row.id));
+      const reviewResult = await supabase
+        .from("reviews")
+        .select("booking_id")
+        .eq("student_id", user.id)
+        .in("booking_id", bookingIds);
+      if (reviewResult.error) {
+        if (mounted) {
+          setError(true);
+          setLoading(false);
+        }
+        return;
+      }
+      const reviewedIds = new Set((reviewResult.data ?? []).map((row) => String((row as Row).booking_id)));
+      const unratedRows = completedRows.filter((row) => !reviewedIds.has(String(row.id)));
+      const teacherIds = [...new Set(unratedRows.map((row) => value(row, "teacher_id")).filter(Boolean))];
+      const profileResult = teacherIds.length
+        ? await supabase.from("public_profiles").select("user_id,full_name").in("user_id", teacherIds)
+        : { data: [], error: null };
+      if (profileResult.error) {
+        if (mounted) {
+          setError(true);
+          setLoading(false);
+        }
+        return;
+      }
+      if (!mounted) return;
+      setTeacherNames(Object.fromEntries((profileResult.data ?? []).map((row) => [String(row.user_id), value(row as Row, "full_name")])));
+      setBookings(unratedRows);
+      setBookingId((current) => current && unratedRows.some((row) => String(row.id) === current) ? current : unratedRows[0] ? String(unratedRows[0].id) : null);
       setLoading(false);
     })();
+    return () => {
+      mounted = false;
+    };
   }, [user?.id]);
 
   const submit = async () => {
@@ -228,10 +295,20 @@ export function RatingScreen() {
     const booking = bookings.find((row) => String(row.id) === bookingId);
     if (!booking) return;
     const result = await supabase.from("reviews").insert({ booking_id: bookingId, student_id: user.id, teacher_id: booking.teacher_id, rating, comment: comment.trim() || null });
-    if (!result.error) setSubmitted(true);
+    if (result.error) {
+      const duplicate = "code" in result.error && result.error.code === "23505";
+      Alert.alert(
+        t("تعذر إرسال التقييم", "Could not submit rating"),
+        duplicate
+          ? t("تم تقييم هذه الجلسة مسبقًا. حدّث القائمة لاختيار جلسة أخرى.", "This session has already been rated. Refresh the list to choose another session.")
+          : t("حدث خطأ أثناء حفظ التقييم. حاول مرة أخرى.", "The rating could not be saved. Please try again."),
+      );
+      return;
+    }
+    setSubmitted(true);
   };
 
-  return <Screen><PageHeader eyebrow="صوتك يصنع فرقاً" title="التقييمات" avatar={user?.email} /><View style={[styles.hero, { backgroundColor: colors.primary }]}><View style={[styles.heroIcon, { backgroundColor: colors.goldSoft }]}><Icon name="star" size={22} color={colors.accentForeground} /></View><View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint }]}>بعد الجلسة</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground }]}>قيّم تجربتك</Text><Text style={[styles.heroBody, { color: colors.tint }]}>التقييمات تُحفظ في جدول reviews في المنصة.</Text></View></View>{loading ? <View style={styles.center}><ActivityIndicator color={colors.teal} /></View> : error ? <EmptyState icon="alert-circle" title="تعذر تحميل الجلسات" body="تحقق من الاتصال ثم حاول مرة أخرى." /> : submitted ? <EmptyState icon="check-circle" title="تم إرسال تقييمك" body="شكراً لمساعدتك في تحسين جودة التعليم." action="العودة" onAction={() => router.back()} /> : !bookings.length ? <EmptyState icon="star" title="لا توجد جلسات مكتملة" body="يمكنك تقييم الجلسة بعد اكتمالها." /> : <><SectionHeading title="اختر الجلسة" />{bookings.map((booking) => <Pressable key={String(booking.id)} onPress={() => setBookingId(String(booking.id))} style={[styles.card, { backgroundColor: bookingId === String(booking.id) ? colors.tealSoft : colors.card, borderColor: bookingId === String(booking.id) ? colors.teal : colors.border }]}><Text style={[styles.cardTitle, { color: colors.foreground }]}>جلسة {String(booking.id).slice(0, 8)}</Text><Text style={[styles.cardBody, { color: colors.mutedForeground }]}>{dateValue(booking)}</Text></Pressable>)}<View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}><Text style={[styles.cardTitle, { color: colors.foreground }]}>كيف كانت الحصة؟</Text><View style={styles.stars}>{[1, 2, 3, 4, 5].map((star) => <Pressable key={star} onPress={() => setRating(star)}><Icon name="star" size={29} color={star <= rating ? colors.accentForeground : colors.border} /></Pressable>)}</View><TextInput value={comment} onChangeText={setComment} placeholder="ملاحظة اختيارية" placeholderTextColor={colors.mutedForeground} multiline textAlign="right" style={[styles.input, styles.comment, { color: colors.foreground, borderColor: colors.border }]} /><Pressable disabled={!rating} onPress={() => void submit()} style={[styles.actionButton, { backgroundColor: rating ? colors.primary : colors.muted }]}><Text style={[styles.actionText, { color: rating ? colors.primaryForeground : colors.mutedForeground }]}>إرسال التقييم</Text></Pressable></View></>}</Screen>;
+  return <Screen><PageHeader eyebrow={t("صوتك يصنع فرقاً", "Your feedback matters")} title={t("التقييمات", "Ratings")} avatar={user?.email} /><View style={[styles.hero, { backgroundColor: colors.primary }]}><View style={[styles.heroIcon, { backgroundColor: colors.goldSoft }]}><Icon name="star" size={22} color={colors.accentForeground} /></View><View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("بعد الجلسة", "After your session")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{t("قيّم تجربتك", "Rate your experience")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("اختر جلسة مكتملة لم تقيّمها بعد.", "Choose a completed session you have not rated yet.")}</Text></View></View>{loading ? <View style={styles.center}><ActivityIndicator color={colors.teal} /></View> : error ? <EmptyState icon="alert-circle" title={t("تعذر تحميل الجلسات", "Could not load sessions")} body={t("تحقق من الاتصال ثم حاول مرة أخرى.", "Check your connection and try again.")} /> : submitted ? <EmptyState icon="check-circle" title={t("تم إرسال تقييمك", "Rating submitted")} body={t("شكرًا لمساعدتك في تحسين جودة التعليم.", "Thank you for helping improve the learning experience.")} action={t("العودة", "Go back")} onAction={() => goBackOrHome()} /> : !bookings.length ? <EmptyState icon="star" title={completedBookingCount ? t("تم تقييم جميع جلساتك", "All your sessions are rated") : t("لا توجد جلسات مكتملة", "No completed sessions")} body={completedBookingCount ? t("لا توجد جلسات أخرى متاحة للتقييم حاليًا.", "There are no other sessions available to rate right now.") : t("ستظهر الجلسة هنا بعد اكتمالها.", "A session will appear here after it is completed.")} /> : <><SectionHeading title={t("جلسات غير مقيّمة", "Unrated sessions")} />{bookings.map((booking) => { const subjectName = nestedValue(booking, "subjects", "name") || t("جلسة تعليمية", "Learning session"); const teacherName = teacherNames[value(booking, "teacher_id")] || t("المعلم", "Teacher"); return <Pressable key={String(booking.id)} onPress={() => setBookingId(String(booking.id))} style={[styles.card, { backgroundColor: bookingId === String(booking.id) ? colors.tealSoft : colors.card, borderColor: bookingId === String(booking.id) ? colors.teal : colors.border }]}><View style={styles.ratingCardTop}><Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{subjectName}</Text><View style={[styles.unratedBadge, { backgroundColor: colors.goldSoft }]}><Text style={[styles.unratedBadgeText, { color: colors.accentForeground }]}>{t("غير مقيّمة", "Unrated")}</Text></View></View><Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{teacherName} · {dateValue(booking)}</Text></Pressable>; })}<View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}><Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{t("كيف كانت الحصة؟", "How was the session?")}</Text><View style={styles.stars}>{[1, 2, 3, 4, 5].map((star) => <Pressable key={star} onPress={() => setRating(star)} accessibilityRole="button" accessibilityLabel={`${star} ${t("نجوم", "stars")}`}><Icon name="star" size={29} color={star <= rating ? colors.accentForeground : colors.border} /></Pressable>)}</View><TextInput value={comment} onChangeText={setComment} placeholder={t("ملاحظة اختيارية", "Optional note")} placeholderTextColor={colors.mutedForeground} multiline textAlign="right" style={[styles.input, styles.comment, { color: colors.foreground, borderColor: colors.border, writingDirection: direction }]} /><Pressable disabled={!rating} onPress={() => void submit()} style={[styles.actionButton, { backgroundColor: rating ? colors.primary : colors.muted }]}><Text style={[styles.actionText, { color: rating ? colors.primaryForeground : colors.mutedForeground }]}>{t("إرسال التقييم", "Submit rating")}</Text></Pressable></View></>}</Screen>;
 }
 
 const styles = StyleSheet.create({
@@ -241,7 +318,10 @@ const styles = StyleSheet.create({
   heroEyebrow: { width: "100%", fontSize: 10, fontFamily: "Inter_500Medium", textAlign: "right", writingDirection: "rtl" },
   heroTitle: { width: "100%", fontSize: 21, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl", marginTop: 6 },
   heroBody: { width: "100%", fontSize: 11, lineHeight: 18, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 6 },
-  card: { borderWidth: 1, borderRadius: 18, padding: 15, marginBottom: 11 },
+  card: { borderWidth: 1, borderRadius: 16, padding: 13, marginBottom: 9 },
+  ratingCardTop: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  unratedBadge: { borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4 },
+  unratedBadgeText: { fontSize: 9, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
   cardTitle: { fontSize: 13, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl" },
   cardBody: { fontSize: 11, lineHeight: 18, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 6 },
   message: { maxWidth: "84%", borderWidth: 1, borderRadius: 16, padding: 12, marginBottom: 9 },

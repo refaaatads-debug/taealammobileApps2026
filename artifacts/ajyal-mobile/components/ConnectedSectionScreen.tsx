@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
+import { VideoView, useVideoPlayer } from "expo-video";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
@@ -301,19 +302,25 @@ function PlanCard({ plan, onChoose, disabled }: { plan: Row; onChoose: () => voi
   const { t, direction, formatNumber } = useAppPreferences();
   const name = text(plan, "name_ar", "name", "title") ?? "باقة تعليمية";
   const description = text(plan, "description_ar", "description");
-  const price = money(number(plan, "price", "amount"));
+  const priceValue = number(plan, "price", "amount");
   const sessions = number(plan, "sessions_count", "session_count");
   const duration = number(plan, "session_duration_minutes");
   const features = planFeatures(plan);
   return (
-    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={styles.cardTop}><Text style={[styles.price, { color: colors.primary }]}>{price}</Text><View style={[styles.iconBox, { backgroundColor: colors.goldSoft }]}><Icon name="award" size={19} color={colors.accentForeground} /></View></View>
+    <View style={[styles.planCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[styles.planCardTop, { backgroundColor: colors.goldSoft }]}>
+        <View style={[styles.iconBox, { backgroundColor: colors.card }]}><Icon name="award" size={20} color={colors.accentForeground} /></View>
+        <View style={styles.planPrice}>
+          <Text style={[styles.price, { color: colors.primary }]}>{priceValue === null ? "—" : formatNumber(priceValue)}</Text>
+          {priceValue !== null ? <Text style={[styles.priceCurrency, { color: colors.accentForeground }]}>{t("ر.س", "SAR")}</Text> : null}
+        </View>
+      </View>
       <Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{t(name, name)}</Text>
       {description ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{description}</Text> : null}
       {sessions !== null ? <ValueRow label={t("عدد الجلسات", "Sessions")} value={`${formatNumber(sessions)} ${t("جلسة", "sessions")}`} /> : null}
       {duration !== null ? <ValueRow label={t("مدة الجلسة", "Session duration")} value={`${formatNumber(duration)} ${t("دقيقة", "min")}`} /> : null}
       {features.length ? <View style={styles.featureList}>{features.map((feature) => <View key={feature} style={styles.featureRow}><Icon name="check-circle" size={14} color={colors.teal} /><Text style={[styles.featureText, { color: colors.mutedForeground, writingDirection: direction }]}>{t(feature, feature === "مدرس ذكي AI" ? "AI tutor" : feature === "تسجيل الحصص" ? "Session recording" : feature === "أولوية الحجز" ? "Priority booking" : feature === "تقارير مفصلة" ? "Detailed reports" : feature === "دعم فني عبر الشات" ? "Chat support" : feature === "دعم فني عبر الشات والبريد" ? "Chat and email support" : feature === "دعم فني بأولوية" ? "Priority support" : feature)}</Text></View>)}</View> : null}
-      <Pressable disabled={disabled} onPress={onChoose} style={({ pressed }) => [styles.actionButton, { backgroundColor: disabled ? colors.muted : colors.primary }, pressed && styles.pressed]}><Text style={[styles.actionText, { color: colors.primaryForeground }]}>{disabled ? t("جارٍ التحضير…", "Preparing…") : t("اختيار الباقة", "Choose plan")}</Text><Icon name={direction === "rtl" ? "arrow-left" : "arrow-right"} size={15} color={colors.tint} /></Pressable>
+      <Pressable disabled={disabled} onPress={onChoose} style={({ pressed }) => [styles.actionButton, { backgroundColor: disabled ? colors.muted : colors.primary }, pressed && styles.pressed]}><Text style={[styles.actionText, { color: colors.primaryForeground }]}>{disabled ? t("جارٍ التحضير…", "Preparing…") : t("اختيار الباقة", "Choose plan")}</Text><Icon name={direction === "rtl" ? "arrow-left" : "arrow-right"} size={15} color={colors.primaryForeground} /></Pressable>
     </View>
   );
 }
@@ -711,17 +718,102 @@ function WalletScreen() {
   return <Screen><SectionHeader eyebrow={t("إدارة دخلك التعليمي", "Manage your teaching income")} title={t("المحفظة والأرباح", "Wallet and earnings")} avatarText={user?.email?.slice(0, 1)} /><View style={[styles.hero, { backgroundColor: colors.primary }]}><View style={[styles.heroIcon, { backgroundColor: colors.goldSoft }]}><Icon name="credit-card" size={22} color={colors.accentForeground} /></View><View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("حساب المعلم", "Teacher account")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{t("رصيدك وحركتك المالية", "Your balance and financial activity")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("تُعرض الأرقام كما هي محفوظة في محفظة المنصة.", "Figures are shown exactly as stored in the platform wallet.")}</Text></View></View><StateBlock loading={query.loading} error={query.error} empty={!hasRows} onRetry={query.reload} />{query.data?.wallet ? <View style={[styles.balanceCard, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}><Text style={[styles.balanceLabel, { color: colors.mutedForeground }]}>{t("الرصيد الحالي", "Current balance")}</Text><Text style={[styles.balance, { color: colors.teal }]}>{money(number(query.data.wallet, "balance", "available_balance", "current_balance"))}</Text></View> : null}<SectionHeading title={t("آخر الحركات", "Latest activity")} />{query.data?.transactions.map((row) => <View key={`tx-${String(row.id)}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.cardTop}><Text style={[styles.price, { color: row.type === "debit" ? colors.destructive : colors.teal }]}>{money(number(row, "amount", "amount_sar"))}</Text><Text style={[styles.badge, { color: colors.mutedForeground }]}>{text(row, "type", "transaction_type") ?? t("حركة", "Transaction")}</Text></View><Text style={[styles.cardTitle, { color: colors.foreground }]}>{text(row, "description", "reason") ?? t("حركة مالية", "Financial transaction")}</Text><Text style={[styles.cardBody, { color: colors.mutedForeground }]}>{dateLabel(text(row, "created_at"), locale)}</Text></View>)}</Screen>;
 }
 
-async function openRecording(url: string | null) {
-  if (!url) return;
+async function resolveRecordingUrl(url: string | null) {
+  if (!url) return null;
   let target = url;
   const marker = "/session-recordings/";
   const index = url.indexOf(marker);
   if (index !== -1 && supabase) {
     const path = decodeURIComponent(url.slice(index + marker.length).split("?")[0]);
-    const { data } = await supabase.storage.from("session-recordings").createSignedUrl(path, 3600);
-    if (data?.signedUrl) target = data.signedUrl;
+    const { data, error } = await supabase.storage.from("session-recordings").createSignedUrl(path, 3600);
+    if (error) throw error;
+    if (!data?.signedUrl) throw new Error("Recording URL was not created");
+    target = data.signedUrl;
   }
-  await Linking.openURL(target);
+  return target;
+}
+
+function RecordingPlayerModal({
+  visible,
+  url,
+  title,
+  error,
+  onClose,
+}: {
+  visible: boolean;
+  url: string | null;
+  title: string;
+  error?: string | null;
+  onClose: () => void;
+}) {
+  const colors = useColors();
+  const { t, direction } = useAppPreferences();
+  const [status, setStatus] = useState<"idle" | "loading" | "readyToPlay" | "error">("loading");
+  const player = useVideoPlayer(url, (instance) => {
+    instance.play();
+  });
+
+  useEffect(() => {
+    setStatus("loading");
+    const subscription = player.addListener("statusChange", ({ status: nextStatus }) => {
+      setStatus(nextStatus);
+    });
+    return () => subscription.remove();
+  }, [player]);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={[styles.videoModalBackdrop, { backgroundColor: `${colors.tint}E8` }]}>
+        <View style={[styles.videoModalCard, { backgroundColor: colors.card }]}>
+          <View style={styles.videoModalHeader}>
+            <View style={styles.videoModalCopy}>
+              <Text style={[styles.videoModalTitle, { color: colors.foreground, writingDirection: direction }]}>{title}</Text>
+              <Text style={[styles.videoModalSubtitle, { color: colors.mutedForeground, writingDirection: direction }]}>
+                {t("تشغيل داخل التطبيق", "Playing inside the app")}
+              </Text>
+            </View>
+            <Pressable onPress={onClose} style={styles.videoModalClose} accessibilityLabel={t("إغلاق المشغل", "Close player")}>
+              <Text style={[styles.videoModalCloseText, { color: colors.mutedForeground }]}>×</Text>
+            </Pressable>
+          </View>
+          <View style={[styles.videoStage, { backgroundColor: colors.tint }]}>
+            {error || status === "error" ? (
+              <View style={styles.videoState}>
+                <Text style={[styles.videoStateTitle, { color: colors.primaryForeground, writingDirection: direction }]}>
+                  {t("تعذر تشغيل التسجيل", "Unable to play this recording")}
+                </Text>
+                <Text style={[styles.videoStateBody, { color: colors.tint, writingDirection: direction }]}>
+                  {error ?? t("انتهت صلاحية الرابط أو تعذر الوصول إلى الملف. أغلق النافذة وحاول مرة أخرى.", "The link expired or the file could not be reached. Close this window and try again.")}
+                </Text>
+              </View>
+            ) : (
+              <>
+                <VideoView
+                  player={player}
+                  style={styles.videoView}
+                  contentFit="contain"
+                  nativeControls
+                  fullscreenOptions={{ enable: true }}
+                  allowsPictureInPicture
+                />
+                {status !== "readyToPlay" ? (
+                  <View style={styles.videoLoading}>
+                    <ActivityIndicator color={colors.primaryForeground} />
+                    <Text style={[styles.videoLoadingText, { color: colors.primaryForeground, writingDirection: direction }]}>
+                      {t("جارٍ تحميل التسجيل…", "Loading recording…")}
+                    </Text>
+                  </View>
+                ) : null}
+              </>
+            )}
+          </View>
+          <Pressable onPress={onClose} style={[styles.videoModalDone, { backgroundColor: colors.teal }]}>
+            <Text style={[styles.videoModalDoneText, { color: colors.primaryForeground }]}>{t("إغلاق", "Close")}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
 function SessionReport({ value: raw }: { value: unknown }) {
@@ -838,7 +930,31 @@ function MaterialsScreen({ teacher }: { teacher: boolean }) {
       };
     }) as Row[];
   }, [user?.id, teacher, materialsRevision]);
-  return <Screen><SectionHeader eyebrow={teacher ? t("مصادر طلابك التعليمية", "Your students’ learning resources") : t("مصادر التعلم الخاصة بك", "Your learning resources")} title={teacher ? t("مواد طلابي", "My students’ materials") : t("المواد التعليمية", "Learning materials")} avatarText={user?.email?.slice(0, 1)} /><View style={[styles.hero, { backgroundColor: colors.primary }]}><View style={[styles.heroIcon, { backgroundColor: colors.tealSoft }]}><Icon name="book-open" size={22} color={colors.teal} /></View><View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("جلساتك المرتبطة", "Your linked sessions")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{teacher ? t("مواد شاركتها مع الطلاب", "Materials shared with students") : t("ملفات ومراجعات جلساتك", "Your session files and reviews")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("تسجيلات الجلسات المكتملة تبقى متاحة خلال مدة الإتاحة المحددة.", "Completed session recordings stay available during their configured access period.")}</Text></View></View><SectionHeading title={t("المواد المتاحة", "Available materials")} /><StateBlock loading={query.loading} error={query.error} empty={!query.data?.length} onRetry={query.reload} />{query.data?.map((material) => <View key={String(material.id)} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.cardTop}><View style={[styles.iconBox, { backgroundColor: colors.tealSoft }]}><Icon name="file-text" size={18} color={colors.teal} /></View><View style={{ flex: 1, marginRight: 10, alignItems: "flex-end" }}><Text style={[styles.cardTitle, { color: colors.foreground, width: "100%", writingDirection: direction }]}>{text(material, "title", "name") ?? text(material, "subject_name") ?? t("جلسة تعليمية", "Learning session")}</Text><Text style={[styles.cardMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{text(material, "subject_name") ?? text(material, "student_name") ?? t("جلسة مرتبطة بحسابك", "Session linked to your account")}</Text></View></View><Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{text(material, "description") ?? t("تسجيل ومواد مرتبطة بجلسة تعليمية مكتملة.", "Recording and materials linked to a completed learning session.")}</Text><ValueRow label={t("تاريخ الإضافة", "Added")} value={dateLabel(text(material, "created_at"), locale)} />{number(material, "duration_minutes", "duration") !== null ? <ValueRow label={t("مدة التسجيل", "Recording duration")} value={`${number(material, "duration_minutes", "duration")} ${t("دقيقة", "min")}`} /> : null}<ValueRow label={t("متبقي", "Remaining")} value={`${number(material, "days_remaining") ?? 0} ${t("يوم", "days")}`} />{value(material, "ai_report") !== null ? <View style={[styles.materialReport, { backgroundColor: colors.navySoft, borderColor: colors.primary }]}><Text style={[styles.materialReportLabel, { color: colors.primary }]}>{t("تقرير الجلسة", "Session report")}</Text><SessionReport value={value(material, "ai_report")} /></View> : null}{text(material, "recording_url") ? <Pressable onPress={() => void openRecording(text(material, "recording_url")).catch(() => Alert.alert(t("تعذر فتح التسجيل", "Unable to open recording"), t("تحقق من الاتصال وحاول مرة أخرى.")))} style={({ pressed }) => [styles.actionButton, { backgroundColor: colors.tealSoft }, pressed && styles.pressed]}><Text style={[styles.actionText, { color: colors.teal }]}>{t("فتح تسجيل الجلسة", "Open session recording")}</Text><Icon name="play-circle" size={15} color={colors.teal} /></Pressable> : <View style={[styles.pendingMaterial, { backgroundColor: colors.muted }]}><Icon name="clock" size={15} color={colors.mutedForeground} /><Text style={[styles.pendingMaterialText, { color: colors.mutedForeground }]}>{t("جاري تجهيز تسجيل الجلسة", "Session recording is being prepared")}</Text></View>}</View>)}</Screen>;
+  const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  const [recordingTitle, setRecordingTitle] = useState("");
+  const [recordingLoading, setRecordingLoading] = useState(false);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const openRecording = useCallback(async (url: string | null, title: string) => {
+    setRecordingLoading(true);
+    setRecordingError(null);
+    setRecordingUrl(null);
+    setRecordingTitle(title);
+    try {
+      setRecordingUrl(await resolveRecordingUrl(url));
+    } catch {
+      setRecordingError(null);
+      Alert.alert(t("تعذر فتح التسجيل", "Unable to open recording"), t("تعذر تحميل التسجيل. تحقق من الاتصال وحاول مرة أخرى.", "Unable to load the recording. Check your connection and try again."));
+    } finally {
+      setRecordingLoading(false);
+    }
+  }, [t]);
+  const closeRecording = useCallback(() => {
+    setRecordingUrl(null);
+    setRecordingError(null);
+    setRecordingLoading(false);
+  }, []);
+  const materialTitle = (material: Row) => text(material, "title", "name") ?? text(material, "subject_name") ?? t("جلسة تعليمية", "Learning session");
+  return <Screen><SectionHeader eyebrow={teacher ? t("مصادر طلابك التعليمية", "Your students’ learning resources") : t("مصادر التعلم الخاصة بك", "Your learning resources")} title={teacher ? t("مواد طلابي", "My students’ materials") : t("المواد التعليمية", "Learning materials")} avatarText={user?.email?.slice(0, 1)} /><View style={[styles.hero, { backgroundColor: colors.primary }]}><View style={[styles.heroIcon, { backgroundColor: colors.tealSoft }]}><Icon name="book-open" size={22} color={colors.teal} /></View><View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("جلساتك المرتبطة", "Your linked sessions")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{teacher ? t("مواد شاركتها مع الطلاب", "Materials shared with students") : t("ملفات ومراجعات جلساتك", "Your session files and reviews")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("تسجيلات الجلسات المكتملة تبقى متاحة خلال مدة الإتاحة المحددة.", "Completed session recordings stay available during their configured access period.")}</Text></View></View><SectionHeading title={t("المواد المتاحة", "Available materials")} /><StateBlock loading={query.loading} error={query.error} empty={!query.data?.length} onRetry={query.reload} />{query.data?.map((material) => <View key={String(material.id)} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.cardTop}><View style={[styles.iconBox, { backgroundColor: colors.tealSoft }]}><Icon name="file-text" size={18} color={colors.teal} /></View><View style={{ flex: 1, marginRight: 10, alignItems: "flex-end" }}><Text style={[styles.cardTitle, { color: colors.foreground, width: "100%", writingDirection: direction }]}>{text(material, "title", "name") ?? text(material, "subject_name") ?? t("جلسة تعليمية", "Learning session")}</Text><Text style={[styles.cardMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{text(material, "subject_name") ?? text(material, "student_name") ?? t("جلسة مرتبطة بحسابك", "Session linked to your account")}</Text></View></View><Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{text(material, "description") ?? t("تسجيل ومواد مرتبطة بجلسة تعليمية مكتملة.", "Recording and materials linked to a completed learning session.")}</Text><ValueRow label={t("تاريخ الإضافة", "Added")} value={dateLabel(text(material, "created_at"), locale)} />{number(material, "duration_minutes", "duration") !== null ? <ValueRow label={t("مدة التسجيل", "Recording duration")} value={`${number(material, "duration_minutes", "duration")} ${t("دقيقة", "min")}`} /> : null}<ValueRow label={t("متبقي", "Remaining")} value={`${number(material, "days_remaining") ?? 0} ${t("يوم", "days")}`} />{value(material, "ai_report") !== null ? <View style={[styles.materialReport, { backgroundColor: colors.navySoft, borderColor: colors.primary }]}><Text style={[styles.materialReportLabel, { color: colors.primary }]}>{t("تقرير الجلسة", "Session report")}</Text><SessionReport value={value(material, "ai_report")} /></View> : null}{text(material, "recording_url") ? <Pressable onPress={() => void openRecording(text(material, "recording_url"), materialTitle(material))} style={({ pressed }) => [styles.actionButton, { backgroundColor: colors.tealSoft }, pressed && styles.pressed]}><Text style={[styles.actionText, { color: colors.teal }]}>{t("فتح تسجيل الجلسة", "Open session recording")}</Text><Icon name="play-circle" size={15} color={colors.teal} /></Pressable> : <View style={[styles.pendingMaterial, { backgroundColor: colors.muted }]}><Icon name="clock" size={15} color={colors.mutedForeground} /><Text style={[styles.pendingMaterialText, { color: colors.mutedForeground }]}>{t("جاري تجهيز تسجيل الجلسة", "Session recording is being prepared")}</Text></View>}</View>)}<RecordingPlayerModal visible={recordingLoading || Boolean(recordingUrl) || Boolean(recordingError)} url={recordingUrl} title={recordingTitle} onClose={closeRecording} /></Screen>;
 }
 
 export function ConnectedSectionScreen({ section }: { section: ConnectedSection }) {
@@ -859,20 +975,24 @@ const styles = StyleSheet.create({
   heroTitle: { width: "100%", fontSize: 21, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl", marginTop: 6 },
   heroBody: { width: "100%", fontSize: 11, lineHeight: 18, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 6 },
   card: { borderRadius: 18, borderWidth: 1, padding: 15, marginBottom: 11 },
+  planCard: { borderRadius: 22, borderWidth: 1, padding: 14, marginBottom: 13, overflow: "hidden" },
+  planCardTop: { minHeight: 67, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 13 },
+  planPrice: { alignItems: "flex-start" },
   cardTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   cardTitle: { fontSize: 14, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl" },
   cardMeta: { width: "100%", fontSize: 10, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 3 },
   cardBody: { fontSize: 11, lineHeight: 18, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 7 },
-  featureList: { marginTop: 10, gap: 7 },
+  featureList: { marginTop: 12, gap: 8 },
   featureRow: { flexDirection: "row-reverse", alignItems: "center", gap: 7 },
-  featureText: { flex: 1, fontSize: 10, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl" },
-  price: { fontSize: 15, fontFamily: "Inter_700Bold" },
-  iconBox: { width: 40, height: 40, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  featureText: { flex: 1, fontSize: 11, lineHeight: 17, fontFamily: "Inter_500Medium", textAlign: "right", writingDirection: "rtl" },
+  price: { fontSize: 25, lineHeight: 31, fontFamily: "Inter_700Bold" },
+  priceCurrency: { fontSize: 11, lineHeight: 16, fontFamily: "Inter_700Bold", marginTop: -1 },
+  iconBox: { width: 42, height: 42, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   valueRow: { minHeight: 34, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   label: { fontSize: 10, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl" },
   value: { fontSize: 11, fontFamily: "Inter_600SemiBold", textAlign: "right", writingDirection: "rtl" },
-  actionButton: { minHeight: 42, borderRadius: 13, paddingHorizontal: 13, marginTop: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
-  actionText: { fontSize: 11, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
+  actionButton: { minHeight: 46, borderRadius: 14, paddingHorizontal: 13, marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  actionText: { fontSize: 12, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
   materialReport: { borderRadius: 14, borderWidth: 1, padding: 12, marginTop: 11 },
   materialReportLabel: { fontSize: 10, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl", marginBottom: 4 },
   materialReportText: { fontSize: 11, lineHeight: 18, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl" },
@@ -892,6 +1012,23 @@ const styles = StyleSheet.create({
   reportGenerated: { fontSize: 9, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 10 },
   pendingMaterial: { minHeight: 42, borderRadius: 13, marginTop: 13, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   pendingMaterialText: { fontSize: 11, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
+  videoModalBackdrop: { flex: 1, justifyContent: "center", padding: 16 },
+  videoModalCard: { width: "100%", borderRadius: 20, padding: 14 },
+  videoModalHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 },
+  videoModalCopy: { flex: 1, alignItems: "flex-end" },
+  videoModalTitle: { width: "100%", fontSize: 14, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl" },
+  videoModalSubtitle: { width: "100%", fontSize: 10, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 3 },
+  videoModalClose: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  videoModalCloseText: { fontSize: 28, lineHeight: 30, fontFamily: "Inter_400Regular" },
+  videoStage: { width: "100%", aspectRatio: 16 / 9, borderRadius: 14, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  videoView: { width: "100%", height: "100%" },
+  videoLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: 8 },
+  videoLoadingText: { fontSize: 11, fontFamily: "Inter_500Medium", writingDirection: "rtl" },
+  videoState: { paddingHorizontal: 20, alignItems: "center" },
+  videoStateTitle: { fontSize: 13, fontFamily: "Inter_700Bold", textAlign: "center", writingDirection: "rtl" },
+  videoStateBody: { fontSize: 10, lineHeight: 17, fontFamily: "Inter_400Regular", textAlign: "center", writingDirection: "rtl", marginTop: 8 },
+  videoModalDone: { minHeight: 42, borderRadius: 12, marginTop: 12, alignItems: "center", justifyContent: "center" },
+  videoModalDoneText: { fontSize: 11, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
   badge: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 9, fontSize: 10, fontFamily: "Inter_600SemiBold", overflow: "hidden" },
   balanceCard: { borderRadius: 20, borderWidth: 1, padding: 19, marginBottom: 17 },
   balanceLabel: { fontSize: 11, fontFamily: "Inter_500Medium", textAlign: "right", writingDirection: "rtl" },

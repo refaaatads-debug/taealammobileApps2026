@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
-import { EmptyState, Header, Icon, Screen, SectionHeading, type IconName } from '@/components/AjyalUI';
+import { EmptyState, Header, Icon, Reveal, Screen, SectionHeading, type IconName } from '@/components/AjyalUI';
 
 export type SectionKey =
   | 'find-teacher'
@@ -81,7 +81,7 @@ const specs: Record<SectionKey, SectionSpec> = {
     emptyTitle: 'ابدأ أول محادثة تعليمية',
     emptyBody: 'ستظهر محادثاتك السابقة هنا عند تفعيل خدمة المدرس الذكي في حسابك.',
     actions: [
-      { icon: 'help-circle', title: 'اسأل عن درس', body: 'اطلب شرحاً مبسطاً لمفهوم صعب.', route: '/chat' },
+      { icon: 'help-circle', title: 'اسأل عن درس', body: 'اطلب شرحاً مبسطاً لمفهوم صعب.', route: '/(tabs)/messages' },
       { icon: 'clipboard', title: 'حل واجب', body: 'راجع خطوات الحل وتحقق من فهمك.', route: '/assignments' },
       { icon: 'edit-3', title: 'استعد للاختبار', body: 'نظّم مراجعتك قبل موعد الاختبار.', route: '/assignments' },
     ],
@@ -128,7 +128,7 @@ const specs: Record<SectionKey, SectionSpec> = {
     actions: [
       { icon: 'calendar', title: 'جلسات الطلاب', body: 'راجع المواعيد القادمة والسابقة.', route: '/bookings' },
       { icon: 'clipboard', title: 'مراجعة المهام', body: 'انتقل إلى تسليمات الطلاب.', route: '/assignments' },
-      { icon: 'message-circle', title: 'محادثات الطلاب', body: 'افتح المحادثات التعليمية.', route: '/chat' },
+      { icon: 'message-circle', title: 'محادثات الطلاب', body: 'افتح المحادثات التعليمية.', route: '/(tabs)/messages' },
     ],
   },
   wallet: {
@@ -242,7 +242,7 @@ const specs: Record<SectionKey, SectionSpec> = {
     emptyBody: 'سيظهر زر الدخول عندما يحين موعد إحدى جلساتك المتزامنة.',
     actions: [
       { icon: 'calendar', title: 'الجلسات القادمة', body: 'راجع موعد الجلسة التالية.', route: '/bookings' },
-      { icon: 'message-circle', title: 'المحادثات', body: 'تواصل مع الطرف الآخر قبل الجلسة.', route: '/chat' },
+      { icon: 'message-circle', title: 'المحادثات', body: 'تواصل مع الطرف الآخر قبل الجلسة.', route: '/(tabs)/messages' },
     ],
   },
 };
@@ -266,39 +266,43 @@ export function SectionScreen({ section }: { section: SectionKey }) {
         title={spec.title}
         onAvatar={() => router.push('/profile')}
       />
-      <View style={[styles.hero, { backgroundColor: colors.primary }]}>
-        <View style={[styles.heroIcon, { backgroundColor: softTone }]}><Icon name={spec.icon} size={22} color={tone} /></View>
-        <View style={styles.heroCopy}>
-          <Text style={[styles.heroRole, { color: colors.tint }]}>{role === 'student' ? 'مساحة الطالب' : 'مساحة المعلم'}</Text>
-          <Text style={[styles.heroTitle, { color: colors.primaryForeground }]}>{spec.title}</Text>
-          <Text style={[styles.heroBody, { color: colors.tint }]}>{spec.intro}</Text>
+      <Reveal>
+        <View style={[styles.hero, { backgroundColor: colors.primary }]}>
+          <View style={[styles.heroIcon, { backgroundColor: softTone }]}><Icon name={spec.icon} size={22} color={tone} /></View>
+          <View style={styles.heroCopy}>
+            <Text style={[styles.heroRole, { color: colors.tint }]}>{role === 'student' ? 'مساحة الطالب' : 'مساحة المعلم'}</Text>
+            <Text style={[styles.heroTitle, { color: colors.primaryForeground }]}>{spec.title}</Text>
+            <Text style={[styles.heroBody, { color: colors.tint }]}>{spec.intro}</Text>
+          </View>
         </View>
-      </View>
-      <SectionHeading title={spec.listTitle} />
-      <View style={styles.actionGrid}>
-        {spec.actions.map((action) => (
-          <Pressable key={action.title} testID={`section-action-${section}-${action.title}`} onPress={() => open(action.route)} disabled={!action.route} style={({ pressed }) => [styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }, !action.route && styles.disabledCard, pressed && styles.pressed]}>
-            <View style={[styles.actionIcon, { backgroundColor: softTone }]}><Icon name={action.icon} size={17} color={tone} /></View>
-            <Text style={[styles.actionTitle, { color: colors.foreground }]}>{action.title}</Text>
-            <Text style={[styles.actionBody, { color: colors.mutedForeground }]}>{action.body}</Text>
-            {action.route ? <Icon name="arrow-left" size={14} color={colors.mutedForeground} style={styles.actionArrow} /> : null}
-          </Pressable>
-        ))}
-      </View>
-      <EmptyState icon={spec.icon} title={spec.emptyTitle} body={spec.emptyBody} />
+      </Reveal>
+      <Reveal delay={50}><SectionHeading title={spec.listTitle} /></Reveal>
+      <Reveal delay={90}>
+        <View style={styles.actionGrid}>
+          {spec.actions.map((action) => (
+            <Pressable key={action.title} testID={`section-action-${section}-${action.title}`} onPress={() => open(action.route)} disabled={!action.route} style={({ pressed }) => [styles.actionCard, { backgroundColor: colors.card, borderColor: colors.border }, !action.route && styles.disabledCard, pressed && styles.pressed]}>
+              <View style={[styles.actionIcon, { backgroundColor: softTone }]}><Icon name={action.icon} size={17} color={tone} /></View>
+              <Text style={[styles.actionTitle, { color: colors.foreground }]}>{action.title}</Text>
+              <Text style={[styles.actionBody, { color: colors.mutedForeground }]}>{action.body}</Text>
+              {action.route ? <Icon name="arrow-left" size={14} color={colors.mutedForeground} style={styles.actionArrow} /> : null}
+            </Pressable>
+          ))}
+        </View>
+      </Reveal>
+      <Reveal delay={140}><EmptyState icon={spec.icon} title={spec.emptyTitle} body={spec.emptyBody} /></Reveal>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  hero: { minHeight: 158, borderRadius: 23, padding: 17, flexDirection: 'row', alignItems: 'center', marginBottom: 25 },
+  hero: { minHeight: 158, borderRadius: 23, padding: 17, flexDirection: 'row', alignItems: 'center', marginBottom: 25, shadowColor: '#173E8C', shadowOpacity: 0.15, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 4 },
   heroIcon: { width: 58, height: 58, borderRadius: 19, alignItems: 'center', justifyContent: 'center', marginLeft: 4 },
   heroCopy: { flex: 1, alignItems: 'flex-end', marginLeft: 14 },
   heroRole: { width: '100%', fontSize: 10, fontFamily: 'Inter_500Medium', textAlign: 'right', writingDirection: 'rtl' },
   heroTitle: { width: '100%', fontSize: 23, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl', marginTop: 6 },
   heroBody: { width: '100%', fontSize: 11, lineHeight: 18, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl', marginTop: 6 },
   actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 13 },
-  actionCard: { width: '48%', minHeight: 132, borderRadius: 18, borderWidth: 1, padding: 13, alignItems: 'flex-end', position: 'relative' },
+  actionCard: { width: '48%', minHeight: 132, borderRadius: 18, borderWidth: 1, padding: 13, alignItems: 'flex-end', position: 'relative', shadowColor: '#173E8C', shadowOpacity: 0.045, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
   disabledCard: { opacity: 0.86 },
   actionIcon: { width: 37, height: 37, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 11 },
   actionTitle: { width: '100%', fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },

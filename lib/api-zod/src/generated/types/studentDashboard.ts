@@ -20,4 +20,5 @@ export interface StudentDashboard {
   /** @minimum 0 */
   unreadNotifications: number;
   upcomingSessions: Session[];
+  degradedSections: string[];
 }

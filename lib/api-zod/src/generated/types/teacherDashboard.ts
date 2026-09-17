@@ -18,4 +18,5 @@ export interface TeacherDashboard {
   /** @minimum 0 */
   warningCount: number;
   upcomingSessions: Session[];
+  degradedSections: string[];
 }

@@ -1,0 +1,308 @@
+# مهمة نهائية: إصلاح مشكلة Replit Preview وإعادة تحميل التطبيق حتى الاستقرار
+
+## المشكلة
+
+تطبيق أجيال المعرفة داخل Replit Preview:
+
+* يفتح.
+* يبدأ التحميل.
+* ثم يعيد التحميل أو يغلق/يعيد التشغيل.
+* المشكلة استمرت حتى بعد عمل Rollback إلى Checkpoint أقدم.
+
+إذن لا تفترض أن المشكلة من آخر تغييرات الكود.
+
+أريد منك تنفيذ **تشخيص شامل ثم إصلاح نهائي** لكل ما يمكن أن يسبب هذه المشكلة، سواء كان في:
+
+* بيئة Replit
+* Workflow
+* Preview
+* Expo
+* Metro
+* Node
+* dependencies
+* cache
+* المنافذ
+* environment variables
+* process management
+* أو كود التطبيق نفسه
+
+لكن لا تغيّر كود التطبيق إلا بعد التأكد أن بيئة التشغيل سليمة.
+
+---
+
+# أولًا: ممنوعات صارمة
+
+لا تقم بأي من التالي:
+
+* لا تبنِ APK.
+* لا تستخدم Gradle.
+* لا تستخدم EAS.
+* لا تثبت Android SDK أو NDK أو Build Tools.
+* لا تعدّل قاعدة البيانات.
+* لا تعدّل Supabase Production.
+* لا تعدّل VPS.
+* لا تعدّل Production API.
+* لا تغيّر تصميم التطبيق.
+* لا تغيّر Authentication logic.
+* لا تحذف Push Notifications.
+* لا تغيّر Expo/React Native versions عشوائيًا.
+* لا تعمل Rollback جديد.
+* لا تعمل reset كامل للمشروع.
+* لا تحذف ملفات المشروع الأصلية.
+
+---
+
+# ثانيًا: افحص بيئة Replit بالكامل
+
+تحقق من:
+
+### Node
+
+* إصدار Node الفعلي المستخدم في Preview.
+* توافقه مع المشروع.
+* وجود أكثر من Node installation أو PATH conflict.
+
+### Package Manager
+
+حدد هل المشروع يستخدم:
+
+* pnpm
+* npm
+* yarn
+
+واستخدم نفس مدير الحزم.
+
+تحقق من lockfile وdependencies.
+
+إذا كانت `node_modules` غير متزامنة أو تالفة:
+أعد تثبيت dependencies بشكل نظيف باستخدام lockfile الحالي.
+
+لا تغيّر package versions إلا إذا كان هناك خطأ توافق واضح.
+
+---
+
+# ثالثًا: أصلح Expo وMetro
+
+افحص:
+
+* Expo development server.
+* Metro bundler.
+* Babel.
+* Metro cache.
+* Expo cache.
+* أي process قديم.
+* أي process مكرر.
+
+أوقف جميع Expo/Metro processes القديمة المتعلقة بالمشروع.
+
+امسح caches الخاصة بالتطوير فقط.
+
+ثم شغّل Expo/Metro من clean start.
+
+لا تستخدم أي cache قديم.
+
+---
+
+# رابعًا: افحص Workflows
+
+تحقق من Workflow الذي يشغّل التطبيق:
+
+* الأمر المستخدم.
+* working directory.
+* environment.
+* PORT.
+* BASE_PATH.
+* هل العملية تنهار؟
+* هل Replit يعيد تشغيلها تلقائيًا؟
+* هل يوجد أكثر من Workflow يشغل نفس التطبيق؟
+* هل يوجد أكثر من Expo/Metro process؟
+
+يجب أن يكون هناك **process واحد صحيح للتطبيق**.
+
+---
+
+# خامسًا: افحص المنافذ
+
+تحقق فعليًا من:
+
+* PORT الذي يستخدمه Workflow.
+* PORT الذي يستخدمه Expo/Metro.
+* PORT الذي ينتظره Preview.
+* هل يوجد process آخر يستخدم نفس المنفذ؟
+* هل يوجد port conflict؟
+* هل Preview proxy يتصل بالمنفذ الصحيح؟
+
+لا تغيّر PORT عشوائيًا.
+
+حدد المسار الصحيح:
+
+`Workflow → Expo/Metro → PORT → Replit Preview`
+
+ويجب أن تكون كلها متطابقة.
+
+إذا كان هناك process يحتل المنفذ:
+أوقفه.
+
+إذا كان Preview مربوطًا بمنفذ خاطئ:
+أصلح إعداد Workflow/Preview.
+
+---
+
+# سادسًا: افحص Environment Variables
+
+تحقق من أن Preview يحصل على المتغيرات المطلوبة.
+
+افحص على الأقل:
+
+* `EXPO_PUBLIC_SUPABASE_URL`
+* `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+* `EXPO_PUBLIC_DOMAIN`
+* `PORT`
+* `BASE_PATH`
+
+لا تعرض أي secret/key في التقرير.
+
+لا تغيّر Production values.
+
+إذا كانت المشكلة أن Preview لا يحصل على متغير مطلوب:
+أصلح طريقة تمرير المتغير داخل بيئة Preview فقط.
+
+---
+
+# سابعًا: حدد نوع المشكلة قبل تعديل كود التطبيق
+
+أثناء فتح Preview راقب logs وحدد بدقة:
+
+### هل:
+
+1. التطبيق نفسه يعمل لكن Browser يعيد التحميل؟
+2. JavaScript runtime ينهار؟
+3. Metro ينهار ويعاد تشغيله؟
+4. Workflow ينهار وReplit يعيد تشغيله؟
+5. Preview proxy يفقد الاتصال؟
+6. Port conflict؟
+7. Environment variable مفقود؟
+8. dependency/runtime incompatibility؟
+9. React/Expo render loop؟
+10. navigation/auth loop؟
+
+**لا تخمّن.**
+
+حدد **أول خطأ فعلي يظهر قبل أول reload**.
+
+---
+
+# ثامنًا: أصلح السبب الفعلي
+
+بعد تحديد السبب:
+
+### إذا كان السبب في البيئة:
+
+أصلح البيئة.
+
+### إذا كان السبب في Workflow:
+
+أصلح Workflow.
+
+### إذا كان السبب في PORT:
+
+أصلح PORT configuration.
+
+### إذا كان السبب في Metro:
+
+أصلح Metro/cache/process.
+
+### إذا كان السبب في dependencies:
+
+أصلح dependency installation باستخدام lockfile الحالي.
+
+### إذا كان السبب في environment:
+
+أصلح Preview environment.
+
+### إذا كان السبب في كود التطبيق:
+
+فقط عند إثبات ذلك، أصلح **أقل جزء ممكن من الكود**.
+
+لا تعمل refactor.
+
+لا تغيّر business logic.
+
+لا تغيّر UI.
+
+---
+
+# تاسعًا: اختبار نهائي إلزامي
+
+بعد الإصلاح:
+
+1. أوقف جميع العمليات القديمة.
+2. نظف caches التطويرية.
+3. شغّل Workflow الصحيح.
+4. افتح Preview من clean start.
+5. افتح التطبيق.
+6. اتركه مفتوحًا **دقيقتين كاملتين**.
+7. لا يجب أن يعيد التحميل أو يغلق.
+8. افتح Login.
+9. انتقل بين عدة صفحات أساسية.
+10. ارجع إلى الصفحة السابقة.
+11. راقب logs طوال الاختبار.
+
+---
+
+# شرط النجاح الحقيقي
+
+لا تعتبر المهمة مكتملة إلا إذا تحققت جميع النقاط التالية:
+
+* Preview يعمل.
+* التطبيق يفتح.
+* لا يوجد reload loop.
+* لا يوجد crash.
+* لا يوجد Workflow restart.
+* لا يوجد Metro restart.
+* لا يوجد port conflict.
+* لا توجد JavaScript runtime errors.
+* لا توجد environment errors.
+* التطبيق مستقر لمدة دقيقتين على الأقل.
+
+عندها اكتب:
+
+`PREVIEW FIXED — STABLE`
+
+---
+
+# إذا لم تنجح بعد كل ذلك
+
+لا تغيّر أشياء عشوائية.
+
+بدلًا من ذلك أعطني **التشخيص النهائي المبني على logs**:
+
+* أول error.
+* اسم العملية التي فشلت.
+* PORT.
+* أمر Workflow.
+* سبب إعادة التشغيل.
+* الملف المسؤول إن كان داخل الكود.
+
+ويجب أن يكون واضحًا هل المشكلة:
+
+`Replit Environment`
+أو
+`Workflow`
+أو
+`Preview/Proxy`
+أو
+`Expo/Metro`
+أو
+`Dependencies`
+أو
+`Application Code`
+
+## الهدف الوحيد
+
+إنهاء مشكلة Preview نهائيًا وجعل التطبيق يفتح ويظل مستقرًا داخل Replit.
+
+لا أريد APK في هذه المهمة.
+لا أريد تصميمًا جديدًا.
+لا أريد Rollback.
+أريد Preview مستقرًا فقط.

@@ -189,6 +189,30 @@ paths:
                 $ref: "#/components/schemas/PushTokenRegistrationResult"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /push/notifications:
+    post:
+      tags: [push]
+      operationId: sendUserNotification
+      summary: Send a regular notification to an authenticated user's device
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PushNotificationRequest"
+      responses:
+        "202":
+          description: Notification delivery accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushDeliveryResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /calls/incoming:
     post:
       tags: [push]
@@ -379,29 +403,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
-    post:
-      tags: [bookings]
-      operationId: createSession
-      summary: Create a lesson booking
-      security:
-        - sessionAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SessionInput"
-      responses:
-        "201":
-          description: Created lesson
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Session"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
   /teachers:
     get:
       tags: [directory]
@@ -932,6 +933,38 @@ components:
         registered:
           type: boolean
           const: true
+    PushNotificationRequest:
+      type: object
+      required: [recipientId, title, body, type]
+      properties:
+        recipientId:
+          type: string
+          minLength: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        body:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        type:
+          type: string
+          minLength: 1
+          maxLength: 80
+        route:
+          type: string
+          enum: [/bookings, /messages, /notifications, /assignments, /support, /subscription, /invoices, /profile]
+        bookingId:
+          type: string
+          minLength: 1
+          maxLength: 128
+    PushDeliveryResult:
+      type: object
+      required: [delivered]
+      properties:
+        delivered:
+          type: boolean
     IncomingCallRequest:
       type: object
       required: [recipientId, roomId]
@@ -1004,7 +1037,7 @@ components:
         isBanned: { type: boolean }
     TeacherDashboard:
       type: object
-      required: [teacherApproved, stats, openRequests, unreadNotifications, warningCount, upcomingSessions]
+      required: [teacherApproved, stats, openRequests, unreadNotifications, warningCount, upcomingSessions, degradedSections]
       properties:
         teacherApproved:
           type: boolean
@@ -1023,6 +1056,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Session"
+        degradedSections:
+          type: array
+          items:
+            type: string
     TeacherDashboardStats:
       type: object
       required: [earnings, students, sessions, rating]
@@ -1097,7 +1134,7 @@ components:
           type: [number, "null"]
     StudentDashboard:
       type: object
-      required: [profileComplete, missingProfileFields, stats, balance, openBookingRequests, unreadNotifications, upcomingSessions]
+      required: [profileComplete, missingProfileFields, stats, balance, openBookingRequests, unreadNotifications, upcomingSessions, degradedSections]
       properties:
         profileComplete:
           type: boolean
@@ -1122,6 +1159,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Session"
+        degradedSections:
+          type: array
+          items:
+            type: string
     SessionInput:
       type: object
       required: [teacherId, title, subject, startsAt, durationMinutes]
@@ -1224,6 +1265,9 @@ components:
         time: { type: string }
         icon: { type: string }
         unread: { type: boolean }
+        type: { type: string, description: Notification category from the platform }
+        route: { type: string, description: In-app route to open when the notification is pressed }
+        bookingId: { type: string, description: Related booking identifier when available }
     ReadAllNotificationsResult:
       type: object
       required: [updated]

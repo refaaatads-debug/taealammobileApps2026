@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, BackHandler, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { useColors } from '@/hooks/useColors';
 import { useInternalCall } from '@/contexts/InternalCallContext';
 import { useAjyal } from '@/hooks/useAjyal';
@@ -12,6 +13,7 @@ import type { SessionDataMessage } from '@/hooks/useSessionWebRTC';
 import { useGetStudentDashboard, useListMySessions } from '@workspace/api-client-react';
 import { Header, Icon, Screen } from '@/components/AjyalUI';
 import { supabase } from '@/lib/supabase';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 function formatElapsed(seconds: number): string {
   const safeSeconds = Math.max(0, Math.floor(seconds));
@@ -20,7 +22,8 @@ function formatElapsed(seconds: number): string {
 
 export default function LiveSessionScreen() {
   const colors = useColors();
-  const { height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  useWindowDimensions();
   const { profile, role } = useAjyal();
   const params = useLocalSearchParams<{ booking?: string }>();
   const { call, endCall, clearCall } = useInternalCall();
@@ -60,6 +63,20 @@ export default function LiveSessionScreen() {
   const [handRaised, setHandRaised] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const timerAnchorRef = useRef<{ elapsed: number; timestamp: number; paused: boolean } | null>(null);
+  useEffect(() => {
+    if (Platform.OS === 'web') return undefined;
+    const applyOrientation = async () => {
+      if (isFullscreen) {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+      } else {
+        await ScreenOrientation.unlockAsync();
+      }
+    };
+    void applyOrientation().catch(() => undefined);
+    return () => {
+      if (isFullscreen) void ScreenOrientation.unlockAsync().catch(() => undefined);
+    };
+  }, [isFullscreen]);
   const refreshLifecycle = useCallback(async () => {
     if (!supabase || !bookingId) return;
     const [{ data: sessionRow, error: sessionError }, { data: bookingRow, error: bookingError }] = await Promise.all([
@@ -437,7 +454,12 @@ export default function LiveSessionScreen() {
       testID={fullscreen ? 'close-session-fullscreen' : 'open-session-fullscreen'}
       onPress={() => setIsFullscreen(!fullscreen)}
       hitSlop={8}
-      style={({ pressed }) => [styles.fullscreenButton, { backgroundColor: colors.primary + 'E6' }, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.fullscreenButton,
+        fullscreen && { top: Math.max(12, insets.top + 8), left: Math.max(12, insets.left + 8) },
+        { backgroundColor: colors.primary + 'E6' },
+        pressed && styles.pressed,
+      ]}
     >
       <Icon name={fullscreen ? 'minimize-2' : 'maximize-2'} size={17} color={colors.primaryForeground} />
     </Pressable>
@@ -463,12 +485,12 @@ export default function LiveSessionScreen() {
   };
 
   const renderSessionStats = (fullscreen = false) => (
-    <View style={[styles.statsStrip, { backgroundColor: fullscreen ? colors.card + '22' : colors.muted, borderColor: fullscreen ? colors.primaryForeground + '26' : colors.border, marginBottom: fullscreen ? 0 : 9 }]}>
+    <View style={[styles.statsStrip, { backgroundColor: fullscreen ? colors.card : colors.muted, borderColor: colors.border, marginBottom: fullscreen ? 0 : 9 }]}>
       <View style={styles.statItem}>
-        <Text style={[styles.statValue, { color: fullscreen ? colors.primaryForeground : colors.foreground }]}>{formatElapsed(elapsedSeconds)}</Text>
-        <Text style={[styles.statLabel, { color: fullscreen ? colors.tint : colors.mutedForeground }]}>الوقت المنقضي</Text>
+        <Text style={[styles.statValue, { color: colors.foreground }]}>{formatElapsed(elapsedSeconds)}</Text>
+        <Text style={[styles.statLabel, { color: colors.teal }]}>الوقت المنقضي</Text>
       </View>
-      <View style={[styles.statDivider, { backgroundColor: fullscreen ? colors.primaryForeground + '26' : colors.border }]} />
+      <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
       <View style={styles.statItem}>
         {renderBalance(fullscreen)}
       </View>
@@ -561,24 +583,20 @@ export default function LiveSessionScreen() {
 
       <Modal visible={isFullscreen && shouldJoin} animationType="fade" presentationStyle="fullScreen" onRequestClose={() => setIsFullscreen(false)}>
         <View style={[styles.fullscreenRoot, { backgroundColor: colors.primary }]}>
-          <View style={styles.fullscreenHeader}>
-            <Text style={[styles.fullscreenTitle, { color: colors.primaryForeground }]}>عرض المعلم والسبورة</Text>
-            {renderFullscreenButton(true)}
-          </View>
-          <View style={[styles.fullscreenStage, { height: Math.max(280, windowHeight - 170) }]}>
+          <View style={styles.fullscreenStage}>
             <SessionVideo
               stream={rtc.remoteStream}
               nativeView={rtc.rtcView}
               label="بانتظار عرض المعلم"
-              height={Math.max(280, windowHeight - 170)}
-              fit="contain"
+              fit="cover"
               scale={displayScale}
+              fill
             />
             {whiteboardVisible ? (
               <View style={[styles.whiteboardOverlay, { backgroundColor: colors.background }]}>
                 <SessionWhiteboard
                   actions={whiteboardActions}
-                  height={Math.max(280, windowHeight - 170)}
+                  fill
                   canDraw={whiteboardCanDraw}
                   onAction={handleWhiteboardAction}
                 />
@@ -589,9 +607,35 @@ export default function LiveSessionScreen() {
               </View>
             ) : null}
           </View>
-           <View style={[styles.fullscreenToolbar, { backgroundColor: colors.card }]}>
-             {renderSessionStats(true)}
-            <View style={styles.zoomControls}>
+          <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+            {renderFullscreenButton(true)}
+            <View
+              pointerEvents="none"
+              style={[
+                styles.fullscreenTimer,
+                {
+                  backgroundColor: colors.card + 'F2',
+                  borderColor: colors.border,
+                  bottom: Math.max(12, insets.bottom + 14),
+                  right: Math.max(12, insets.right + 14),
+                },
+              ]}
+            >
+              <Text style={[styles.fullscreenTimerValue, { color: colors.foreground }]}>{formatElapsed(elapsedSeconds)}</Text>
+              <Text style={[styles.fullscreenTimerLabel, { color: colors.teal }]}>الوقت المنقضي</Text>
+            </View>
+            <View
+              style={[
+                styles.fullscreenZoomDock,
+                {
+                  backgroundColor: colors.card + 'F2',
+                  borderColor: colors.border,
+                  bottom: Math.max(12, insets.bottom + 14),
+                  left: Math.max(12, insets.left + 14),
+                },
+              ]}
+            >
+              <View style={styles.zoomControls}>
               <Pressable testID="fullscreen-zoom-out-session" disabled={displayScale <= 1} onPress={() => setDisplayScale((value) => Math.max(1, Number((value - 0.25).toFixed(2))))} style={[styles.iconControl, { borderColor: colors.border, backgroundColor: colors.muted, opacity: displayScale <= 1 ? 0.45 : 1 }]}>
                 <Icon name="minus" size={16} color={colors.foreground} />
               </Pressable>
@@ -599,6 +643,7 @@ export default function LiveSessionScreen() {
               <Pressable testID="fullscreen-zoom-in-session" disabled={displayScale >= 2} onPress={() => setDisplayScale((value) => Math.min(2, Number((value + 0.25).toFixed(2))))} style={[styles.iconControl, { borderColor: colors.border, backgroundColor: colors.muted, opacity: displayScale >= 2 ? 0.45 : 1 }]}>
                 <Icon name="plus" size={16} color={colors.foreground} />
               </Pressable>
+              </View>
             </View>
           </View>
         </View>
@@ -679,8 +724,8 @@ const styles = StyleSheet.create({
   mediaToolbar: { minHeight: 48, borderBottomWidth: 1, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   statsStrip: { minHeight: 54, borderWidth: 1, borderRadius: 12, paddingHorizontal: 8, marginBottom: 9, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-around' },
   statItem: { flex: 1, alignItems: 'center', justifyContent: 'center', minWidth: 0 },
-  statValue: { fontSize: 11, fontFamily: 'Inter_700Bold', writingDirection: 'rtl', textAlign: 'center' },
-  statLabel: { fontSize: 8, marginTop: 2, fontFamily: 'Inter_400Regular', writingDirection: 'rtl', textAlign: 'center' },
+  statValue: { fontSize: 15, lineHeight: 21, fontFamily: 'Inter_700Bold', writingDirection: 'rtl', textAlign: 'center' },
+  statLabel: { fontSize: 11, lineHeight: 16, marginTop: 2, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl', textAlign: 'center' },
   statDivider: { width: 1, height: 27 },
   zoomControls: { flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
   iconControl: { width: 32, height: 32, borderRadius: 9, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
@@ -693,14 +738,15 @@ const styles = StyleSheet.create({
   sessionControlText: { fontSize: 10, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
   elapsedText: { flex: 1, alignSelf: 'center', textAlign: 'right', writingDirection: 'rtl', fontSize: 10, fontFamily: 'Inter_600SemiBold' },
   balanceStat: { alignItems: 'center', justifyContent: 'center' },
-  balanceText: { textAlign: 'center', writingDirection: 'rtl', fontSize: 9, fontFamily: 'Inter_600SemiBold' },
-  balanceSubtext: { textAlign: 'center', writingDirection: 'rtl', fontSize: 8, marginTop: 2, fontFamily: 'Inter_400Regular' },
+  balanceText: { textAlign: 'center', writingDirection: 'rtl', fontSize: 12, lineHeight: 18, fontFamily: 'Inter_700Bold' },
+  balanceSubtext: { textAlign: 'center', writingDirection: 'rtl', fontSize: 10, lineHeight: 15, marginTop: 2, fontFamily: 'Inter_600SemiBold' },
   fullscreenButton: { position: 'absolute', left: 10, top: 10, width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', zIndex: 2 },
-  fullscreenRoot: { flex: 1, padding: 14, justifyContent: 'space-between' },
-  fullscreenHeader: { minHeight: 44, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between' },
-  fullscreenTitle: { fontSize: 15, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  fullscreenStage: { width: '100%', justifyContent: 'center', borderRadius: 16, overflow: 'hidden', backgroundColor: '#112D4E' },
-  fullscreenToolbar: { minHeight: 58, borderRadius: 14, paddingHorizontal: 10, flexDirection: 'row-reverse', alignItems: 'center', gap: 8 },
+  fullscreenRoot: { flex: 1 },
+  fullscreenStage: { width: '100%', flex: 1, minHeight: 0, justifyContent: 'center', overflow: 'hidden', backgroundColor: '#112D4E' },
+  fullscreenTimer: { position: 'absolute', minWidth: 108, borderRadius: 14, borderWidth: 1, paddingHorizontal: 13, paddingVertical: 8, alignItems: 'center', shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 5 },
+  fullscreenTimerValue: { fontSize: 17, lineHeight: 21, fontFamily: 'Inter_700Bold', fontVariant: ['tabular-nums'] },
+  fullscreenTimerLabel: { fontSize: 10, lineHeight: 15, marginTop: 1, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
+  fullscreenZoomDock: { position: 'absolute', borderRadius: 14, borderWidth: 1, padding: 5, shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 5 },
   whiteboardOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 1, justifyContent: 'center' },
   whiteboardOverlayLabel: { position: 'absolute', top: 10, right: 10, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 6, flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
   infoText: { flex: 1, textAlign: 'right', writingDirection: 'rtl', fontSize: 11, lineHeight: 19, fontFamily: 'Inter_400Regular' },

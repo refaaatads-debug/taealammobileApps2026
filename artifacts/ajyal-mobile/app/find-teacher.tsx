@@ -45,7 +45,7 @@ export default function FindTeacherScreen() {
   const isRTL = direction === 'rtl';
   const [search, setSearch] = useState('');
   const [subject, setSubject] = useState('الكل');
-  const [sortBy, setSortBy] = useState<'rating' | 'price'>('rating');
+  const [sortBy, setSortBy] = useState<'rating'>('rating');
   const [platformSubjects, setPlatformSubjects] = useState<string[]>([]);
   const [subjectsLoading, setSubjectsLoading] = useState(true);
   const [subjectsError, setSubjectsError] = useState(false);
@@ -92,10 +92,7 @@ export default function FindTeacherScreen() {
       (stage === 'الكل' || teacher.teachingStages?.includes(stage))
       && (subject === 'الكل' || teacher.subjects?.includes(subject))
     ));
-    return [...filtered].sort((left, right) => {
-      if (sortBy === 'price') return (left.hourlyRate ?? Number.POSITIVE_INFINITY) - (right.hourlyRate ?? Number.POSITIVE_INFINITY);
-      return (right.rating ?? 0) - (left.rating ?? 0);
-    });
+    return [...filtered].sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0));
   }, [sortBy, stage, subject, teachers]);
 
   return (
@@ -165,7 +162,7 @@ export default function FindTeacherScreen() {
         </Text>
       ) : null}
       <View style={styles.filters}>
-        {(['rating', 'price'] as const).map((option) => (
+        {(['rating'] as const).map((option) => (
           <Pressable
             key={option}
             testID={`teacher-sort-${option}`}
@@ -173,7 +170,7 @@ export default function FindTeacherScreen() {
             style={[styles.filter, { backgroundColor: sortBy === option ? colors.tealSoft : colors.card, borderColor: sortBy === option ? colors.teal : colors.border }]}
           >
             <Text style={[styles.filterText, { color: sortBy === option ? colors.teal : colors.mutedForeground }]}>
-              {option === 'rating' ? t('الأعلى تقييماً', 'Top rated') : t('الأقل سعراً', 'Lowest price')}
+              {t('الأعلى تقييماً', 'Top rated')}
             </Text>
           </Pressable>
         ))}
@@ -198,7 +195,6 @@ export default function FindTeacherScreen() {
                 params: {
                   teacherId: teacher.id,
                   teacherName: teacher.displayName,
-                  teacherHourlyRate: teacher.hourlyRate == null ? '' : String(teacher.hourlyRate),
                   teacherAvailableDays: JSON.stringify(teacher.availableDays ?? []),
                   teacherAvailableFrom: teacher.availableFrom ?? '',
                   teacherAvailableTo: teacher.availableTo ?? '',
@@ -212,9 +208,8 @@ export default function FindTeacherScreen() {
               <View style={styles.teacherCopy}>
                  <Text style={[styles.teacherName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{teacher.displayName}</Text>
                  <Text style={[styles.teacherMeta, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>
-                   {teacher.rating == null ? t('معلم معتمد', 'Approved teacher') : `★ ${teacher.rating.toFixed(1)}`}
-                   {teacher.hourlyRate == null ? '' : ` · ${formatNumber(teacher.hourlyRate)} SAR/${t('ساعة', 'hr')}`}
-                   {teacher.totalSessions == null ? '' : ` · ${formatNumber(teacher.totalSessions)} ${t('حصة', 'sessions')}`}
+                    {teacher.rating == null ? t('معلم معتمد', 'Approved teacher') : `★ ${teacher.rating.toFixed(1)}`}
+                    {teacher.totalSessions == null ? '' : ` · ${formatNumber(teacher.totalSessions)} ${t('حصة', 'sessions')}`}
                 </Text>
                  <Text style={[styles.teacherMeta, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>
                    {teacher.subjects?.slice(0, 3).join(' · ') || t('تخصصات المنصة', 'Platform subjects')}

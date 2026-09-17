@@ -1,6 +1,8 @@
 import {
   RegisterPushTokenBody,
   RegisterPushTokenResponse,
+  SendUserNotificationBody,
+  SendUserNotificationResponse,
   SendCallEndedBody,
   SendCallEndedParams,
   SendCallEndedResponse,
@@ -15,7 +17,7 @@ import { db, pushTokensTable, usersTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
 import crypto from "node:crypto";
-import { INCOMING_CALL_CATEGORY, INCOMING_CALL_CHANNEL, isExpoPushToken, sendExpoPushMessage } from "../lib/expoPush";
+import { ExpoPushError, INCOMING_CALL_CATEGORY, INCOMING_CALL_CHANNEL, isExpoPushToken, sendExpoPushMessage } from "../lib/expoPush";
 import { readBearerToken, supabaseTable } from "../lib/supabaseAuth";
 import { sendUserPushNotification } from "../lib/userPush";
 
@@ -75,6 +77,28 @@ router.delete("/push-tokens", async (req, res): Promise<void> => {
   });
 
   res.json(UnregisterPushTokenResponse.parse({ registered: true }));
+});
+
+router.post("/push/notifications", async (req, res): Promise<void> => {
+  const userId = requireUser(req, res);
+  if (!userId) return;
+
+  const parsed = SendUserNotificationBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  const delivered = await sendUserPushNotification(parsed.data.recipientId, {
+    title: parsed.data.title,
+    body: parsed.data.body,
+    data: {
+      type: parsed.data.type,
+      ...(parsed.data.route ? { route: parsed.data.route } : {}),
+      ...(parsed.data.bookingId ? { bookingId: parsed.data.bookingId } : {}),
+    },
+  });
+  res.status(202).json(SendUserNotificationResponse.parse({ delivered }));
 });
 
 router.post("/push/messages", async (req, res): Promise<void> => {
@@ -224,6 +248,11 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
   if (!destination.caller || !destination.recipient) {
     // The Supabase call row and Realtime channel are authoritative. The API
     // server may not yet have a local mirror of every Supabase user.
+    req.log.warn({
+      reason: "missing_local_caller_or_recipient",
+      hasCaller: Boolean(destination.caller),
+      hasRecipient: Boolean(destination.recipient),
+    }, "Incoming call push skipped");
     res.status(202).json(SendIncomingCallResponse.parse({ callId, delivered: false }));
     return;
   }
@@ -235,6 +264,7 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
     // Push is only a delivery optimization. The internal_calls row and
     // Supabase Realtime are the authoritative call transport for foreground
     // web/native clients, so a missing token must not fail the call.
+    req.log.warn({ reason: "missing_recipient_push_token" }, "Incoming call push skipped");
     res.status(202).json(SendIncomingCallResponse.parse({ callId, delivered: false }));
     return;
   }
@@ -257,16 +287,21 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
       },
       categoryId: INCOMING_CALL_CATEGORY,
        channelId: INCOMING_CALL_CHANNEL,
-       sound: "incoming-call.wav",
+       sound: "incoming_call.wav",
       priority: "high",
       ttl: 60,
     });
   } catch (error) {
-    req.log.error({ errorName: error instanceof Error ? error.name : "unknown" }, "Incoming call push failed");
+    req.log.error({
+      reason: "expo_provider_rejected",
+      errorName: error instanceof Error ? error.name : "unknown",
+      providerCode: error instanceof ExpoPushError ? error.providerCode ?? null : null,
+    }, "Incoming call push failed");
     res.status(202).json(SendIncomingCallResponse.parse({ callId, delivered: false }));
     return;
   }
 
+  req.log.info({ delivered: true }, "Incoming call push accepted by Expo");
   res.status(202).json(SendIncomingCallResponse.parse({ callId, delivered: true }));
 });
 

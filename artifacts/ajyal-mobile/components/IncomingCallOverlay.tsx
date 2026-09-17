@@ -1,13 +1,13 @@
 import React from 'react';
-import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
-import { usePathname } from 'expo-router';
+import { Alert, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { router, usePathname } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { Icon } from '@/components/AjyalUI';
 import { useInternalCall } from '@/contexts/InternalCallContext';
 
 export function IncomingCallOverlay() {
   const colors = useColors();
-  const { call, acceptCall, declineCall, endCall, clearCall, muted, toggleMute, callConnectionState, callError } = useInternalCall();
+  const { call, acceptCall, declineCall, endCall, clearCall, muted, toggleMute, speakerEnabled, toggleSpeaker, callConnectionState, callError } = useInternalCall();
   const pathname = usePathname();
   if (!call || (call.status === 'active' && pathname.endsWith('/live-session'))) return null;
 
@@ -17,21 +17,28 @@ export function IncomingCallOverlay() {
     ? 'مكالمة واردة'
     : isActive
       ? 'المكالمة جارية'
-      : call.status === 'declined'
+       : call.status === 'busy'
+         ? 'الطرف الآخر مشغول الآن بمكالمة'
+         : call.status === 'declined'
         ? 'تم رفض المكالمة'
         : 'انتهت المكالمة';
   const statusBody = isRinging
     ? 'لديك مكالمة واردة الآن'
     : isActive
       ? callConnectionState === 'connected' ? 'الصوت متصل ويمكنك كتم الميكروفون أو إنهاء المكالمة' : 'جارٍ إنشاء الاتصال الصوتي…'
-      : call.status === 'declined'
+       : call.status === 'busy'
+         ? 'لا يمكن استقبال مكالمتين في الوقت نفسه'
+         : call.status === 'declined'
         ? 'لن يتم إشعار الطرف الآخر بالمزيد من الرنين'
         : 'انتهى الاتصال ويمكنك إغلاق هذه النافذة';
   const acceptAndOpenRoom = async () => {
     try {
       await acceptCall();
-      // Internal voice is independent from the booking video room. Keep this
-      // overlay open so the audio hook can run without starting session video.
+      // A booking-linked call is also the user's request to enter the platform
+      // session. Standalone calls keep the audio overlay only.
+      if (call.roomId && !call.roomId.startsWith('call:') && !call.roomId.startsWith('test-')) {
+        router.push({ pathname: '/live-session', params: { booking: call.roomId } });
+      }
     } catch (error) {
       Alert.alert('تعذر قبول المكالمة', error instanceof Error ? error.message : 'حاول مرة أخرى.');
     }
@@ -85,6 +92,16 @@ export function IncomingCallOverlay() {
                 <Icon name={muted ? 'mic-off' : 'mic'} size={19} color={colors.primaryForeground} />
                 <Text style={[styles.actionText, { color: colors.primaryForeground }]}>{muted ? 'فتح الميكروفون' : 'كتم الميكروفون'}</Text>
               </Pressable>
+              {Platform.OS !== 'web' ? (
+                <Pressable
+                  testID="toggle-internal-call-speaker"
+                  onPress={toggleSpeaker}
+                  style={({ pressed }) => [styles.singleAction, { backgroundColor: speakerEnabled ? colors.primary : colors.muted }, pressed && styles.pressed]}
+                >
+                  <Icon name={speakerEnabled ? 'volume-2' : 'volume-1'} size={19} color={speakerEnabled ? colors.primaryForeground : colors.foreground} />
+                  <Text style={[styles.actionText, { color: speakerEnabled ? colors.primaryForeground : colors.foreground }]}>{speakerEnabled ? 'مكبر الصوت' : 'سماعة الهاتف'}</Text>
+                </Pressable>
+              ) : null}
               <Pressable
                 testID="end-call"
                 onPress={() => void endCall().catch((error: unknown) => Alert.alert('تعذر إنهاء المكالمة', error instanceof Error ? error.message : 'حاول مرة أخرى.'))}

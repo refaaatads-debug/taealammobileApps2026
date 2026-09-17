@@ -3,6 +3,7 @@ import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Switch, Text,
 import * as DocumentPicker from "expo-document-picker";
 import { router } from "expo-router";
 import { Header, Icon, Screen, SectionHeading } from "@/components/AjyalUI";
+import { TeacherIdentityCard } from "@/components/TeacherIdentityCard";
 import { useColors } from "@/hooks/useColors";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useAuth } from "@/lib/auth";
@@ -245,10 +246,22 @@ export default function ProfileScreen() {
   return (
     <Screen>
        <Header avatarText={profile?.displayName?.slice(0, 1)} eyebrow={t("مساحتك الشخصية", "Your personal space")} title={t("حسابي", "Profile")} onBell={() => router.push("/notifications")} />
-      <View style={[styles.hero, { backgroundColor: colors.primary }]}>
-        <View style={[styles.avatar, { backgroundColor: colors.accent }]}><Text style={[styles.initial, { color: colors.accentForeground }]}>{profile?.displayName?.slice(0, 1) ?? "؟"}</Text></View>
-         <View style={[styles.heroCopy, { alignItems: isRTL ? "flex-end" : "flex-start", marginLeft: isRTL ? 13 : 0, marginRight: isRTL ? 0 : 13 }]}><Text style={[styles.heroName, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{profile?.displayName ?? "—"}</Text><Text style={[styles.heroMeta, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{profile?.roleLabel === "طالب" ? t("طالب", "Student") : profile?.roleLabel === "معلم" ? t("معلم", "Teacher") : profile?.roleLabel}</Text><Text style={[styles.heroMeta, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{profile?.email}</Text></View>
+       <View style={[styles.hero, { backgroundColor: colors.primary, flexDirection: isRTL ? "row" : "row-reverse" }]}>
+          <View style={[styles.avatar, { backgroundColor: colors.accent }]}>
+            <Icon name={role === "student" ? "book-open" : "briefcase"} size={28} color={colors.accentForeground} />
+          </View>
+          <View style={[styles.heroCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
+            <Text style={[styles.heroEyebrow, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("ملف الحساب", "Account profile")}</Text>
+            <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.heroName, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{profile?.displayName ?? "—"}</Text>
+            <View style={[styles.heroMetaRow, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+              <View style={[styles.rolePill, { backgroundColor: colors.teal }]}>
+                <Text style={[styles.rolePillText, { color: colors.primaryForeground, writingDirection: direction }]}>{profile?.roleLabel === "طالب" ? t("طالب", "Student") : profile?.roleLabel === "معلم" ? t("معلم", "Teacher") : profile?.roleLabel}</Text>
+              </View>
+              <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.heroMeta, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{profile?.email}</Text>
+            </View>
+          </View>
       </View>
+       {teacher ? <TeacherIdentityCard profile={profile} approved={profile?.teacherApproved === true} /> : null}
       {loading ? <View style={styles.center}><ActivityIndicator color={colors.teal} /></View> : (
         <>
             <Pressable
@@ -256,11 +269,11 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityState={{ expanded: personalDetailsOpen }}
               onPress={() => setPersonalDetailsOpen((open) => !open)}
-              style={({ pressed }) => [styles.collapsibleHeading, pressed && styles.pressed]}
+               style={({ pressed }) => [styles.collapsibleHeading, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row" : "row-reverse" }, pressed && styles.pressed]}
             >
-              <View style={styles.sectionTitleWrap}>
+               <View style={[styles.sectionTitleWrap, { flexDirection: isRTL ? "row" : "row-reverse" }]}>
                 <View style={[styles.sectionMark, { backgroundColor: colors.accent }]} />
-                <Text style={[styles.sectionTitle, { color: colors.foreground }]}>{t("البيانات الشخصية", "Personal details")}</Text>
+                 <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("البيانات الشخصية", "Personal details")}</Text>
               </View>
               <Icon name={personalDetailsOpen ? "chevron-up" : "chevron-down"} size={19} color={colors.teal} />
             </Pressable>
@@ -277,11 +290,11 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityState={{ expanded: teacherDetailsOpen }}
               onPress={() => setTeacherDetailsOpen((open) => !open)}
-              style={({ pressed }) => [styles.collapsibleHeading, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.collapsibleHeading, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row" : "row-reverse" }, pressed && styles.pressed]}
             >
-              <View style={styles.sectionTitleWrap}>
+               <View style={[styles.sectionTitleWrap, { flexDirection: isRTL ? "row" : "row-reverse" }]}>
                 <View style={[styles.sectionMark, { backgroundColor: colors.accent }]} />
-                <Text style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("بيانات المعلم", "Teacher details")}</Text>
+                 <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("بيانات المعلّم", "Teacher details")}</Text>
               </View>
               <Icon name={teacherDetailsOpen ? "chevron-up" : "chevron-down"} size={19} color={colors.teal} />
             </Pressable>
@@ -299,11 +312,11 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityState={{ expanded: bankDetailsOpen }}
               onPress={() => setBankDetailsOpen((open) => !open)}
-              style={({ pressed }) => [styles.collapsibleHeading, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.collapsibleHeading, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row" : "row-reverse" }, pressed && styles.pressed]}
             >
-              <View style={styles.sectionTitleWrap}>
+               <View style={[styles.sectionTitleWrap, { flexDirection: isRTL ? "row" : "row-reverse" }]}>
                 <View style={[styles.sectionMark, { backgroundColor: colors.accent }]} />
-                <Text style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("البيانات البنكية", "Bank details")}</Text>
+                 <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("البيانات البنكية", "Bank details")}</Text>
               </View>
               <Icon name={bankDetailsOpen ? "chevron-up" : "chevron-down"} size={19} color={colors.teal} />
             </Pressable>
@@ -319,11 +332,11 @@ export default function ProfileScreen() {
               accessibilityRole="button"
               accessibilityState={{ expanded: qualificationsOpen }}
               onPress={() => setQualificationsOpen((open) => !open)}
-              style={({ pressed }) => [styles.collapsibleHeading, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.collapsibleHeading, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row" : "row-reverse" }, pressed && styles.pressed]}
             >
-              <View style={styles.sectionTitleWrap}>
+               <View style={[styles.sectionTitleWrap, { flexDirection: isRTL ? "row" : "row-reverse" }]}>
                 <View style={[styles.sectionMark, { backgroundColor: colors.accent }]} />
-                <Text style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("المؤهلات والشهادات", "Qualifications and certificates")}</Text>
+                 <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("المؤهلات والشهادات", "Qualifications and certificates")}</Text>
               </View>
               <Icon name={qualificationsOpen ? "chevron-up" : "chevron-down"} size={19} color={colors.teal} />
             </Pressable>
@@ -340,15 +353,15 @@ export default function ProfileScreen() {
 
            <SectionHeading title={t("الإعدادات والإشعارات", "Settings and notifications")} />
           <FormCard>
-             <ToggleRow label={t("تنبيه قبل موعد الجلسة", "Notify before a session")} value={notifyBefore} onValueChange={setNotifyBefore} />
-             <ToggleRow label={t("تنبيه بعد انتهاء الجلسة", "Notify after a session")} value={notifyAfter} onValueChange={setNotifyAfter} />
-             <ToggleRow label={t("تنبيه قرب انتهاء الاشتراك", "Notify when your plan is expiring")} value={notifyExpiry} onValueChange={setNotifyExpiry} />
+              <ToggleRow icon="calendar" label={t("تنبيه قبل موعد الجلسة", "Notify before a session")} value={notifyBefore} onValueChange={setNotifyBefore} />
+              <ToggleRow icon="check-circle" label={t("تنبيه بعد انتهاء الجلسة", "Notify after a session")} value={notifyAfter} onValueChange={setNotifyAfter} />
+              <ToggleRow icon="credit-card" label={t("تنبيه قرب انتهاء الاشتراك", "Notify when your plan is expiring")} value={notifyExpiry} onValueChange={setNotifyExpiry} />
           </FormCard>
            <Pressable testID="save-profile" disabled={saving} onPress={() => void save()} style={[styles.action, { backgroundColor: saving ? colors.muted : colors.primary }]}>{saving ? <ActivityIndicator color={colors.primaryForeground} /> : <><Icon name="save" size={16} color={colors.primaryForeground} /><Text style={[styles.actionText, { color: colors.primaryForeground }]}>{t("حفظ التغييرات", "Save changes")}</Text></>}</Pressable>
 
            <SectionHeading title={t("المساعدة والدعم", "Help and support")} />
           <FormCard>
-             <LinkRow icon="help-circle" label={t("مركز المساعدة", "Help center")} onPress={() => router.push("/support")} />
+              <LinkRow icon="help-circle" label={t("مركز المساعدة", "Help center")} onPress={() => router.push("/help-center")} />
              <LinkRow icon="message-circle" label={t("تواصل مع الفريق", "Contact the team")} onPress={() => router.push("/support")} />
              <LinkRow icon="shield" label={t("سياسة الخصوصية", "Privacy policy")} onPress={() => router.push("/privacy")} />
              <LinkRow icon="file-text" label={t("شروط الاستخدام", "Terms of use")} onPress={() => router.push("/terms")} />
@@ -377,31 +390,38 @@ function ChoiceGroup({ label, options, selected, onToggle }: { label: string; op
   return <View style={styles.field}><Text style={[styles.label, { color: colors.foreground, writingDirection: direction, textAlign: direction === "rtl" ? "right" : "left" }]}>{label}</Text><View style={[styles.chips, { justifyContent: direction === "rtl" ? "flex-end" : "flex-start" }]}>{options.map((option) => { const active = selected.includes(option); return <Pressable key={option} onPress={() => onToggle(option)} style={[styles.chip, { backgroundColor: active ? colors.tealSoft : colors.background, borderColor: active ? colors.teal : colors.border }]}><Text style={[styles.chipText, { color: active ? colors.teal : colors.foreground, writingDirection: direction }]}>{t(option, STAGE_TRANSLATIONS[option] ?? option)}</Text></Pressable>; })}</View></View>;
 }
 
-function ToggleRow({ label, value, onValueChange }: { label: string; value: boolean; onValueChange: (value: boolean) => void }) {
+function ToggleRow({ icon, label, value, onValueChange }: { icon: "calendar" | "check-circle" | "credit-card"; label: string; value: boolean; onValueChange: (value: boolean) => void }) {
   const colors = useColors();
   const { direction } = useAppPreferences();
-  return <View style={[styles.toggle, { flexDirection: direction === "rtl" ? "row" : "row-reverse" }]}><Switch value={value} onValueChange={onValueChange} trackColor={{ false: colors.muted, true: colors.teal }} thumbColor={colors.card} /><Text style={[styles.toggleText, { color: colors.foreground, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]}>{label}</Text><Icon name="bell" size={17} color={colors.teal} /></View>;
+  const iconColor = icon === "credit-card" ? colors.accentForeground : icon === "check-circle" ? colors.primary : colors.teal;
+  const iconBackground = icon === "credit-card" ? colors.goldSoft : icon === "check-circle" ? colors.navySoft : colors.tealSoft;
+  return <View style={[styles.toggle, { borderBottomColor: colors.border, flexDirection: direction === "rtl" ? "row" : "row-reverse" }]}><Switch value={value} onValueChange={onValueChange} trackColor={{ false: colors.muted, true: colors.teal }} thumbColor={colors.card} /><Text style={[styles.toggleText, { color: colors.foreground, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]}>{label}</Text><View style={[styles.toggleIcon, { backgroundColor: iconBackground }]}><Icon name={icon} size={16} color={iconColor} /></View></View>;
 }
 
 function LinkRow({ icon, label, onPress, destructive = false }: { icon: "help-circle" | "message-circle" | "shield" | "file-text" | "log-out"; label: string; onPress: () => void; destructive?: boolean }) {
   const colors = useColors();
   const { direction } = useAppPreferences();
-  return <Pressable onPress={onPress} style={[styles.linkRow, { flexDirection: direction === "rtl" ? "row" : "row-reverse" }]}><Icon name={direction === "rtl" ? "arrow-left" : "arrow-right"} size={15} color={colors.mutedForeground} /><Text style={[styles.linkText, { color: destructive ? colors.destructive : colors.foreground, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]}>{label}</Text><Icon name={icon} size={18} color={destructive ? colors.destructive : colors.teal} /></Pressable>;
+  const iconColor = destructive ? colors.destructive : icon === "help-circle" ? colors.primary : icon === "message-circle" ? colors.teal : colors.accentForeground;
+  const iconBackground = destructive ? `${colors.destructive}18` : icon === "help-circle" ? colors.navySoft : icon === "message-circle" ? colors.tealSoft : colors.goldSoft;
+  return <Pressable onPress={onPress} style={[styles.linkRow, { borderBottomColor: colors.border, flexDirection: direction === "rtl" ? "row" : "row-reverse" }]}><Icon name={direction === "rtl" ? "arrow-left" : "arrow-right"} size={15} color={colors.mutedForeground} /><Text style={[styles.linkText, { color: destructive ? colors.destructive : colors.foreground, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]}>{label}</Text><View style={[styles.linkIcon, { backgroundColor: iconBackground }]}><Icon name={icon} size={17} color={iconColor} /></View></Pressable>;
 }
 
 const styles = StyleSheet.create({
-  hero: { minHeight: 132, borderRadius: 22, padding: 17, flexDirection: "row", alignItems: "center", marginBottom: 16 },
+  hero: { minHeight: 142, borderRadius: 24, padding: 17, alignItems: "center", marginBottom: 16, shadowColor: "#173E8C", shadowOpacity: 0.14, shadowRadius: 14, shadowOffset: { width: 0, height: 7 }, elevation: 3 },
   avatar: { width: 62, height: 62, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-  initial: { fontSize: 25, fontFamily: "Inter_700Bold" },
-  heroCopy: { flex: 1, alignItems: "flex-end", marginLeft: 13 },
-  heroName: { fontSize: 18, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
-  heroMeta: { fontSize: 10, fontFamily: "Inter_400Regular", marginTop: 4, writingDirection: "rtl" },
+  heroCopy: { flex: 1, marginHorizontal: 13 },
+  heroEyebrow: { fontSize: 9, fontFamily: "Inter_600SemiBold", writingDirection: "rtl", marginBottom: 4, opacity: 0.82 },
+  heroName: { maxWidth: "100%", fontSize: 20, lineHeight: 26, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
+  heroMetaRow: { width: "100%", alignItems: "center", gap: 7, marginTop: 7 },
+  rolePill: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  rolePillText: { fontSize: 9, fontFamily: "Inter_700Bold" },
+  heroMeta: { flex: 1, fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", writingDirection: "rtl" },
   center: { minHeight: 180, alignItems: "center", justifyContent: "center" },
-  card: { borderWidth: 1, borderRadius: 19, padding: 14, marginBottom: 17 },
-  collapsibleHeading: { minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 7, marginTop: 1 },
-  sectionTitleWrap: { flexDirection: "row", alignItems: "center", gap: 8 },
+  card: { borderWidth: 1, borderRadius: 21, padding: 10, marginBottom: 17, shadowColor: "#173E8C", shadowOpacity: 0.05, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
+  collapsibleHeading: { minHeight: 50, borderWidth: 1, borderRadius: 17, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 7, marginTop: 1 },
+  sectionTitleWrap: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 8 },
   sectionMark: { width: 5, height: 19, borderRadius: 3 },
-  sectionTitle: { fontSize: 18, letterSpacing: -0.2, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl" },
+  sectionTitle: { flex: 1, minWidth: 0, fontSize: 16, lineHeight: 20, letterSpacing: -0.15, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl" },
   pressed: { opacity: 0.72 },
   field: { marginBottom: 13 },
   label: { fontSize: 11, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl", marginBottom: 7 },
@@ -420,8 +440,10 @@ const styles = StyleSheet.create({
   certificate: { minHeight: 59, borderTopWidth: 1, flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12, paddingTop: 12 },
   certificateCopy: { flex: 1, alignItems: "flex-end" },
   certificateName: { fontSize: 11, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
-  toggle: { minHeight: 57, flexDirection: "row", alignItems: "center", gap: 10 },
+  toggle: { minHeight: 57, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   toggleText: { flex: 1, textAlign: "right", fontSize: 11, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
-  linkRow: { minHeight: 55, flexDirection: "row", alignItems: "center", gap: 10 },
+  toggleIcon: { width: 35, height: 35, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  linkRow: { minHeight: 57, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   linkText: { flex: 1, textAlign: "right", fontSize: 11, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
+  linkIcon: { width: 35, height: 35, borderRadius: 12, alignItems: "center", justifyContent: "center" },
 });

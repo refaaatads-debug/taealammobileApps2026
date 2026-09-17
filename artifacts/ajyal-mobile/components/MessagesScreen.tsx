@@ -25,7 +25,6 @@ import {
   useAudioRecorder,
 } from "expo-audio";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
@@ -37,12 +36,19 @@ import { useInternalCall } from "@/contexts/InternalCallContext";
 import { getReadChatMessageIds, markChatMessagesRead, subscribeToChatReadState } from "@/lib/localChatReadState";
 
 type Row = Record<string, any>;
+const POSTGREST_IN_BATCH_SIZE = 40;
 
 type Participant = {
   id: string;
+  participantId: string;
   name: string;
   roleLabel: string;
   avatar: string;
+  bookingId: string;
+  subject: string;
+  scheduledAt: string;
+  bookingStatus: string;
+  sessionStatus: string;
   bookingIds: string[];
   latestMessage?: Row;
   unreadCount: number;
@@ -147,6 +153,17 @@ async function createInstantSession({
     body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
     type: "instant_session",
   });
+  await customFetch<{ delivered: boolean }>("/api/push/notifications", {
+    method: "POST",
+    body: JSON.stringify({
+      recipientId: teacherId,
+      title: "طلب جلسة فورية",
+      body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
+      type: "instant_session",
+      route: "/bookings",
+      bookingId: booking.id,
+    }),
+  }).catch(() => undefined);
   // The booking is authoritative. A notification delivery failure must not
   // make the user retry and accidentally create a second instant booking.
   void notificationError;
@@ -169,16 +186,21 @@ function chatStoragePath(url: string) {
 }
 
 async function resolveChatFileUrl(url: string) {
-  if (!supabase) return url;
+  if (!url) return null;
+  if (!supabase) return /^https?:\/\//i.test(url) ? url : null;
   const path = chatStoragePath(url);
   if (!path) return url;
   const result = await supabase.storage.from("chat-files").createSignedUrl(path, 60 * 60);
-  return result.data?.signedUrl || url;
+  if (result.error || !result.data?.signedUrl) {
+    throw result.error ?? new Error("تعذر إنشاء رابط آمن للمرفق");
+  }
+  return result.data.signedUrl;
 }
 
 async function openChatFile(url: string, fileName: string) {
   try {
     const resolvedUrl = await resolveChatFileUrl(url);
+    if (!resolvedUrl) throw new Error("المرفق غير متاح");
     if (Platform.OS !== "web") {
       await Linking.openURL(resolvedUrl);
       return;
@@ -204,16 +226,58 @@ function text(row: Row | undefined, ...keys: string[]) {
   return "";
 }
 
+function batches<T>(items: T[], size = POSTGREST_IN_BATCH_SIZE): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
+}
+
 function dateLabel(raw?: string, locale = "ar-SA") {
   if (!raw) return "—";
   const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return raw;
-  return new Intl.DateTimeFormat("ar-SA", {
+  return new Intl.DateTimeFormat(locale || "ar-SA", {
     day: "numeric",
     month: "short",
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+function bookingDateLabel(raw?: string, locale = "ar-SA") {
+  if (!raw) return "—";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return new Intl.DateTimeFormat(locale || "ar-SA", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+function bookingTimeLabel(raw?: string, locale = "ar-SA") {
+  if (!raw) return "—";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return new Intl.DateTimeFormat(locale || "ar-SA", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function bookingStatusLabel(
+  status: string,
+  sessionStatus: string,
+  t: (arabic: string, english: string) => string,
+) {
+  if (sessionStatus === "in_progress") return t("جلسة جارية", "In progress");
+  if (sessionStatus === "waiting_acceptance") return t("بانتظار القبول", "Waiting for acceptance");
+  if (status === "confirmed") return t("مؤكد", "Confirmed");
+  if (status === "cancelled") return t("ملغى", "Cancelled");
+  if (status === "completed") return t("مكتمل", "Completed");
+  return status || t("غير محدد", "Unavailable");
 }
 
 function initials(name: string) {
@@ -235,6 +299,11 @@ function lastMessagePreview(message?: Row) {
 
 function isUnreadMessage(message: Row, userId: string, readMessageIds: Set<string>) {
   return String(message.sender_id) !== userId && !readMessageIds.has(String(message.id));
+}
+
+function isActiveParticipant(item: Participant) {
+  const closedStatuses = new Set(["cancelled", "completed", "expired", "ended"]);
+  return !closedStatuses.has(item.bookingStatus) && !closedStatuses.has(item.sessionStatus);
 }
 
 function toUploadAsset(asset: { uri: string; name?: string | null; mimeType?: string | null; size?: number; file?: File }): UploadAsset {
@@ -272,12 +341,17 @@ async function uploadToChat(asset: UploadAsset, bookingId: string) {
 }
 
 function useResolvedChatFileUrl(url: string) {
-  const [resolvedUrl, setResolvedUrl] = useState(url);
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(() => (
+    chatStoragePath(url) ? null : url || null
+  ));
   useEffect(() => {
     let active = true;
+    setResolvedUrl(chatStoragePath(url) ? null : url || null);
     void resolveChatFileUrl(url).then((nextUrl) => {
       if (active) setResolvedUrl(nextUrl);
-    }).catch(() => undefined);
+    }).catch(() => {
+      if (active) setResolvedUrl(null);
+    });
     return () => {
       active = false;
     };
@@ -290,6 +364,13 @@ function VoiceMessage({ url, outgoing }: { url: string; outgoing: boolean }) {
   const resolvedUrl = useResolvedChatFileUrl(url);
   const player = useAudioPlayer(resolvedUrl, { updateInterval: 250 });
   const status = useAudioPlayerStatus(player);
+  if (!resolvedUrl) {
+    return (
+      <Text style={[styles.fileSubtitle, { color: outgoing ? colors.tint : colors.mutedForeground }]}>
+        تعذر تحميل الرسالة الصوتية
+      </Text>
+    );
+  }
   const progress = status.duration > 0 ? Math.min(1, status.currentTime / status.duration) : 0;
   const duration = status.duration > 0 ? status.duration : 0;
   const bars = [0.4, 0.72, 0.52, 0.9, 0.62, 0.35, 0.78, 0.5, 0.95, 0.64, 0.42, 0.7, 0.54, 0.84, 0.48, 0.68];
@@ -334,6 +415,14 @@ function MessageAttachment({ message, outgoing }: { message: Row; outgoing: bool
   const resolvedUrl = useResolvedChatFileUrl(url);
   if (!url) return null;
   if (fileType.startsWith("audio/")) return <VoiceMessage url={url} outgoing={outgoing} />;
+  if (!resolvedUrl) {
+    return (
+      <Pressable onPress={() => void openChatFile(url, fileName)} style={[styles.fileAttachment, { backgroundColor: outgoing ? colors.primaryForeground : colors.navySoft }]}>
+        <Icon name="alert-circle" size={17} color={colors.destructive} />
+        <Text style={[styles.fileSubtitle, { color: outgoing ? colors.primary : colors.destructive }]}>تعذر تحميل المرفق — اضغط للمحاولة</Text>
+      </Pressable>
+    );
+  }
   if (fileType.startsWith("image/")) {
     return (
       <Pressable onPress={() => void openChatFile(url, fileName)} style={styles.imageAttachment}>
@@ -355,30 +444,82 @@ function MessageAttachment({ message, outgoing }: { message: Row; outgoing: bool
   );
 }
 
+function DepthCard({
+  children,
+  wrapperStyle,
+  surfaceStyle,
+  surfaceColor,
+  depthColor,
+  borderColor,
+}: {
+  children: React.ReactNode;
+  wrapperStyle?: object;
+  surfaceStyle?: object;
+  surfaceColor: string;
+  depthColor: string;
+  borderColor: string;
+}) {
+  return (
+    <View style={[styles.depthCardWrap, wrapperStyle]}>
+      <View style={[styles.depthCardBackplate, { backgroundColor: depthColor, borderColor }]} />
+      <View style={[styles.depthCardSurface, surfaceStyle, { backgroundColor: surfaceColor, borderColor }]}>
+        {children}
+      </View>
+    </View>
+  );
+}
+
 function ParticipantRow({ item, onPress }: { item: Participant; onPress: () => void }) {
   const colors = useColors();
   const { t, direction, locale, formatNumber } = useAppPreferences();
   const isRTL = direction === "rtl";
   const hasUnread = item.unreadCount > 0;
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.participantRow, { backgroundColor: colors.card, borderColor: hasUnread ? colors.teal : colors.border }, pressed && styles.pressed]}
-    >
+    <View style={[styles.depthCardWrap, styles.participantRowWrap]}>
+      <View style={[styles.depthCardBackplate, { backgroundColor: hasUnread ? colors.tealSoft : colors.navySoft, borderColor: hasUnread ? colors.teal : colors.border }]} />
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.participantRow, { backgroundColor: colors.navySoft, borderColor: hasUnread ? colors.teal : colors.border }, pressed && styles.pressed]}
+      >
+      <View style={[styles.participantTint, { backgroundColor: hasUnread ? colors.tealSoft : colors.card }]} />
+      <View style={[styles.participantAccent, { backgroundColor: hasUnread ? colors.teal : colors.primary }]} />
       <View style={styles.rowArrow}><Icon name={isRTL ? "chevron-left" : "chevron-right"} size={19} color={colors.mutedForeground} /></View>
       <View style={[styles.participantCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
-        <View style={styles.participantTop}>
-          <Text style={[styles.participantName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>{item.name}</Text>
-          <Text style={[styles.participantDate, { color: colors.mutedForeground }]}>{dateLabel(item.latestMessage?.created_at, locale)}</Text>
+        <Text style={[styles.participantName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>{item.name}</Text>
+        <View style={styles.bookingSchedule}>
+          <Text style={[styles.bookingScheduleLine, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>
+            <Text style={{ color: colors.mutedForeground }}>تاريخ الحجز</Text>
+            <Text style={{ color: colors.foreground, fontFamily: "Inter_600SemiBold" }}> · {bookingDateLabel(item.scheduledAt, locale)}</Text>
+          </Text>
+          <Text style={[styles.bookingScheduleLine, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>
+            <Text style={{ color: colors.mutedForeground }}>وقت الحجز</Text>
+            <Text style={{ color: colors.foreground, fontFamily: "Inter_600SemiBold" }}> · {bookingTimeLabel(item.scheduledAt, locale)}</Text>
+          </Text>
+        </View>
+        <View style={[styles.participantMetaLine, { borderTopColor: colors.border }]}>
+          <Text style={[styles.roleText, { color: colors.teal, writingDirection: direction }]} numberOfLines={1}>
+            {item.roleLabel === "معلم" ? t("معلم", "Teacher") : t("طالب", "Student")} · {item.subject || t("مادة غير محددة", "Subject unavailable")}
+          </Text>
+          <View style={[styles.statusPill, { backgroundColor: hasUnread ? colors.tealSoft : colors.muted }]}>
+            <View style={[styles.statusPillDot, { backgroundColor: hasUnread ? colors.teal : colors.mutedForeground }]} />
+            <Text style={[styles.statusPillText, { color: hasUnread ? colors.teal : colors.mutedForeground }]} numberOfLines={1}>
+              {item.bookingIds.length > 1
+                ? `${formatNumber(item.bookingIds.length)} ${t("حجوزات", "bookings")}`
+                : bookingStatusLabel(item.bookingStatus, item.sessionStatus, t)}
+            </Text>
+          </View>
         </View>
         <View style={styles.participantBottom}>
           <Text style={[styles.participantPreview, { color: hasUnread ? colors.foreground : colors.mutedForeground, fontFamily: hasUnread ? "Inter_600SemiBold" : "Inter_400Regular", writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>{t(lastMessagePreview(item.latestMessage), { "رسالة صوتية": "Voice message", "صورة": "Image", "ملف PDF": "PDF file", "ملف مرفق": "Attachment", "ابدأ محادثة جديدة": "Start a new conversation", "مرفق": "Attachment" }[lastMessagePreview(item.latestMessage)] ?? lastMessagePreview(item.latestMessage))}</Text>
           {hasUnread ? <View style={[styles.unreadBadge, { backgroundColor: colors.teal }]}><Text style={styles.unreadText}>{item.unreadCount > 9 ? "9+" : formatNumber(item.unreadCount)}</Text></View> : null}
         </View>
-        <Text style={[styles.roleText, { color: colors.teal, writingDirection: direction }]}>{item.roleLabel === "معلم" ? t("معلم", "Teacher") : t("طالب", "Student")} · {formatNumber(item.bookingIds.length)} {item.bookingIds.length === 1 ? t("حجز", "booking") : t("حجوزات", "bookings")}</Text>
       </View>
-      <View style={[styles.participantAvatar, { backgroundColor: colors.navySoft }]}><Text style={[styles.avatarInitials, { color: colors.primary }]}>{item.avatar}</Text></View>
-    </Pressable>
+      <View style={[styles.participantAvatar, { backgroundColor: colors.card, borderColor: hasUnread ? colors.tealSoft : colors.card }]}>
+        <Text style={[styles.avatarInitials, { color: hasUnread ? colors.teal : colors.primary }]}>{item.avatar}</Text>
+        {hasUnread ? <View style={[styles.avatarUnreadDot, { backgroundColor: colors.accent, borderColor: colors.card }]} /> : null}
+      </View>
+      </Pressable>
+    </View>
   );
 }
 
@@ -476,7 +617,7 @@ function PhoneCallModal({
     setStatus("idle");
     setMinutes(5);
     void Promise.all([
-      supabase.from("profiles").select("phone").eq("user_id", participant.id).maybeSingle(),
+      supabase.from("profiles").select("phone").eq("user_id", participant.participantId).maybeSingle(),
       supabase.from("wallets").select("balance").eq("user_id", teacherId).maybeSingle(),
       supabase.from("site_settings").select("value").eq("key", "call_price_per_minute").maybeSingle(),
     ]).then(([profileResult, walletResult, priceResult]) => {
@@ -499,7 +640,7 @@ function PhoneCallModal({
           studentPhone: phone.trim(),
           estimatedMinutes: minutes,
           bookingId,
-          studentId: participant.id,
+          studentId: participant.participantId,
         },
       });
       if (error) throw error;
@@ -606,7 +747,6 @@ function ConversationView({
   const colors = useColors();
   const { t, direction, locale } = useAppPreferences();
   const isRTL = direction === "rtl";
-  const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<Row>>(null);
   const [draft, setDraft] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -646,7 +786,7 @@ function ConversationView({
       method: "POST",
       body: JSON.stringify({
         bookingId,
-        recipientId: participant.id,
+        recipientId: participant.participantId,
         kind: payload.kind ?? "text",
       }),
     }).catch(() => undefined);
@@ -819,11 +959,13 @@ function ConversationView({
 
   return (
     <Screen scroll={false} contentStyle={styles.conversationScreen}>
-      <KeyboardAvoidingView behavior="padding" style={styles.keyboardRoot} keyboardVerticalOffset={Platform.OS === "web" ? 0 : insets.top}>
+      <KeyboardAvoidingView behavior="padding" style={styles.keyboardRoot} keyboardVerticalOffset={0}>
         <Header onBack={onBack} eyebrow={t("محادثة آمنة داخل المنصة", "Secure platform chat")} title={participant.name} avatarText={participant.avatar} onAvatar={() => router.push("/profile")} />
         <View style={[styles.conversationMeta, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}>
           <View style={[styles.onlineDot, { backgroundColor: colors.teal }]} />
-          <Text style={[styles.conversationMetaText, { color: colors.teal, writingDirection: direction }]}>{participant.roleLabel === "معلم" ? t("معلم", "Teacher") : t("طالب", "Student")} · {t("جميع الحجوزات مع هذا الطرف", "All bookings with this participant")}</Text>
+          <Text style={[styles.conversationMetaText, { color: colors.teal, writingDirection: direction }]} numberOfLines={2}>
+            {participant.roleLabel === "معلم" ? t("معلم", "Teacher") : t("طالب", "Student")} · {participant.subject || t("مادة غير محددة", "Subject unavailable")} · {dateLabel(participant.scheduledAt, locale)} · {bookingStatusLabel(participant.bookingStatus, participant.sessionStatus, t)}
+          </Text>
         </View>
         {canCall ? (
           <View style={styles.callActions}>
@@ -885,7 +1027,7 @@ function ConversationView({
               <Text style={[styles.emptyConversationBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("يمكنك إرسال نص أو صورة أو PDF أو رسالة صوتية.", "You can send text, images, PDFs, or voice messages.")}</Text>
             </View>
           }
-          contentContainerStyle={styles.messageList}
+          contentContainerStyle={[styles.messageList, messages.length === 0 && styles.messageListEmpty]}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
@@ -932,6 +1074,8 @@ export default function MessagesScreen() {
   const [instantSessionBusy, setInstantSessionBusy] = useState(false);
   const [callBusy, setCallBusy] = useState<"internal" | "phone" | null>(null);
   const [readMessageIds, setReadMessageIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState("");
+  const [messageFilter, setMessageFilter] = useState<"all" | "unread" | "active">("all");
   const loadRequestRef = useRef(0);
 
   const load = useCallback(async (options: { showLoading?: boolean } = {}) => {
@@ -945,57 +1089,74 @@ export default function MessagesScreen() {
       setError(false);
       return;
     }
+    const client = supabase;
     if (showLoading) setLoading(true);
     setError(false);
     try {
-      const timeout = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("MESSAGES_LOAD_TIMEOUT")), 12_000);
+      // Render the conversation list as soon as bookings arrive. The old
+      // implementation waited for every message and every profile before
+      // rendering anything, so one slow PostgREST request made the whole page
+      // look stuck.
+      const bookingTimeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("MESSAGES_BOOKINGS_TIMEOUT")), 8_000);
       });
-      const loadData = (async () => {
-        const bookingResult = await supabase
+      const bookingResult = await Promise.race([
+        client
           .from("bookings")
-          .select("id, student_id, teacher_id, scheduled_at")
+          .select("id, student_id, teacher_id, subject_id, status, session_status, scheduled_at, created_at")
           .or(`student_id.eq.${user.id},teacher_id.eq.${user.id}`)
-          .order("scheduled_at", { ascending: false });
-        if (bookingResult.error) throw bookingResult.error;
-
-        const bookingRows = (bookingResult.data ?? []) as Row[];
-        const ids = bookingRows.map((row) => String(row.id));
-        const [messageResult, profileResult] = await Promise.all([
-          ids.length
-            ? supabase
-                .from("chat_messages")
-                .select("id,booking_id,sender_id,content,file_url,file_name,file_type,created_at")
-                .in("booking_id", ids)
-                .order("created_at", { ascending: true })
-            : Promise.resolve({ data: [], error: null }),
-          (() => {
-            const participantIds = [
-              ...new Set(
-                bookingRows.map((row) =>
-                  String(row.student_id) === user.id ? String(row.teacher_id) : String(row.student_id),
-                ),
-              ),
-            ];
-            return participantIds.length
-              ? supabase.from("profiles").select("*").in("user_id", participantIds)
-              : Promise.resolve({ data: [], error: null });
-          })(),
-        ]);
-        if (messageResult.error) throw messageResult.error;
-        if (profileResult.error) throw profileResult.error;
-        return {
-          bookings: bookingRows,
-          messages: (messageResult.data ?? []) as Row[],
-          profiles: (profileResult.data ?? []) as Row[],
-        };
-      })();
-      const result = await Promise.race([loadData, timeout]);
+          .order("scheduled_at", { ascending: false }),
+        bookingTimeout,
+      ]);
+      if (bookingResult.error) throw bookingResult.error;
+      const bookingRows = (bookingResult.data ?? []) as Row[];
       if (requestId !== loadRequestRef.current) return;
-      setBookings(result.bookings);
-      setMessages(result.messages);
-      setProfiles(result.profiles);
-      setError(false);
+      setBookings(bookingRows);
+      if (showLoading) setLoading(false);
+
+      const ids = bookingRows.map((row) => String(row.id));
+      const participantIds = [
+        ...new Set(
+          bookingRows.map((row) =>
+            String(row.student_id) === user.id ? String(row.teacher_id) : String(row.student_id),
+          ),
+        ),
+      ];
+      const enrichment = await Promise.allSettled([
+        Promise.all(
+          batches(ids).map((bookingIdBatch) =>
+            client
+              .from("chat_messages")
+              .select("id,booking_id,sender_id,content,file_url,file_name,file_type,created_at")
+              .in("booking_id", bookingIdBatch)
+              .order("created_at", { ascending: true }),
+          ),
+        ),
+        Promise.all(
+          batches(participantIds).map((participantIdBatch) =>
+            client.from("profiles").select("*").in("user_id", participantIdBatch),
+          ),
+        ),
+      ]);
+      if (requestId !== loadRequestRef.current) return;
+
+      const messagesResult = enrichment[0];
+      if (messagesResult.status === "fulfilled") {
+        const messageError = messagesResult.value.find((result) => result.error)?.error;
+        if (messageError) console.warn("[messages] message history failed:", messageError.message);
+        else setMessages(messagesResult.value.flatMap((result) => result.data ?? []) as Row[]);
+      } else {
+        console.warn("[messages] message history failed:", messagesResult.reason);
+      }
+
+      const profilesResult = enrichment[1];
+      if (profilesResult.status === "fulfilled") {
+        const profileError = profilesResult.value.find((result) => result.error)?.error;
+        if (profileError) console.warn("[messages] profile lookup failed:", profileError.message);
+        else setProfiles(profilesResult.value.flatMap((result) => result.data ?? []) as Row[]);
+      } else {
+        console.warn("[messages] profile lookup failed:", profilesResult.reason);
+      }
     } catch (loadError) {
       if (requestId !== loadRequestRef.current) return;
       console.warn(
@@ -1039,11 +1200,15 @@ export default function MessagesScreen() {
     const client = supabase;
     if (!client || !user || !bookings.length) return;
     const bookingIds = new Set(bookings.map((booking) => String(booking.id)));
+    const bookingIdList = [...bookingIds];
     const channel = client
-      .channel(`mobile-chat-${user.id}-${bookings.map((booking) => String(booking.id)).join(",")}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "chat_messages" }, (payload) => {
-        const row = (payload.new ?? payload.old) as Row;
-        if (!bookingIds.has(String(row?.booking_id ?? ""))) return;
+      .channel(`mobile-chat-${user.id}-${bookingIdList.join(",")}-${Date.now()}`)
+      .on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table: "chat_messages",
+        filter: `booking_id=in.(${bookingIdList.join(",")})`,
+      }, () => {
         void load({ showLoading: false });
       })
       .subscribe();
@@ -1055,34 +1220,53 @@ export default function MessagesScreen() {
   useEffect(() => {
     const requestedParticipant = typeof params.participant === "string" ? params.participant : typeof params.student === "string" ? params.student : null;
     if (requestedParticipant) {
-      setSelectedId(requestedParticipant);
+      const matching = participants.find((item) => item.participantId === requestedParticipant);
+      if (matching) setSelectedId(matching.id);
       return;
     }
     if (typeof params.booking === "string") {
       const booking = bookings.find((row) => String(row.id) === params.booking);
       if (booking && user) {
-        setSelectedId(String(booking.student_id) === user.id ? String(booking.teacher_id) : String(booking.student_id));
+        const participantId = String(booking.student_id) === user.id ? String(booking.teacher_id) : String(booking.student_id);
+        const matching = participants.find((item) => item.participantId === participantId);
+        if (matching) setSelectedId(matching.id);
       }
     }
-  }, [params.booking, params.participant, params.student, bookings, user?.id]);
+  }, [params.booking, params.participant, params.student, bookings, profiles, user?.id]);
 
   const participants = useMemo<Participant[]>(() => {
     if (!user) return [];
     const byId = new Map<string, Participant>();
     for (const booking of bookings) {
       const participantId = String(booking.student_id) === user.id ? String(booking.teacher_id) : String(booking.student_id);
+      const profile = profiles.find((row) => String(row.user_id) === participantId);
+      const name = text(profile, "full_name", "display_name", "name") || t("مستخدم أجيال المعرفة", "Ajyal Knowledge user");
+      const bookingId = String(booking.id);
       const existing = byId.get(participantId);
       if (existing) {
-        existing.bookingIds.push(String(booking.id));
+        existing.bookingIds.push(bookingId);
+        // Bookings are normally sorted newest first, but keep the selection
+        // correct if the source order changes.
+        if (new Date(text(booking, "scheduled_at", "created_at")).getTime() > new Date(existing.scheduledAt).getTime()) {
+          existing.bookingId = bookingId;
+          existing.subject = text(booking, "subject");
+          existing.scheduledAt = text(booking, "scheduled_at", "created_at");
+          existing.bookingStatus = text(booking, "status");
+          existing.sessionStatus = text(booking, "session_status");
+        }
       } else {
-        const profile = profiles.find((row) => String(row.user_id) === participantId);
-        const name = text(profile, "full_name", "display_name", "name") || t("مستخدم أجيال المعرفة", "Ajyal Knowledge user");
         byId.set(participantId, {
           id: participantId,
+          participantId,
           name,
           roleLabel: String(booking.student_id) === user.id ? "معلم" : "طالب",
           avatar: initials(name),
-          bookingIds: [String(booking.id)],
+          bookingId,
+          subject: text(booking, "subject"),
+          scheduledAt: text(booking, "scheduled_at", "created_at"),
+          bookingStatus: text(booking, "status"),
+          sessionStatus: text(booking, "session_status"),
+          bookingIds: [bookingId],
           unreadCount: 0,
         });
       }
@@ -1100,8 +1284,29 @@ export default function MessagesScreen() {
   }, [bookings, messages, profiles, readMessageIds, user]);
 
   const selected = participants.find((item) => item.id === selectedId) || null;
-  const selectedMessages = selected ? messages.filter((message) => selected.bookingIds.includes(String(message.booking_id))).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) : [];
-  const selectedBookingId = selected?.bookingIds[0] || null;
+  const selectedMessages = selected
+    ? messages
+      .filter((message) => selected.bookingIds.includes(String(message.booking_id)))
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    : [];
+  const selectedBookingId = selected?.bookingId || null;
+  const visibleParticipants = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    return participants.filter((item) => {
+      const searchable = [
+        item.name,
+        item.subject,
+        item.roleLabel,
+        lastMessagePreview(item.latestMessage),
+        item.bookingId,
+      ].join(" ").toLocaleLowerCase();
+      const matchesSearch = !query || searchable.includes(query);
+      const matchesFilter = messageFilter === "all"
+        || (messageFilter === "unread" && item.unreadCount > 0)
+        || (messageFilter === "active" && isActiveParticipant(item));
+      return matchesSearch && matchesFilter;
+    });
+  }, [messageFilter, participants, searchQuery]);
 
   const startSelectedInstantSession = async () => {
     if (!selected || !user || role !== "student" || instantSessionBusy) return;
@@ -1109,7 +1314,7 @@ export default function MessagesScreen() {
     try {
       await createInstantSession({
         userId: user.id,
-        participantId: selected.id,
+        participantId: selected.participantId,
         participantName: selected.name,
       });
       Alert.alert("تم إرسال طلب الجلسة", "تم إرسال الطلب للطرف الآخر. ستظهر الجلسة بعد القبول.");
@@ -1125,7 +1330,7 @@ export default function MessagesScreen() {
     if (!selected || role !== "teacher" || callBusy) return;
     setCallBusy("internal");
     try {
-      await startOutgoingCall(selected.id, selectedBookingId || undefined);
+      await startOutgoingCall(selected.participantId, selectedBookingId || undefined);
       Alert.alert("تم بدء الاتصال الداخلي", `يرن الآن عند ${selected.name}.`);
     } catch (error) {
       Alert.alert("تعذر بدء الاتصال الداخلي", error instanceof Error ? error.message : "تحقق من اتصال الطالب ثم حاول مرة أخرى.");
@@ -1136,13 +1341,14 @@ export default function MessagesScreen() {
 
   if (selected && user) {
     return (
-      <ConversationView
+        <ConversationView
+          key={selected.id}
         participant={selected}
         messages={selectedMessages}
         bookingId={selectedBookingId}
         userId={user.id}
         onBack={() => setSelectedId(null)}
-        onReload={load}
+        onReload={() => load({ showLoading: false })}
         onInstantSession={() => void startSelectedInstantSession()}
         instantSessionBusy={instantSessionBusy}
         canStartInstantSession={role === "student"}
@@ -1156,58 +1362,156 @@ export default function MessagesScreen() {
   return (
     <Screen>
       <Header title={t("الرسائل", "Messages")} eyebrow={t("تواصل داخل أجيال المعرفة", "Connect inside Ajyal Knowledge")} avatarText={user?.email?.slice(0, 1)} onAvatar={() => router.push("/profile")} />
-      <View style={[styles.introCard, { backgroundColor: colors.primary }]}>
-        <View style={[styles.introIcon, { backgroundColor: colors.tealSoft }]}><Icon name="message-circle" size={23} color={colors.teal} /></View>
+      <DepthCard wrapperStyle={styles.introCardWrap} surfaceStyle={styles.introCard} surfaceColor={colors.navySoft} depthColor={colors.tealSoft} borderColor={colors.border}>
+        <View style={[styles.introIcon, { backgroundColor: colors.primary }]}><Icon name="message-circle" size={23} color={colors.primaryForeground} /></View>
         <View style={[styles.introCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
-          <Text style={[styles.introEyebrow, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("محادثاتك التعليمية", "Your learning conversations")}</Text>
-          <Text style={[styles.introTitle, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("كل طالب في محادثة مستقلة", "A dedicated conversation for every student")}</Text>
-          <Text style={[styles.introBody, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("اختر الطالب لعرض كامل الرسائل والملفات الخاصة به.", "Choose a student to view all messages and files.")}</Text>
+          <Text style={[styles.introEyebrow, { color: colors.teal, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("مساحة تعلم متصلة", "Connected learning space")}</Text>
+          <Text style={[styles.introTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("رسائلك التعليمية", "Your learning messages")}</Text>
+          <Text style={[styles.introBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("تواصل مع المعلمين والطلاب بالنصوص والمرفقات والصوت والمكالمات والجلسات.", "Connect through text, attachments, voice notes, calls, and sessions.")}</Text>
+          <View style={[styles.featureRow, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+            {[
+              { icon: "message-square" as const, label: t("نص", "Text") },
+              { icon: "paperclip" as const, label: t("مرفقات", "Files") },
+              { icon: "phone" as const, label: t("مكالمات", "Calls") },
+            ].map((feature) => (
+              <View key={feature.label} style={[styles.featurePill, { backgroundColor: colors.card }]}>
+                <Icon name={feature.icon} size={12} color={colors.teal} />
+                <Text style={[styles.featurePillText, { color: colors.foreground, writingDirection: direction }]}>{feature.label}</Text>
+              </View>
+            ))}
+          </View>
         </View>
-      </View>
-      <View style={styles.sectionHeader}>
-        <Text style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction }]}>{t("المحادثات", "Conversations")}</Text>
-        <Text style={[styles.sectionCount, { color: colors.mutedForeground, writingDirection: direction }]}>{formatNumber(participants.length)} {t("طرف", "participants")}</Text>
+      </DepthCard>
+
+      <DepthCard wrapperStyle={styles.searchPanelWrap} surfaceStyle={styles.searchPanel} surfaceColor={colors.card} depthColor={colors.navySoft} borderColor={colors.border}>
+        <View style={[styles.searchInputWrap, { backgroundColor: colors.background, borderColor: colors.border, flexDirection: isRTL ? "row-reverse" : "row" }]}>
+          <Icon name="search" size={18} color={colors.mutedForeground} />
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder={t("ابحث باسم المعلم أو الطالب أو الرسالة", "Search by participant or message")}
+            placeholderTextColor={colors.mutedForeground}
+            returnKeyType="search"
+            clearButtonMode="never"
+            style={[styles.searchInput, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}
+          />
+          {searchQuery ? (
+            <Pressable onPress={() => setSearchQuery("")} hitSlop={8} style={styles.searchClear}>
+              <Icon name="x" size={15} color={colors.mutedForeground} />
+            </Pressable>
+          ) : null}
+        </View>
+        <View style={[styles.filterRow, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+          <View style={[styles.filterLabel, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+            <Icon name="sliders" size={14} color={colors.teal} />
+            <Text style={[styles.filterLabelText, { color: colors.mutedForeground, writingDirection: direction }]}>{t("عرض", "View")}</Text>
+          </View>
+          {[
+            { value: "all" as const, label: t("الكل", "All") },
+            { value: "unread" as const, label: t("غير مقروءة", "Unread") },
+            { value: "active" as const, label: t("نشطة", "Active") },
+          ].map((filter) => {
+            const selectedFilter = messageFilter === filter.value;
+            return (
+              <Pressable
+                key={filter.value}
+                onPress={() => setMessageFilter(filter.value)}
+                style={({ pressed }) => [
+                  styles.filterChip,
+                  { backgroundColor: selectedFilter ? colors.tealSoft : colors.background, borderColor: selectedFilter ? colors.teal : colors.border },
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={[styles.filterChipText, { color: selectedFilter ? colors.teal : colors.mutedForeground, writingDirection: direction }]}>{filter.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </DepthCard>
+
+      <View style={[styles.sectionHeader, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+        <View style={[styles.sectionTitleWrap, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+          <View style={[styles.sectionMark, { backgroundColor: colors.accent }]} />
+          <Text style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("المحادثات", "Conversations")}</Text>
+        </View>
+        <View style={[styles.sectionActions, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+          <Text style={[styles.sectionCount, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "left" : "right" }]}>{formatNumber(visibleParticipants.length)} / {formatNumber(participants.length)}</Text>
+          <Pressable onPress={() => void load({ showLoading: false })} disabled={loading} hitSlop={8} style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}>
+            <Icon name="refresh-cw" size={15} color={loading ? colors.muted : colors.teal} />
+          </Pressable>
+        </View>
       </View>
       {loading ? <View style={styles.loading}><ActivityIndicator color={colors.teal} /><Text style={[styles.loadingText, { color: colors.mutedForeground, writingDirection: direction }]}>{t("جارٍ تحميل محادثاتك…", "Loading your conversations…")}</Text></View>
         : error ? <EmptyState icon="alert-circle" title={t("تعذر تحميل الرسائل", "Could not load messages")} body={t("تحقق من الاتصال ثم حاول مرة أخرى.", "Check your connection and try again.")} action={t("إعادة المحاولة", "Try again")} onAction={() => void load()} />
-          : !participants.length ? <EmptyState icon="message-circle" title={t("لا توجد محادثات بعد", "No conversations yet")} body={t("ستظهر هنا محادثة كل طالب عند وجود حجز مرتبط.", "A conversation will appear here when there is a related booking.")} />
-            : participants.map((participant) => <ParticipantRow key={participant.id} item={participant} onPress={() => setSelectedId(participant.id)} />)}
-      <View style={[styles.safetyNote, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          : !participants.length ? <EmptyState icon="message-circle" title={t("لا توجد محادثات بعد", "No conversations yet")} body={t("ستظهر هنا محادثة كل معلم أو طالب عند وجود حجز مرتبط.", "A conversation will appear here when there is a related booking.")} />
+            : !visibleParticipants.length ? <EmptyState icon="search" title={t("لا توجد نتائج مطابقة", "No matching conversations")} body={t("جرّب تغيير كلمة البحث أو الفلتر.", "Try a different search term or filter.")} action={t("مسح البحث", "Clear search")} onAction={() => { setSearchQuery(""); setMessageFilter("all"); }} />
+              : visibleParticipants.map((participant) => <ParticipantRow key={participant.id} item={participant} onPress={() => setSelectedId(participant.id)} />)}
+      <DepthCard wrapperStyle={styles.safetyNoteWrap} surfaceStyle={styles.safetyNote} surfaceColor={colors.card} depthColor={colors.tealSoft} borderColor={colors.border}>
         <Icon name="shield" size={15} color={colors.teal} />
-        <Text style={[styles.safetyText, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("تتم تصفية الأرقام والروابط تلقائياً وفق سياسات المنصة.", "Phone numbers and links are automatically filtered according to platform policies.")}</Text>
-      </View>
+        <Text style={[styles.safetyText, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("محادثاتك محمية داخل المنصة، ويمكنك مشاركة النصوص والصور وملفات PDF والرسائل الصوتية بأمان.", "Your conversations stay protected in the platform. Share text, images, PDFs, and voice notes safely.")}</Text>
+      </DepthCard>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  conversationScreen: { paddingHorizontal: 14 },
+  conversationScreen: { flex: 1, paddingHorizontal: 14 },
   keyboardRoot: { flex: 1, minHeight: 0 },
-  introCard: { minHeight: 142, borderRadius: 24, padding: 18, flexDirection: "row", alignItems: "center", marginBottom: 22 },
-  introIcon: { width: 58, height: 58, borderRadius: 19, alignItems: "center", justifyContent: "center", marginLeft: 13 },
+  depthCardWrap: { position: "relative", overflow: "visible" },
+  depthCardBackplate: { position: "absolute", left: 2, right: -2, top: 4, bottom: -4, borderWidth: 1, borderRadius: 18, opacity: 0.95 },
+  depthCardSurface: { position: "relative", borderWidth: 1, borderRadius: 18, overflow: "hidden" },
+  introCardWrap: { marginBottom: 14 },
+  introCard: { minHeight: 154, padding: 16, flexDirection: "row", alignItems: "center" },
+  introIcon: { width: 52, height: 52, borderRadius: 18, alignItems: "center", justifyContent: "center", marginLeft: 13, shadowColor: "#173E8C", shadowOpacity: 0.14, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
   introCopy: { flex: 1, alignItems: "flex-end" },
   introEyebrow: { width: "100%", textAlign: "right", writingDirection: "rtl", fontSize: 10, fontFamily: "Inter_500Medium" },
-  introTitle: { width: "100%", textAlign: "right", writingDirection: "rtl", fontSize: 20, lineHeight: 27, fontFamily: "Inter_700Bold", marginTop: 6 },
-  introBody: { width: "100%", textAlign: "right", writingDirection: "rtl", fontSize: 11, lineHeight: 17, fontFamily: "Inter_400Regular", marginTop: 6 },
-  sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 11 },
-  sectionTitle: { fontSize: 17, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
+  introTitle: { width: "100%", textAlign: "right", writingDirection: "rtl", fontSize: 19, lineHeight: 26, fontFamily: "Inter_700Bold", marginTop: 5 },
+  introBody: { width: "100%", textAlign: "right", writingDirection: "rtl", fontSize: 10, lineHeight: 16, fontFamily: "Inter_400Regular", marginTop: 5 },
+  featureRow: { alignItems: "center", gap: 5, marginTop: 10 },
+  featurePill: { minHeight: 25, borderRadius: 10, paddingHorizontal: 8, flexDirection: "row", alignItems: "center", gap: 4 },
+  featurePillText: { fontSize: 9, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
+  searchPanelWrap: { marginBottom: 16 },
+  searchPanel: { padding: 12 },
+  searchInputWrap: { minHeight: 46, borderWidth: 1, borderRadius: 14, paddingHorizontal: 11, alignItems: "center", gap: 8 },
+  searchInput: { flex: 1, minHeight: 42, paddingHorizontal: 2, paddingVertical: 7, fontSize: 11, fontFamily: "Inter_400Regular" },
+  searchClear: { width: 25, height: 30, alignItems: "center", justifyContent: "center" },
+  filterRow: { alignItems: "center", gap: 6, marginTop: 9 },
+  filterLabel: { alignItems: "center", gap: 4, marginRight: 2 },
+  filterLabelText: { fontSize: 10, fontFamily: "Inter_500Medium", writingDirection: "rtl" },
+  filterChip: { minHeight: 30, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, alignItems: "center", justifyContent: "center" },
+  filterChipText: { fontSize: 10, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
+  sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  sectionTitleWrap: { alignItems: "center", gap: 7 },
+  sectionMark: { width: 5, height: 19, borderRadius: 3 },
+  sectionTitle: { flex: 1, minWidth: 0, fontSize: 16, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
   sectionCount: { fontSize: 11, fontFamily: "Inter_400Regular", writingDirection: "rtl" },
-  participantRow: { minHeight: 93, borderWidth: 1, borderRadius: 19, padding: 13, flexDirection: "row", alignItems: "center", marginBottom: 10 },
-  participantAvatar: { width: 51, height: 51, borderRadius: 18, alignItems: "center", justifyContent: "center", marginLeft: 11 },
+  sectionActions: { alignItems: "center", gap: 8 },
+  refreshButton: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  participantRowWrap: { marginBottom: 10 },
+  participantRow: { minHeight: 166, borderWidth: 1, borderRadius: 18, padding: 13, flexDirection: "row", alignItems: "center", position: "relative", overflow: "hidden" },
+  participantTint: { position: "absolute", width: 150, height: 150, borderRadius: 75, top: -74, right: -52, opacity: 0.55 },
+  participantAccent: { position: "absolute", width: 4, borderRadius: 2, top: 14, bottom: 14, right: 0, opacity: 0.85 },
+  participantAvatar: { width: 51, height: 51, borderRadius: 18, borderWidth: 1, alignItems: "center", justifyContent: "center", marginLeft: 11, position: "relative", shadowColor: "#173E8C", shadowOpacity: 0.12, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
   avatarInitials: { fontSize: 15, fontFamily: "Inter_700Bold" },
+  avatarUnreadDot: { position: "absolute", width: 10, height: 10, borderRadius: 5, right: -2, top: -2, borderWidth: 2 },
   participantCopy: { flex: 1, minWidth: 0 },
-  participantTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   participantName: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 14, fontFamily: "Inter_700Bold" },
-  participantDate: { fontSize: 9, fontFamily: "Inter_400Regular" },
-  participantBottom: { flexDirection: "row", alignItems: "center", marginTop: 6, gap: 7 },
+  bookingSchedule: { width: "100%", marginTop: 7, gap: 3 },
+  bookingScheduleLine: { width: "100%", fontSize: 10, lineHeight: 16, fontFamily: "Inter_500Medium" },
+  participantBottom: { width: "100%", flexDirection: "row", alignItems: "center", marginTop: 7, gap: 7 },
   participantPreview: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 11 },
   unreadBadge: { minWidth: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 5 },
   unreadText: { color: "#FFFFFF", fontSize: 9, fontFamily: "Inter_700Bold" },
-  roleText: { textAlign: "right", writingDirection: "rtl", fontSize: 9, fontFamily: "Inter_500Medium", marginTop: 5 },
+  participantMetaLine: { width: "100%", flexDirection: "row", alignItems: "center", gap: 6, marginTop: 7, paddingTop: 6, borderTopWidth: 1 },
+  roleText: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 9, fontFamily: "Inter_500Medium" },
+  statusPill: { minHeight: 20, borderRadius: 8, paddingHorizontal: 6, flexDirection: "row", alignItems: "center", gap: 4, maxWidth: 94 },
+  statusPillDot: { width: 5, height: 5, borderRadius: 3 },
+  statusPillText: { fontSize: 8, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
   rowArrow: { width: 24, alignItems: "flex-start" },
   loading: { minHeight: 180, justifyContent: "center", alignItems: "center", gap: 10 },
   loadingText: { fontSize: 11, fontFamily: "Inter_400Regular", writingDirection: "rtl" },
-  safetyNote: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 7, borderWidth: 1, borderRadius: 14, padding: 11, marginTop: 8 },
+  safetyNoteWrap: { marginTop: 8 },
+  safetyNote: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 7, padding: 12 },
   safetyText: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 10, lineHeight: 16, fontFamily: "Inter_400Regular" },
   conversationMeta: { minHeight: 34, borderWidth: 1, borderRadius: 12, flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 7, paddingHorizontal: 11, marginBottom: 9 },
   onlineDot: { width: 7, height: 7, borderRadius: 4 },
@@ -1243,6 +1547,7 @@ const styles = StyleSheet.create({
   instantSessionButtonText: { fontSize: 11, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
   messageListFrame: { flex: 1, minHeight: 0 },
   messageList: { flexGrow: 1, justifyContent: "flex-end", paddingTop: 10, paddingBottom: 12, paddingHorizontal: 2 },
+  messageListEmpty: { justifyContent: "center" },
   messageRow: { width: "100%", marginBottom: 9 },
   messageBubble: { maxWidth: "86%", minWidth: 78, borderWidth: 1, borderRadius: 17, padding: 11 },
   messageSender: { textAlign: "right", writingDirection: "rtl", fontSize: 9, lineHeight: 13, fontFamily: "Inter_700Bold", marginBottom: 4 },

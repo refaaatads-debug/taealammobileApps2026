@@ -4,7 +4,7 @@ import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { EmptyState, Icon, Screen } from "@/components/AjyalUI";
+import { EmptyState, goBackOrHome, Icon, Screen } from "@/components/AjyalUI";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
@@ -45,12 +45,12 @@ function errorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-export default function SupportCenterScreen() {
+export default function SupportCenterScreen({ mode = "support" }: { mode?: "support" | "help" } = {}) {
   const colors = useColors();
   const { user } = useAuth();
   const { t, direction } = useAppPreferences();
   const insets = useSafeAreaInsets();
-  const [tab, setTab] = useState<SupportTab>("support");
+  const [tab, setTab] = useState<SupportTab>(mode === "help" ? "ai" : "support");
   const [tickets, setTickets] = useState<Row[]>([]);
   const [ticketId, setTicketId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Row[]>([]);
@@ -112,8 +112,12 @@ export default function SupportCenterScreen() {
   };
 
   useEffect(() => {
+    if (mode === "help") {
+      setLoading(false);
+      return;
+    }
     void loadTickets();
-  }, [user?.id]);
+  }, [user?.id, mode]);
 
   useEffect(() => {
     if (!ticketId || !supabase) {
@@ -164,7 +168,7 @@ export default function SupportCenterScreen() {
     setTicketId(id);
     setTicketSubject("");
     setShowNewTicket(false);
-    setTab("support");
+    setTab(mode === "help" ? "ai" : "support");
     setMessages([]);
     setSending(false);
     return id;
@@ -230,21 +234,25 @@ export default function SupportCenterScreen() {
     await loadMessages(id);
   };
 
-  const tabs: Array<{ id: SupportTab; label: string; icon: "headphones" }> = [
-    { id: "support", label: t("الدعم الفني", "Technical support"), icon: "headphones" },
-  ];
+  const tabs: Array<{ id: SupportTab; label: string; icon: "headphones" | "message-square" | "star" }> = mode === "help"
+    ? [
+        { id: "ai", label: t("المساعد الذكي", "AI assistant"), icon: "star" },
+        { id: "messages", label: t("الرسائل", "Messages"), icon: "message-square" },
+      ]
+    : [{ id: "support", label: t("الدعم الفني", "Technical support"), icon: "headphones" }];
 
   return (
     <Screen scroll={false} contentStyle={styles.screenContent}>
       <KeyboardAvoidingView style={styles.flex} behavior="padding" keyboardVerticalOffset={0}>
         <LinearGradient colors={[colors.teal, colors.primary]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.centerHeader}>
-          <Pressable onPress={() => router.back()} hitSlop={8} style={styles.headerIcon}><Icon name="x" size={17} color={colors.primaryForeground} /></Pressable>
+          <Pressable onPress={() => goBackOrHome()} hitSlop={8} style={styles.headerIcon}><Icon name="x" size={17} color={colors.primaryForeground} /></Pressable>
           <View style={styles.centerHeaderCopy}>
-            <Text style={[styles.centerHeaderTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{t("مركز تواصل أجيال المعرفة", "Ajyal Knowledge contact center")}</Text>
-            <Text style={[styles.centerHeaderBody, { color: colors.tint, writingDirection: direction }]}>{t("الدعم والإرشاد والمساعدة في مكان واحد", "Support, guidance, and help in one place")}</Text>
+            <Text style={[styles.centerHeaderEyebrow, { color: colors.tint, writingDirection: direction }]}>{mode === "help" ? t("تعلم وتواصل بسهولة", "Learn and connect easily") : t("نحن هنا لمساعدتك", "We are here to help")}</Text>
+            <Text style={[styles.centerHeaderTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{mode === "help" ? t("مركز المساعدة", "Help center") : t("تواصل مع الفريق", "Contact the team")}</Text>
+            <Text style={[styles.centerHeaderBody, { color: colors.tint, writingDirection: direction }]}>{mode === "help" ? t("المساعد والرسائل في مكان واحد", "Your assistant and messages in one place") : t("الدعم الفني والتذاكر في مكان واحد", "Technical support and tickets in one place")}</Text>
           </View>
           <View style={[styles.headerBubble, { backgroundColor: colors.navySoft }]}>
-            <Icon name="message-circle" size={21} color={colors.primaryForeground} />
+            <Icon name={mode === "help" ? "star" : "headphones"} size={21} color={colors.primaryForeground} />
             <View style={[styles.onlineDot, { backgroundColor: colors.teal }]} />
           </View>
         </LinearGradient>
@@ -253,7 +261,7 @@ export default function SupportCenterScreen() {
           {tabs.map((item) => {
             const active = tab === item.id;
             return (
-              <Pressable key={item.id} testID={`support-tab-${item.id}`} onPress={() => setTab(item.id)} style={[styles.tab, active && { backgroundColor: colors.muted }]}>
+              <Pressable key={item.id} testID={`support-tab-${item.id}`} onPress={() => setTab(item.id)} style={[styles.tab, { borderColor: active ? colors.primary : "transparent" }, active && { backgroundColor: colors.navySoft }]}>
                 <Icon name={item.icon} size={14} color={active ? colors.primary : colors.mutedForeground} />
                 <Text style={[styles.tabText, { color: active ? colors.primary : colors.mutedForeground, writingDirection: direction }]}>{item.label}</Text>
               </Pressable>
@@ -263,7 +271,7 @@ export default function SupportCenterScreen() {
 
         {tab === "support" ? (
           <View style={styles.flex}>
-            <View style={styles.sectionBar}>
+              <View style={[styles.sectionBar, { borderBottomColor: colors.border }]}>
               <View style={styles.sectionBarCopy}>
                 <Text style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction }]}>{ticketId ? text(currentTicket ?? {}, "subject") || t("طلب الدعم", "Support request") : t("الدعم الفني", "Technical support")}</Text>
                 <Text style={[styles.sectionSubtitle, { color: colors.mutedForeground, writingDirection: direction }]}>{ticketId ? t("محادثة مع فريق الدعم", "Conversation with support") : t("لديك طلبات وتواصل مع فريق الدعم", "Your requests and contact with support")}</Text>
@@ -275,9 +283,16 @@ export default function SupportCenterScreen() {
             </View>
             {showNewTicket ? (
               <View style={[styles.newTicketCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={[styles.newTicketIntro, { backgroundColor: colors.tealSoft }]}>
+                  <View style={[styles.newTicketIntroIcon, { backgroundColor: colors.teal }]}><Icon name="edit-3" size={15} color={colors.primaryForeground} /></View>
+                  <View style={styles.newTicketIntroCopy}>
+                    <Text style={[styles.newTicketIntroTitle, { color: colors.foreground, writingDirection: direction }]}>{t("كيف نساعدك اليوم؟", "How can we help today?")}</Text>
+                    <Text style={[styles.newTicketIntroBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("اكتب عنواناً مختصراً وسيتابع فريقنا طلبك.", "Add a short subject and our team will follow up.")}</Text>
+                  </View>
+                </View>
                 <TextInput value={ticketSubject} onChangeText={setTicketSubject} placeholder={t("اكتب عنوان المشكلة أو الاستفسار", "Describe the issue or question")} placeholderTextColor={colors.mutedForeground} textAlign="right" style={[styles.subjectInput, { color: colors.foreground, borderColor: colors.border }]} />
-                <Pressable disabled={!ticketSubject.trim() || sending} onPress={() => void createTicket()} style={[styles.fullButton, { backgroundColor: ticketSubject.trim() ? colors.teal : colors.muted }]}>
-                  {sending ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.fullButtonText, { color: ticketSubject.trim() ? colors.primaryForeground : colors.mutedForeground }]}>{t("إرسال الطلب", "Submit request")}</Text>}
+                <Pressable disabled={!ticketSubject.trim() || sending} onPress={() => void createTicket()} style={[styles.fullButton, { backgroundColor: ticketSubject.trim() ? colors.primary : colors.muted }]}>
+                  {sending ? <ActivityIndicator color={colors.primaryForeground} /> : <><Icon name="send" size={14} color={ticketSubject.trim() ? colors.primaryForeground : colors.mutedForeground} /><Text style={[styles.fullButtonText, { color: ticketSubject.trim() ? colors.primaryForeground : colors.mutedForeground }]}>{t("إرسال الطلب", "Submit request")}</Text></>}
                 </Pressable>
               </View>
             ) : null}
@@ -309,7 +324,7 @@ export default function SupportCenterScreen() {
             <View style={[styles.emptySupportIcon, { backgroundColor: colors.navySoft }]}><Icon name="message-square" size={27} color={colors.primary} /></View>
             <Text style={[styles.emptyTitle, { color: colors.foreground, writingDirection: direction }]}>{t("رسائلك التعليمية", "Your learning messages")}</Text>
             <Text style={[styles.emptyBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("افتح المحادثات المرتبطة بحجوزاتك وتواصل مع معلميك.", "Open booking conversations and contact your teachers.")}</Text>
-            <Pressable onPress={() => router.push("/chat")} style={[styles.fullButton, { backgroundColor: colors.primary }]}><Text style={[styles.fullButtonText, { color: colors.primaryForeground }]}>{t("فتح المحادثات", "Open messages")}</Text><Icon name="arrow-left" size={15} color={colors.primaryForeground} /></Pressable>
+            <Pressable onPress={() => router.push("/(tabs)/messages")} style={[styles.fullButton, { backgroundColor: colors.primary }]}><Text style={[styles.fullButtonText, { color: colors.primaryForeground }]}>{t("فتح المحادثات", "Open messages")}</Text><Icon name="arrow-left" size={15} color={colors.primaryForeground} /></Pressable>
           </View>
         ) : (
           <View style={styles.flex}>
@@ -320,7 +335,7 @@ export default function SupportCenterScreen() {
               </View>
               {!aiMessages.length ? <View style={styles.aiWelcome}><View style={[styles.aiWelcomeIcon, { backgroundColor: colors.navySoft }]}><Icon name="star" size={27} color={colors.primary} /></View><Text style={[styles.aiWelcomeTitle, { color: colors.foreground, writingDirection: direction }]}>{t("مرحباً 👋", "Hello 👋")}</Text><Text style={[styles.aiWelcomeBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("أنا مساعدك الذكي. اسألني عن باقتك أو حصصك أو واجباتك، ويمكنني تحويلك لفريق الدعم البشري.", "I’m your AI assistant. Ask about your plan, sessions, or assignments, and I can hand you to human support.")}</Text></View> : null}
               {aiMessages.map((message, index) => <View key={`${message.role}-${index}`} style={[styles.aiBubble, { alignSelf: message.role === "user" ? "flex-end" : "flex-start", backgroundColor: message.role === "user" ? colors.primary : colors.card, borderColor: colors.border }]}><Text style={[styles.aiBubbleText, { color: message.role === "user" ? colors.primaryForeground : colors.foreground, writingDirection: direction }]}>{message.content}</Text></View>)}
-              {aiTicketId ? <Pressable onPress={() => void handoffToSupport()} style={[styles.handoffButton, { backgroundColor: colors.tealSoft }]}><Icon name="headphones" size={15} color={colors.teal} /><Text style={[styles.handoffText, { color: colors.teal }]}>{t("فتح تذكرة الدعم", "Open support ticket")}</Text></Pressable> : null}
+              {mode !== "help" && aiTicketId ? <Pressable onPress={() => void handoffToSupport()} style={[styles.handoffButton, { backgroundColor: colors.tealSoft }]}><Icon name="headphones" size={15} color={colors.teal} /><Text style={[styles.handoffText, { color: colors.teal }]}>{t("فتح تذكرة الدعم", "Open support ticket")}</Text></Pressable> : null}
             </ScrollView>
             {!aiMessages.length ? <View style={styles.quickReplies}><Text style={[styles.quickLabel, { color: colors.mutedForeground, writingDirection: direction }]}>{t("اقتراحات سريعة:", "Quick suggestions:")}</Text><View style={styles.quickWrap}>{QUICK_REPLIES.map((reply) => <Pressable key={reply} onPress={() => void sendAiMessage(reply)} style={[styles.quickChip, { backgroundColor: colors.muted }]}><Text style={[styles.quickText, { color: colors.primary, writingDirection: direction }]}>{reply}</Text></Pressable>)}</View></View> : null}
              <View style={[styles.composerDock, { backgroundColor: colors.card, borderColor: colors.border, paddingBottom: Math.max(insets.bottom, 8) }]}>
@@ -339,24 +354,30 @@ export default function SupportCenterScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   screenContent: { paddingHorizontal: 10 },
-  centerHeader: { minHeight: 68, borderTopLeftRadius: 23, borderTopRightRadius: 23, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 10 },
+  centerHeader: { minHeight: 82, borderTopLeftRadius: 23, borderTopRightRadius: 23, paddingHorizontal: 13, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 10, shadowColor: "#173E8C", shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 3 },
   headerIcon: { width: 25, height: 25, alignItems: "center", justifyContent: "center" },
   centerHeaderCopy: { flex: 1, alignItems: "flex-end" },
+  centerHeaderEyebrow: { width: "100%", fontSize: 8, fontFamily: "Inter_600SemiBold", textAlign: "right", writingDirection: "rtl", marginBottom: 2 },
   centerHeaderTitle: { width: "100%", fontSize: 14, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl" },
   centerHeaderBody: { width: "100%", fontSize: 9, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 2 },
-  headerBubble: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center", position: "relative" },
+  headerBubble: { width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center", position: "relative", borderWidth: 2, borderColor: "rgba(255,255,255,0.28)" },
   onlineDot: { width: 10, height: 10, borderRadius: 5, position: "absolute", bottom: -1, left: 0, borderWidth: 2, borderColor: "#fff" },
-  tabs: { minHeight: 47, borderBottomWidth: 1, flexDirection: "row-reverse", alignItems: "center", padding: 4, gap: 3 },
-  tab: { flex: 1, minHeight: 38, borderRadius: 11, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6 },
-  tabText: { fontSize: 10, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
-  sectionBar: { minHeight: 62, paddingHorizontal: 13, flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 10, borderBottomWidth: 1, borderBottomColor: "#E8ECF2" },
+  tabs: { minHeight: 51, borderBottomWidth: 1, flexDirection: "row-reverse", alignItems: "center", padding: 5, gap: 4 },
+  tab: { flex: 1, minHeight: 40, borderRadius: 13, borderWidth: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 5 },
+  tabText: { fontSize: 9, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
+  sectionBar: { minHeight: 67, paddingHorizontal: 13, flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 10, borderBottomWidth: 1 },
   sectionBarCopy: { flex: 1, alignItems: "flex-end" },
   sectionTitle: { width: "100%", fontSize: 15, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl" },
   sectionSubtitle: { width: "100%", fontSize: 9, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 2 },
-  newTicketButton: { minHeight: 34, borderRadius: 17, paddingHorizontal: 11, flexDirection: "row-reverse", alignItems: "center", gap: 5 },
+  newTicketButton: { minHeight: 36, borderRadius: 18, paddingHorizontal: 12, flexDirection: "row-reverse", alignItems: "center", gap: 5, shadowColor: "#173E8C", shadowOpacity: 0.16, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
   newTicketText: { fontSize: 10, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
-  newTicketCard: { borderWidth: 1, borderRadius: 15, padding: 10, margin: 10 },
-  subjectInput: { minHeight: 43, borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, fontSize: 11, fontFamily: "Inter_400Regular", writingDirection: "rtl" },
+  newTicketCard: { borderWidth: 1, borderRadius: 19, padding: 11, margin: 10, shadowColor: "#173E8C", shadowOpacity: 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
+  newTicketIntro: { minHeight: 51, borderRadius: 14, padding: 8, flexDirection: "row-reverse", alignItems: "center", gap: 8, marginBottom: 9 },
+  newTicketIntroIcon: { width: 32, height: 32, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  newTicketIntroCopy: { flex: 1, alignItems: "flex-end" },
+  newTicketIntroTitle: { width: "100%", fontSize: 11, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl" },
+  newTicketIntroBody: { width: "100%", fontSize: 8, lineHeight: 13, fontFamily: "Inter_400Regular", textAlign: "right", writingDirection: "rtl", marginTop: 2 },
+  subjectInput: { minHeight: 46, borderWidth: 1, borderRadius: 13, paddingHorizontal: 11, fontSize: 11, fontFamily: "Inter_400Regular", writingDirection: "rtl", backgroundColor: "transparent" },
   fullButton: { minHeight: 42, borderRadius: 13, paddingHorizontal: 14, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 9 },
   fullButtonText: { fontSize: 11, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
   messages: { flex: 1 },

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
-import { Header, Icon, Screen } from "@/components/AjyalUI";
+import { goBackOrHome, Header, Icon, Screen } from "@/components/AjyalUI";
 import { useColors } from "@/hooks/useColors";
 import { getAuthRedirectUri } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
@@ -73,7 +73,7 @@ export default function ForgotPasswordScreen() {
             </Pressable>
           </>
         )}
-        <Pressable onPress={() => router.back()} style={styles.back}>
+        <Pressable onPress={() => goBackOrHome()} style={styles.back}>
           <Text style={[styles.backText, { color: colors.teal }]}>العودة إلى تسجيل الدخول</Text>
         </Pressable>
       </View>

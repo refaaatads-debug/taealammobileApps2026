@@ -47,11 +47,12 @@ import type {
   MobileTokenExchangeSuccess,
   NotFoundResponse,
   Notification,
+  PushDeliveryResult,
+  PushNotificationRequest,
   PushTokenRegistrationResult,
   ReadAllNotificationsResult,
   RegisterPushTokenRequest,
   Session,
-  SessionInput,
   StudentDashboard,
   StudentSummary,
   TeacherDashboard,
@@ -777,6 +778,77 @@ export const useUnregisterPushToken = <TError = ErrorType<UnauthorizedResponse>,
       return useMutation(getUnregisterPushTokenMutationOptions(options));
     }
 
+export const getSendUserNotificationUrl = () => {
+
+
+
+
+  return `/api/push/notifications`
+}
+
+/**
+ * @summary Send a regular notification to an authenticated user's device
+ */
+export const sendUserNotification = async (pushNotificationRequest: PushNotificationRequest, options?: Parameters<typeof customFetch>[1]): Promise<PushDeliveryResult> => {
+
+  return customFetch<PushDeliveryResult>(getSendUserNotificationUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(pushNotificationRequest)
+  }
+);}
+
+
+
+
+
+export const getSendUserNotificationMutationOptions = <TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof sendUserNotification>>, TError,{data: BodyType<PushNotificationRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof sendUserNotification>>, TError,{data: BodyType<PushNotificationRequest>}, TContext> => {
+
+const mutationKey = ['sendUserNotification'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof sendUserNotification>>, {data: BodyType<PushNotificationRequest>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  sendUserNotification(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SendUserNotificationMutationResult = NonNullable<Awaited<ReturnType<typeof sendUserNotification>>>
+    export type SendUserNotificationMutationBody = BodyType<PushNotificationRequest>
+    export type SendUserNotificationMutationError = ErrorType<BadRequestResponse | UnauthorizedResponse>
+
+    /**
+ * @summary Send a regular notification to an authenticated user's device
+ */
+export const useSendUserNotification = <TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof sendUserNotification>>, TError,{data: BodyType<PushNotificationRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof sendUserNotification>>,
+        TError,
+        {data: BodyType<PushNotificationRequest>},
+        TContext
+      > => {
+      return useMutation(getSendUserNotificationMutationOptions(options));
+    }
+
 export const getSendIncomingCallUrl = () => {
 
 
@@ -1306,77 +1378,6 @@ export function useGetStudentDashboard<TData = Awaited<ReturnType<typeof getStud
 
 
 
-
-export const getCreateSessionUrl = () => {
-
-
-
-
-  return `/api/student/dashboard`
-}
-
-/**
- * @summary Create a lesson booking
- */
-export const createSession = async (sessionInput: SessionInput, options?: Parameters<typeof customFetch>[1]): Promise<Session> => {
-
-  return customFetch<Session>(getCreateSessionUrl(),
-  {
-    ...options,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    body: JSON.stringify(sessionInput)
-  }
-);}
-
-
-
-
-
-export const getCreateSessionMutationOptions = <TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSession>>, TError,{data: BodyType<SessionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
-): UseMutationOptions<Awaited<ReturnType<typeof createSession>>, TError,{data: BodyType<SessionInput>}, TContext> => {
-
-const mutationKey = ['createSession'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSession>>, {data: BodyType<SessionInput>}> = (props) => {
-          const {data} = props ?? {};
-
-          return  createSession(data,requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type CreateSessionMutationResult = NonNullable<Awaited<ReturnType<typeof createSession>>>
-    export type CreateSessionMutationBody = BodyType<SessionInput>
-    export type CreateSessionMutationError = ErrorType<BadRequestResponse | UnauthorizedResponse>
-
-    /**
- * @summary Create a lesson booking
- */
-export const useCreateSession = <TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSession>>, TError,{data: BodyType<SessionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
- ): UseMutationResult<
-        Awaited<ReturnType<typeof createSession>>,
-        TError,
-        {data: BodyType<SessionInput>},
-        TContext
-      > => {
-      return useMutation(getCreateSessionMutationOptions(options));
-    }
 
 export const getListTeachersUrl = (params?: ListTeachersParams,) => {
   const normalizedParams = new URLSearchParams();

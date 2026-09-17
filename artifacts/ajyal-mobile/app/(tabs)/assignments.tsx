@@ -134,6 +134,7 @@ export default function AssignmentsScreen() {
   const [savingGradeSubmissionId, setSavingGradeSubmissionId] = useState<string | null>(null);
   const [submissionCounts, setSubmissionCounts] = useState<Record<string, number>>({});
   const [studentSubmissions, setStudentSubmissions] = useState<SubmissionRow[]>([]);
+  const [studentSubmissionsError, setStudentSubmissionsError] = useState<string | null>(null);
   const [activeAssignment, setActiveAssignment] = useState<AssignmentDetail | null>(null);
   const [activeSubmission, setActiveSubmission] = useState<SubmissionRow | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -149,21 +150,24 @@ export default function AssignmentsScreen() {
   const assignmentIdsKey = useMemo(() => assignments.map((assignment) => assignment.id).join(','), [assignments]);
   const loadStudentSubmissions = useCallback(async () => {
     if (role !== 'student' || !userId || !supabase) return;
+    setStudentSubmissionsError(null);
     const result = await supabase
       .from('assignment_submissions')
       .select('*')
       .eq('student_id', userId)
       .order('submitted_at', { ascending: false });
-    if (!result.error) {
-      const rows = (result.data ?? []) as SubmissionRow[];
-      setStudentSubmissions(rows);
-      setActiveSubmission((current) => {
-        if (!current) return current;
-        const assignmentId = rowText(current, 'assignment_id');
-        return rows.find((submission) => rowText(submission, 'assignment_id') === assignmentId) ?? current;
-      });
+    if (result.error) {
+      setStudentSubmissionsError(result.error.message || t('تعذر تحميل التسليمات السابقة.', 'Could not load previous submissions.'));
+      return;
     }
-  }, [role, userId]);
+    const rows = (result.data ?? []) as SubmissionRow[];
+    setStudentSubmissions(rows);
+    setActiveSubmission((current) => {
+      if (!current) return current;
+      const assignmentId = rowText(current, 'assignment_id');
+      return rows.find((submission) => rowText(submission, 'assignment_id') === assignmentId) ?? current;
+    });
+  }, [role, t, userId]);
   useEffect(() => {
     void loadStudentSubmissions();
   }, [loadStudentSubmissions]);
@@ -412,6 +416,25 @@ export default function AssignmentsScreen() {
         if (signed.error) throw signed.error;
         audioUrl = signed.data?.signedUrl ?? null;
       }
+      const existing = await supabase
+        .from('assignment_submissions')
+        .select('*')
+        .eq('assignment_id', activeAssignment.id)
+        .eq('student_id', userId)
+        .order('submitted_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existing.error) throw existing.error;
+      if (existing.data) {
+        setActiveSubmission(existing.data as SubmissionRow);
+        setStudentSubmissions((current) => [
+          existing.data as SubmissionRow,
+          ...current.filter((submission) => rowText(submission, 'assignment_id') !== activeAssignment.id),
+        ]);
+        setSubmitting(false);
+        Alert.alert(t('تم العثور على تسليم سابق', 'Previous submission found'), t('لن ننشئ تسليماً مكرراً لهذه المهمة.', 'A duplicate submission was prevented for this assignment.'));
+        return;
+      }
       const result = await supabase.from('assignment_submissions').insert({
         assignment_id: activeAssignment.id,
         student_id: userId,
@@ -507,6 +530,15 @@ export default function AssignmentsScreen() {
            <Icon name="refresh-cw" size={13} color={colors.secondaryForeground} /><Text style={[styles.newButtonText, { color: colors.secondaryForeground }]}>{t('تحديث', 'Refresh')}</Text>
         </Pressable>
       </View>
+      {role === 'student' && studentSubmissionsError ? (
+        <View style={[styles.reviewErrorBanner, { backgroundColor: colors.goldSoft, borderColor: colors.border }]}>
+          <Icon name="alert-circle" size={16} color={colors.destructive} />
+          <Text style={[styles.reviewErrorBannerText, { color: colors.foreground }]}>{studentSubmissionsError}</Text>
+          <Pressable testID="retry-assignment-submissions" onPress={() => void loadStudentSubmissions()} style={({ pressed }) => [styles.retryInline, pressed && styles.pressed]}>
+            <Text style={[styles.newButtonText, { color: colors.teal }]}>{t('إعادة المحاولة', 'Retry')}</Text>
+          </Pressable>
+        </View>
+      ) : null}
       <View style={[styles.filters, { borderBottomColor: colors.border }]}>
          {(['all', 'assignments', 'quizzes'] as const).map((item) => <Pressable key={item} onPress={() => setFilter(item)} style={({ pressed }) => [styles.filter, filter === item && { borderBottomColor: colors.teal, borderBottomWidth: 2 }, pressed && styles.pressed]}><Text style={[styles.filterText, { color: filter === item ? colors.teal : colors.mutedForeground, writingDirection: direction }]}>{item === 'all' ? t('الكل', 'All') : item === 'assignments' ? t('واجبات', 'Assignments') : t('اختبارات', 'Quizzes')}</Text></Pressable>)}
       </View>
@@ -779,6 +811,9 @@ const styles = StyleSheet.create({
   breakdownRow: { borderWidth: 1, borderRadius: 10, padding: 9, marginTop: 7 },
   reviewState: { alignItems: 'center', paddingVertical: 22, gap: 8 },
   reviewError: { fontSize: 11, lineHeight: 18, textAlign: 'right', writingDirection: 'rtl', paddingVertical: 18 },
+  reviewErrorBanner: { borderWidth: 1, borderRadius: 12, minHeight: 46, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  reviewErrorBannerText: { flex: 1, fontSize: 11, lineHeight: 17, textAlign: 'right', writingDirection: 'rtl' },
+  retryInline: { paddingVertical: 7, paddingHorizontal: 4 },
   reviewEmpty: { textAlign: 'center', paddingVertical: 24, fontSize: 11, fontFamily: 'Inter_400Regular' },
   submission: { borderWidth: 1, borderRadius: 13, padding: 11, marginBottom: 8 },
   submissionTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },

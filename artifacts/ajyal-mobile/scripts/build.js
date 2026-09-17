@@ -6,7 +6,11 @@ const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 
 let metroProcess = null;
-let metroPort = Number(process.env.EXPO_BUILD_PORT || process.env.PORT || 8081);
+const configuredPort = Number(process.env.PORT || 8081);
+let metroPort = Number(
+  process.env.EXPO_BUILD_PORT ||
+    (process.env.PORT ? configuredPort + 100 : configuredPort),
+);
 
 const projectRoot = path.resolve(__dirname, '..');
 
@@ -86,10 +90,6 @@ function prepareDirectories(timestamp) {
     path.join(staticBuild, 'android'),
   ];
 
-  for (const dir of dirs) {
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
-  }
-
   const timestampDir = path.join(staticBuild, timestamp);
   if (fs.existsSync(timestampDir)) {
     fs.rmSync(timestampDir, { recursive: true, force: true });
@@ -156,6 +156,8 @@ async function startMetro(expoPublicDomain, expoPublicReplId) {
   console.log(`Setting EXPO_PUBLIC_DOMAIN=${expoPublicDomain}`);
   const env = {
     ...process.env,
+    EXPO_UNSTABLE_HEADLESS: '1',
+    EXPO_NO_DEPENDENCY_VALIDATION: '1',
     EXPO_PUBLIC_DOMAIN: expoPublicDomain,
     EXPO_PUBLIC_REPL_ID: expoPublicReplId,
     RCT_METRO_PORT: String(metroPort),
@@ -167,7 +169,18 @@ async function startMetro(expoPublicDomain, expoPublicReplId) {
 
   metroProcess = spawn(
     'pnpm',
-    ['exec', 'expo', 'start', '--no-dev', '--minify', '--localhost', '--port', String(metroPort)],
+    [
+      'exec',
+      'expo',
+      'start',
+      '--no-dev',
+      '--minify',
+      '--localhost',
+      '--port',
+      String(metroPort),
+      '--max-workers',
+      '1',
+    ],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,

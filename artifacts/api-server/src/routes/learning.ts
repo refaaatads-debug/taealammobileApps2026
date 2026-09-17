@@ -131,6 +131,22 @@ async function dashboardOperation<T>(
   }
 }
 
+async function optionalDashboardOperation<T>(
+  req: Request,
+  operation: string,
+  fallback: T,
+  degradedSections: string[],
+  callback: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await callback();
+  } catch (error) {
+    req.log.error({ operation, ...dashboardErrorMetadata(error) }, "Dashboard section unavailable");
+    if (!degradedSections.includes(operation)) degradedSections.push(operation);
+    return fallback;
+  }
+}
+
 function remoteNestedRow(row: RemoteRow, key: string): RemoteRow | undefined {
   const value = row[key];
   return value && typeof value === "object" && !Array.isArray(value) ? value as RemoteRow : undefined;
@@ -176,6 +192,71 @@ async function remoteProfiles(accessToken: string, ids: string[]): Promise<Map<s
     select: "*",
   });
   return new Map(rows.map((row) => [String(row.user_id), row]));
+}
+
+async function maybeCreateFirstImpressionNotification(
+  accessToken: string,
+  teacherId: string,
+  studentId: string,
+  studentName: string,
+  justCreatedBookingIds: string[],
+): Promise<void> {
+  try {
+    // Match the original platform: this is a one-time, platform-wide claim
+    // for the student, not a recurring teacher/student-pair notification.
+    const existingClaims = await supabaseTable<RemoteRow>(accessToken, "teacher_first_impressions", {
+      student_id: `eq.${studentId}`,
+      select: "id",
+      limit: "1",
+    });
+    if (existingClaims.length) return;
+
+    const bookingQuery: Record<string, string> = {
+      student_id: `eq.${studentId}`,
+      select: "id",
+      limit: "1",
+    };
+    if (justCreatedBookingIds.length) {
+      bookingQuery.id = `not.in.(${justCreatedBookingIds.join(",")})`;
+    }
+    const priorBookings = await supabaseTable<RemoteRow>(accessToken, "bookings", bookingQuery);
+    if (priorBookings.length) return;
+
+    // The table's uniqueness/RLS contract is the concurrency guard used by
+    // the main platform. A conflict means another acceptance already claimed
+    // this student's first-impression notification.
+    const claimed = await supabaseTable<RemoteRow>(accessToken, "teacher_first_impressions", {}, {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ teacher_id: teacherId, student_id: studentId }),
+    });
+    if (!claimed.length) return;
+
+    const title = "✨ تذكير مهم: الانطباع الأول";
+    const body = `الطالب ${studentName || "هذا الطالب"} يحجز معك للمرة الأولى. الجلسة الأولى تترك أثرًا دائمًا — كن إيجابيًا، مهنيًا، ولطيفًا. كل طالب هو عميل مهم، تصرّف باحتراف والتزام. كن جاهزًا قبل الجلسة، وحدّد المادة أو الموضوع المطلوب، وراجع أي ملاحظات أو أهداف خاصة، وابدأ على الموعد تمامًا.`;
+    await supabaseTable<RemoteRow>(accessToken, "notifications", {}, {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: teacherId,
+        title,
+        body,
+        type: "first_impression",
+      icon: "star",
+      }),
+    });
+    void sendUserPushNotification(teacherId, {
+      title,
+      body,
+      data: {
+        type: "first_impression",
+        route: "/bookings",
+        dedupeKey: `first-impression:${teacherId}:${studentId}`,
+      },
+    });
+  } catch {
+    // The booking remains authoritative if the optional first-impression
+    // reminder cannot be claimed or delivered.
+  }
 }
 
 function requestMatchesBooking(request: RemoteRow, booking: RemoteRow) {
@@ -781,7 +862,11 @@ router.post("/booking-requests", async (req, res): Promise<void> => {
       await Promise.all(notificationTeacherIds.map((teacherId) => sendUserPushNotification(teacherId, {
         title: notificationTitle,
         body: notificationBody,
-        data: { type: "booking_request", route: "/bookings" },
+        data: {
+          type: "booking_request",
+          route: "/bookings",
+          bookingId: String(created[0].id),
+        },
       })));
     }
   } catch {
@@ -955,7 +1040,11 @@ router.post("/booking-requests/group", async (req, res): Promise<void> => {
       await Promise.all(notificationTeacherIds.map((teacherId) => sendUserPushNotification(teacherId, {
         title: notificationTitle,
         body: notificationBody,
-        data: { type: "booking_request", route: "/bookings" },
+        data: {
+          type: "booking_request",
+          route: "/bookings",
+          bookingId: groupId,
+        },
       })));
     }
   } catch {
@@ -1128,8 +1217,17 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
     }
     const teacherProfile = await getSupabaseProfile(supabaseToken, userId);
     const teacherName = remoteString(teacherProfile ?? {}, "full_name", "display_name") ?? "معلمك";
+    const studentProfiles = await remoteProfiles(supabaseToken, [studentId]);
+    const studentName = remotePersonName(studentProfiles.get(studentId));
     const subjectName = remoteString(remoteNestedRow(request, "subjects") ?? {}, "name") ?? "المادة";
     const count = bookings.length;
+    await maybeCreateFirstImpressionNotification(
+      supabaseToken,
+      userId,
+      studentId,
+      studentName,
+      bookings.map((booking) => String(booking.id)),
+    );
     try {
       await supabaseTable<RemoteRow>(supabaseToken, "notifications", {}, {
         method: "POST",
@@ -1140,6 +1238,7 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
             ? `أكّد المعلم ${teacherName} جميع حصصك في ${subjectName}. راجع جدولك للاطلاع على المواعيد.`
             : `أكّد المعلم ${teacherName} حجز حصة ${subjectName}. جهّز نفسك للحصة في موعدها.`,
           type: "booking_confirmed",
+          icon: "check-circle",
         }),
       });
       void sendUserPushNotification(studentId, {
@@ -1147,7 +1246,11 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
         body: count > 1
           ? `أكّد المعلم ${teacherName} جميع حصصك في ${subjectName}.`
           : `أكّد المعلم ${teacherName} حجز حصة ${subjectName}.`,
-        data: { type: "booking_confirmed", route: "/bookings" },
+        data: {
+          type: "booking_confirmed",
+          route: "/bookings",
+          bookingId: String(bookings[0].id),
+        },
       });
     } catch {
       // Notification delivery is best effort after the booking is confirmed.
@@ -1187,6 +1290,7 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
             ? `رفض المعلم ${teacherName} طلباتك في ${subjectName}. يمكنك اختيار موعد أو معلم آخر.`
             : `رفض المعلم ${teacherName} طلب حصة ${subjectName}. يمكنك اختيار موعد أو معلم آخر.`,
           type: "booking_rejected",
+          icon: "alert-circle",
         }),
       });
       void sendUserPushNotification(studentId, {
@@ -1194,7 +1298,11 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
         body: rejectedCount > 1
           ? `رفض المعلم ${teacherName} طلباتك في ${subjectName}.`
           : `رفض المعلم ${teacherName} طلب حصة ${subjectName}.`,
-        data: { type: "booking_rejected", route: "/bookings" },
+        data: {
+          type: "booking_rejected",
+          route: "/bookings",
+          bookingId: params.data.id,
+        },
       });
     } catch {
       // Rejection is authoritative even if notification delivery fails.
@@ -1206,6 +1314,15 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
     limit: "1",
   });
   if (!updated[0]) {
+    // Rejection is performed by the security-definer RPC. The teacher's RLS
+    // policy may hide the now-rejected row from the follow-up SELECT even
+    // though the RPC completed successfully. Return the authoritative
+    // request snapshot so a successful rejection is not reported as a 404.
+    if (parsed.data.status === "rejected") {
+      const data = mapRemoteBookingRequest({ ...request, status: "rejected" }, null);
+      res.json(DecideBookingRequestResponse.parse(data));
+      return;
+    }
     res.status(404).json({ error: "Booking request was not updated" });
     return;
   }
@@ -1299,14 +1416,93 @@ function mapRemoteAssignment(row: RemoteRow) {
 
 function mapRemoteNotification(row: RemoteRow) {
   const createdAt = remoteDate(row, "created_at", "createdAt");
+  const type = remoteString(row, "type", "notification_type");
+  const title = remoteString(row, "title") ?? "إشعار";
+  const body = remoteString(row, "body", "message") ?? "";
+  const explicitRoute = remoteString(row, "route");
+  const route = explicitRoute ?? notificationRouteForType(type, title, body, remoteString(row, "icon") ?? "");
+  const bookingId = remoteString(row, "booking_id", "bookingId");
   return {
     id: String(row.id),
-    title: remoteString(row, "title") ?? "إشعار",
-    body: remoteString(row, "body", "message") ?? "",
+    title,
+    body,
     time: notificationTime(createdAt),
     icon: remoteString(row, "icon") ?? "bell",
     unread: row.is_read !== true,
+    ...(type ? { type } : {}),
+    ...(route ? { route } : {}),
+    ...(bookingId ? { bookingId } : {}),
   };
+}
+
+function notificationRouteForType(type: string | null, title = "", body = "", icon = ""): string | null {
+  switch (type) {
+    case "booking_request":
+    case "booking_confirmed":
+    case "booking_accepted":
+    case "booking_rejected":
+    case "booking_cancelled":
+    case "session_reminder":
+    case "session_starting":
+    case "session_started":
+    case "session_ended":
+    case "instant_session":
+    case "first_impression":
+    case "expired_no_show":
+    case "no_show":
+    case "booking_expired":
+    case "session_auto_cancelled":
+    case "automatic_cancellation":
+    case "session_cancelled":
+      return "/bookings";
+    case "chat_message":
+    case "message":
+    case "new_message":
+      return "/messages";
+    case "assignment_submission":
+    case "assignment_graded":
+      return "/assignments";
+    case "support_reply":
+    case "support_message":
+    case "support_ticket":
+    case "support_response":
+    case "support_ticket_reply":
+    case "ticket_reply":
+      return "/support";
+    case "payment":
+    case "subscription":
+    case "subscription_updated":
+      return "/subscription";
+    case "invoice":
+      return "/invoices";
+    case "teacher_cancellation_warning":
+    case "first_impression_review":
+    case "admin_announcement":
+    case "announcement":
+    case "system_notification":
+    case "notification":
+      return "/notifications";
+    default:
+      break;
+  }
+
+  const searchableText = `${title} ${body}`.toLowerCase();
+  if (
+    searchableText.includes("خدمة العملاء")
+    || searchableText.includes("الدعم الفني")
+    || searchableText.includes("support")
+    || searchableText.includes("ticket")
+  ) return "/support";
+  if (
+    searchableText.includes("إلغاء الحصة")
+    || searchableText.includes("الغاء الحصة")
+    || searchableText.includes("expired_no_show")
+    || searchableText.includes("no_show")
+  ) return "/bookings";
+  if (icon === "calendar" || icon === "check-circle") return "/bookings";
+  if (icon === "message-circle") return "/messages";
+  if (icon === "credit-card") return "/subscription";
+  return null;
 }
 
 router.get("/sessions", async (req, res): Promise<void> => {
@@ -1323,8 +1519,13 @@ router.get("/sessions", async (req, res): Promise<void> => {
     res.status(401).json({ error: "Supabase Bearer token required for platform sessions" });
     return;
   }
-  res.json(ListMySessionsResponse.parse(await listRemoteSessions(supabaseToken, userId, view)));
-  return;
+  try {
+    const sessions = await listRemoteSessions(supabaseToken, userId, view);
+    res.json(ListMySessionsResponse.parse(sessions));
+  } catch (error) {
+    req.log.error({ operation: "list_sessions", ...dashboardErrorMetadata(error) }, "Sessions lookup failed");
+    res.status(502).json({ error: "Unable to load sessions" });
+  }
 });
 
 router.get("/student/dashboard", async (req, res): Promise<void> => {
@@ -1343,15 +1544,16 @@ router.get("/student/dashboard", async (req, res): Promise<void> => {
   try {
     const now = new Date();
     const nowIso = now.toISOString();
+    const degradedSections: string[] = [];
     const [profile, upcomingSessions, bookings, subscriptions, openRequests, unreadNotifications, pointsRows] = await Promise.all([
     dashboardOperation(req, "profile", () => getSupabaseProfile(supabaseToken, userId)),
-    dashboardOperation(req, "upcoming_sessions", () => listRemoteSessions(supabaseToken, userId, "upcoming")),
-    dashboardOperation(req, "booking_history", () => supabaseTable<RemoteRow>(supabaseToken, "bookings", {
+    optionalDashboardOperation(req, "upcoming_sessions", [], degradedSections, () => listRemoteSessions(supabaseToken, userId, "upcoming")),
+    optionalDashboardOperation(req, "booking_history", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "bookings", {
       student_id: `eq.${userId}`,
       status: "in.(completed,cancelled)",
       select: "status",
     })),
-    dashboardOperation(req, "subscriptions", () => supabaseTable<RemoteRow>(supabaseToken, "user_subscriptions", {
+    optionalDashboardOperation(req, "subscriptions", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "user_subscriptions", {
       user_id: `eq.${userId}`,
       is_active: "eq.true",
       remaining_minutes: "gt.0",
@@ -1359,18 +1561,18 @@ router.get("/student/dashboard", async (req, res): Promise<void> => {
       select: "plan_id,remaining_minutes,sessions_remaining,ends_at",
       order: "ends_at.asc",
     })),
-    dashboardOperation(req, "open_booking_requests", () => supabaseTable<RemoteRow>(supabaseToken, "booking_requests", {
+    optionalDashboardOperation(req, "open_booking_requests", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "booking_requests", {
       student_id: `eq.${userId}`,
       status: "eq.open",
       or: `(expires_at.is.null,expires_at.gte.${nowIso})`,
       select: "id",
     })),
-    dashboardOperation(req, "unread_notifications", () => supabaseTable<RemoteRow>(supabaseToken, "notifications", {
+    optionalDashboardOperation(req, "unread_notifications", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "notifications", {
       user_id: `eq.${userId}`,
       is_read: "eq.false",
       select: "id",
     })),
-    dashboardOperation(req, "student_points", () => supabaseTable<RemoteRow>(supabaseToken, "student_points", {
+    optionalDashboardOperation(req, "student_points", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "student_points", {
       user_id: `eq.${userId}`,
       select: "total_points",
       limit: "1",
@@ -1385,7 +1587,7 @@ router.get("/student/dashboard", async (req, res): Promise<void> => {
     .map((row) => remoteString(row, "plan_id", "planId"))
     .filter((id): id is string => Boolean(id)))];
     const plans = planIds.length
-    ? await dashboardOperation(req, "subscription_plans", () => supabaseTable<RemoteRow>(supabaseToken, "subscription_plans", {
+    ? await optionalDashboardOperation(req, "subscription_plans", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "subscription_plans", {
         id: `in.(${planIds.join(",")})`,
         select: "id,name_ar,tier,session_duration_minutes",
       }))
@@ -1428,6 +1630,7 @@ router.get("/student/dashboard", async (req, res): Promise<void> => {
     openBookingRequests: openRequests.length,
     unreadNotifications: unreadNotifications.length,
     upcomingSessions,
+     degradedSections,
     });
   } catch (error) {
     res.status(502).json({ error: "Unable to load student dashboard" });
@@ -1449,69 +1652,82 @@ router.get("/teacher/dashboard", async (req, res): Promise<void> => {
 
   const now = new Date();
   const month = now.toISOString().slice(0, 7);
+  const degradedSections: string[] = [];
   const [teacherProfiles, openRequests, scheduledBookings, liveBookings, waitingBookings, earnings, bookingStudents, unreadNotifications, warnings] = await Promise.all([
-    supabaseTable<RemoteRow>(supabaseToken, "teacher_profiles", {
+    optionalDashboardOperation(req, "teacher_profile", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "teacher_profiles", {
       user_id: `eq.${teacherId}`,
       select: "is_approved,total_sessions,avg_rating",
       limit: "1",
-    }),
-    supabaseTable<RemoteRow>(supabaseToken, "booking_requests", {
+    })),
+    optionalDashboardOperation(req, "open_booking_requests", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "booking_requests", {
       status: "eq.open",
       expires_at: `gte.${now.toISOString()}`,
       select: "id,subject_id,teaching_stage",
-    }),
-    supabaseTable<RemoteRow>(supabaseToken, "bookings", {
+    })),
+    optionalDashboardOperation(req, "upcoming_sessions", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "bookings", {
       teacher_id: `eq.${teacherId}`,
       status: "eq.confirmed",
       scheduled_at: `gt.${now.toISOString()}`,
       select: "*,subjects(name)",
       order: "scheduled_at.asc",
       limit: "10",
-    }),
-    supabaseTable<RemoteRow>(supabaseToken, "bookings", {
+    })),
+    optionalDashboardOperation(req, "live_sessions", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "bookings", {
       teacher_id: `eq.${teacherId}`,
       status: "eq.confirmed",
       session_status: "eq.in_progress",
       select: "*,subjects(name)",
       order: "scheduled_at.desc",
       limit: "5",
-    }),
-    supabaseTable<RemoteRow>(supabaseToken, "bookings", {
+    })),
+    optionalDashboardOperation(req, "waiting_sessions", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "bookings", {
       teacher_id: `eq.${teacherId}`,
       status: "eq.confirmed",
       session_status: "eq.waiting_acceptance",
       select: "*,subjects(name)",
       order: "scheduled_at.desc",
       limit: "10",
-    }),
-    supabaseTable<RemoteRow>(supabaseToken, "teacher_earnings", {
+    })),
+    optionalDashboardOperation(req, "earnings", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "teacher_earnings", {
       teacher_id: `eq.${teacherId}`,
       month: `eq.${month}`,
       select: "amount",
-    }),
-    supabaseTable<RemoteRow>(supabaseToken, "bookings", {
+    })),
+    optionalDashboardOperation(req, "students", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "bookings", {
       teacher_id: `eq.${teacherId}`,
       select: "student_id",
-    }),
-    supabaseTable<RemoteRow>(supabaseToken, "notifications", {
+    })),
+    optionalDashboardOperation(req, "unread_notifications", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "notifications", {
       user_id: `eq.${teacherId}`,
       is_read: "eq.false",
       select: "id",
-    }),
-    supabaseTable<RemoteRow>(supabaseToken, "user_warnings", {
+    })),
+    optionalDashboardOperation(req, "warnings", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "user_warnings", {
       user_id: `eq.${teacherId}`,
       select: "id",
-    }),
+    })),
   ]);
 
   const profile = teacherProfiles[0] ?? {};
-  const eligibleOpenRequests = await filterRequestsForTeacher(supabaseToken, teacherId, openRequests);
+  const eligibleOpenRequests = await optionalDashboardOperation(
+    req,
+    "open_booking_requests_filter",
+    [],
+    degradedSections,
+    () => filterRequestsForTeacher(supabaseToken, teacherId, openRequests),
+  );
   const bookingRows = [...liveBookings, ...waitingBookings, ...scheduledBookings];
   const uniqueBookings = [...new Map(bookingRows.map((row) => [String(row.id), row])).values()];
   const studentIds = [...new Set(bookingStudents
     .map((row) => remoteString(row, "student_id", "studentId"))
     .filter((id): id is string => Boolean(id)))];
-  const people = await remoteProfiles(supabaseToken, [teacherId, ...studentIds]);
+  const people = await optionalDashboardOperation(
+    req,
+    "participant_profiles",
+    new Map<string, RemoteRow>(),
+    degradedSections,
+    () => remoteProfiles(supabaseToken, [teacherId, ...studentIds]),
+  );
   const dashboard = {
     teacherApproved: profile.is_approved === true,
     stats: {
@@ -1524,6 +1740,7 @@ router.get("/teacher/dashboard", async (req, res): Promise<void> => {
     unreadNotifications: unreadNotifications.length,
     warningCount: warnings.length,
     upcomingSessions: uniqueBookings.slice(0, 10).map((row) => mapRemoteSession(row, teacherId, people)),
+     degradedSections,
   };
   res.json(GetTeacherDashboardResponse.parse(dashboard));
 });
@@ -1627,7 +1844,11 @@ router.patch("/sessions/:id/cancel", async (req, res): Promise<void> => {
         body: isTeacher
           ? `قام المعلم ${teacherName} بإلغاء حصة ${subjectName}.`
           : `قام الطالب بإلغاء حصة ${subjectName}.`,
-        data: { type: "booking_cancelled", bookingId: params.data.id, route: "/bookings" },
+        data: {
+          type: "booking_cancelled",
+          bookingId: params.data.id,
+          route: "/bookings",
+        },
       });
     } catch {
       // Cancellation state is authoritative even if notification delivery fails.
@@ -1644,8 +1865,8 @@ router.patch("/sessions/:id/cancel", async (req, res): Promise<void> => {
           });
           await Promise.all(admins.map((admin) => {
             const adminId = remoteString(admin, "user_id");
-            return adminId
-              ? supabaseTable<RemoteRow>(supabaseToken, "notifications", {}, {
+            if (!adminId) return Promise.resolve([]);
+            return supabaseTable<RemoteRow>(supabaseToken, "notifications", {}, {
                   method: "POST",
                   body: JSON.stringify({
                     user_id: adminId,
@@ -1653,8 +1874,15 @@ router.patch("/sessions/:id/cancel", async (req, res): Promise<void> => {
                     body: `تجاوز المعلم ${teacherName} حد الإلغاءات الشهري (${monthlyCount}/3).`,
                     type: "teacher_cancellation_warning",
                   }),
-                })
-              : Promise.resolve([]);
+                }).then(() => sendUserPushNotification(adminId, {
+                  title: "تنبيه إلغاءات معلم",
+                  body: `تجاوز المعلم ${teacherName} حد الإلغاءات الشهري (${monthlyCount}/3).`,
+                  data: {
+                    type: "teacher_cancellation_warning",
+                    route: "/notifications",
+                    dedupeKey: `teacher-cancellation-warning:${userId}:${monthlyCount}`,
+                  },
+                }).catch(() => undefined));
           }));
         }
       } catch {
@@ -1776,7 +2004,8 @@ router.patch("/assignments/:id/complete", async (req, res): Promise<void> => {
     }
     const assignments = await supabaseTable<RemoteRow>(supabaseToken, "assignments", {
       id: `eq.${params.data.id}`,
-      student_id: `eq.${userId}`,
+      or: `(student_id.eq.${userId},student_id.is.null)`,
+      status: "eq.active",
       select: "*",
       limit: "1",
     });

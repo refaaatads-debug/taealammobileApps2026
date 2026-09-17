@@ -1,7 +1,8 @@
-import React from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { Animated, Easing, Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { Role, Session, Assignment } from '@/constants/localData';
@@ -10,6 +11,14 @@ import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 export type IconName = keyof typeof Feather.glyphMap;
 
 export const BRAND_ICON = require('@/assets/images/ajyal-icon.png');
+
+export function goBackOrHome(fallback: string = '/(tabs)') {
+  if (router.canGoBack()) {
+    router.back();
+    return;
+  }
+  router.replace(fallback as never);
+}
 
 export function Icon({ name, size = 20, color, style }: { name: IconName; size?: number; color?: string; style?: object }) {
   const colors = useColors();
@@ -22,7 +31,7 @@ export function Screen({ children, scroll = true, contentStyle }: { children: Re
   const topInset = insets.top + 10;
   const bottomInset = insets.bottom + 112;
   if (!scroll) {
-    return <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: topInset, paddingBottom: bottomInset }, contentStyle]}>{children}</View>;
+    return <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: topInset, paddingBottom: bottomInset }, contentStyle]}><Reveal style={styles.revealFill}>{children}</Reveal></View>;
   }
   return (
     <ScrollView
@@ -31,34 +40,68 @@ export function Screen({ children, scroll = true, contentStyle }: { children: Re
       showsVerticalScrollIndicator={false}
       contentInsetAdjustmentBehavior="never"
     >
-      {children}
+      <Reveal>{children}</Reveal>
     </ScrollView>
   );
 }
 
-export function Header({ title, eyebrow, onBell, onBack, unread = false, onAvatar, avatarText = '؟' }: { title: string; eyebrow?: string; onBell?: () => void; onBack?: () => void; unread?: boolean; onAvatar?: () => void; avatarText?: string }) {
-  const colors = useColors();
-  const { direction } = useAppPreferences();
-  const isRTL = direction === 'rtl';
+export function Reveal({ children, delay = 0, style }: { children: React.ReactNode; delay?: number; style?: object }) {
+  const progress = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const animation = Animated.timing(progress, {
+      toValue: 1,
+      duration: 320,
+      delay,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: Platform.OS !== 'web',
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [delay, progress]);
   return (
-    <View style={[styles.header, { flexDirection: isRTL ? 'row' : 'row-reverse' }]}>
-      {onBack ? (
-        <Pressable testID="back-button" onPress={onBack} hitSlop={8} style={({ pressed }) => [styles.bell, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.pressed]}>
-          <Icon name="arrow-right" size={19} color={colors.primary} />
-        </Pressable>
-      ) : onBell ? (
-        <Pressable testID="notifications-button" onPress={onBell} hitSlop={8} style={({ pressed }) => [styles.bell, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.pressed]}>
-          <Icon name="bell" size={19} color={colors.primary} />
-          {unread ? <View style={[styles.dot, { backgroundColor: colors.accent, borderColor: colors.card }]} /> : null}
-        </Pressable>
-      ) : <View style={styles.headerSpacer} />}
-      <View style={[styles.headerCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
-        {eyebrow ? <Text style={[styles.eyebrow, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{eyebrow}</Text> : null}
-        <Text style={[styles.headerTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{title}</Text>
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity: progress,
+          transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+export function Header({ onBack, hideHeaderRow = false }: { title: string; eyebrow?: string; onBell?: () => void; onBack?: () => void; unread?: boolean; onAvatar?: () => void; avatarText?: string; hideHeaderRow?: boolean }) {
+  const colors = useColors();
+  const { direction, t } = useAppPreferences();
+  const isRTL = direction === 'rtl';
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      onBack?.();
+      return;
+    }
+    router.replace('/(tabs)');
+  };
+  return (
+    <View style={styles.headerShell}>
+      <View style={[styles.brandBar, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? 'row' : 'row-reverse' }]}>
+        <View style={[styles.brandCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+          <Text style={[styles.brandName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('أجيال المعرفة', 'Ajyal Knowledge')}</Text>
+          <Text style={[styles.brandTagline, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('نتعلم اليوم، نصنع الغد', 'Learn today, shape tomorrow')}</Text>
+        </View>
+        <View style={[styles.brandLogoFrame, { backgroundColor: colors.primary }]}>
+          <Image source={BRAND_ICON} style={styles.brandLogo} />
+        </View>
       </View>
-      <Pressable testID="profile-avatar" onPress={onAvatar} hitSlop={6} style={({ pressed }) => [styles.avatar, { backgroundColor: colors.primary }, pressed && styles.pressed]}>
-        <Text style={[styles.avatarText, { color: colors.primaryForeground }]}>{avatarText || '؟'}</Text>
-      </Pressable>
+      {!hideHeaderRow && onBack ? (
+        <View style={styles.header}>
+          <Pressable testID="back-button" onPress={handleBack} hitSlop={8} style={({ pressed }) => [styles.bell, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.pressed]}>
+            <Icon name="arrow-right" size={19} color={colors.primary} />
+          </Pressable>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -88,17 +131,19 @@ export function RoleSwitcher({ role, onChange }: { role: Role; onChange: (role: 
 
 export function SectionHeading({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) {
   const colors = useColors();
+  const { direction } = useAppPreferences();
+  const isRTL = direction === 'rtl';
   return (
-    <View style={styles.sectionHeading}>
+    <View style={[styles.sectionHeading, { flexDirection: isRTL ? 'row' : 'row-reverse' }]}>
       {action && onAction ? (
         <Pressable testID="section-action" onPress={onAction} hitSlop={8} style={({ pressed }) => [styles.sectionActionWrap, pressed && styles.pressed]}>
           <Text style={[styles.sectionAction, { color: colors.teal }]}>{action}</Text>
           <Icon name="arrow-left" size={13} color={colors.teal} />
         </Pressable>
       ) : <View />}
-      <View style={styles.sectionTitleWrap}>
+      <View style={[styles.sectionTitleWrap, { flexDirection: isRTL ? 'row' : 'row-reverse' }]}>
         <View style={[styles.sectionMark, { backgroundColor: colors.accent }]} />
-        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>{title}</Text>
+        <Text style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{title}</Text>
       </View>
     </View>
   );
@@ -253,6 +298,7 @@ export function EmptyState({ icon = 'inbox', title, body, action, onAction }: { 
   const colors = useColors();
   return (
     <View style={[styles.emptyState, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[styles.emptyGlow, { backgroundColor: colors.navySoft }]} />
       <View style={[styles.emptyIcon, { backgroundColor: colors.navySoft }]}><Icon name={icon} size={22} color={colors.primary} /></View>
       <Text style={[styles.emptyTitle, { color: colors.foreground }]}>{title}</Text>
       <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>{body}</Text>
@@ -304,16 +350,16 @@ type DashboardAction = {
 };
 
 const studentDashboardActions: DashboardAction[] = [
-  { id: 'find-teacher', title: 'ابحث عن معلم', subtitle: 'معلمون مناسبون لك', icon: 'search', tone: 'teal' },
-  { id: 'subscriptions', title: 'الباقات والاشتراك', subtitle: 'خطتك ورصيدك', icon: 'star', tone: 'gold' },
-  { id: 'smart-teacher', title: 'المدرس الذكي', subtitle: 'مساعدة أثناء التعلم', icon: 'message-circle', tone: 'navy' },
+  { id: 'find-teacher', title: 'ابحث عن معلم', subtitle: 'معلمون مناسبون لك', icon: 'user-plus', tone: 'teal' },
+  { id: 'subscriptions', title: 'الباقات والاشتراكات', subtitle: 'خطتك ورصيدك', icon: 'award', tone: 'gold' },
+  { id: 'smart-teacher', title: 'المدرس الذكي', subtitle: 'مساعدة أثناء التعلم', icon: 'zap', tone: 'navy' },
   { id: 'materials', title: 'المواد التعليمية', subtitle: 'دروسك وملفاتك', icon: 'book-open', tone: 'teal' },
-  { id: 'bookings', title: 'الجلسات والحجوزات', subtitle: 'مواعيدك القادمة', icon: 'calendar', tone: 'navy' },
-  { id: 'assignments', title: 'الواجبات والاختبارات', subtitle: 'تابع إنجازك', icon: 'clipboard', tone: 'gold' },
+  { id: 'bookings', title: 'الجلسات والحجوزات', subtitle: 'مواعيدك القادمة', icon: 'video', tone: 'navy' },
+  { id: 'assignments', title: 'الواجبات والاختبارات', subtitle: 'تابع إنجازك', icon: 'check-square', tone: 'gold' },
 ];
 
 const teacherDashboardActions: DashboardAction[] = [
-  { id: 'teacher-schedule', title: 'جدول المعلم', subtitle: 'حصصك وتوفرك', icon: 'calendar', tone: 'navy' },
+  { id: 'teacher-schedule', title: 'جدول المعلّم', subtitle: 'حصصك وتوفرك', icon: 'calendar', tone: 'navy' },
   { id: 'students', title: 'قائمة الطلاب', subtitle: 'طلابك وتقدمهم', icon: 'users', tone: 'teal' },
   { id: 'review', title: 'مراجعة الواجبات', subtitle: 'تسليمات تحتاج مراجعة', icon: 'check-square', tone: 'gold' },
   { id: 'teacher-materials', title: 'المواد التعليمية', subtitle: 'مواد جلساتك', icon: 'book-open', tone: 'teal' },
@@ -329,7 +375,7 @@ export function DashboardActions({ role, onAction, showSmartTeacher = true }: { 
   const translations: Record<string, string> = {
     'ابحث عن معلم': 'Find a teacher',
     'معلمون مناسبون لك': 'Teachers matched to you',
-    'الباقات والاشتراك': 'Plans and subscription',
+    'الباقات والاشتراكات': 'Plans and subscriptions',
     'خطتك ورصيدك': 'Your plan and balance',
     'المدرس الذكي': 'AI tutor',
     'مساعدة أثناء التعلم': 'Learning support',
@@ -339,7 +385,7 @@ export function DashboardActions({ role, onAction, showSmartTeacher = true }: { 
     'مواعيدك القادمة': 'Your upcoming schedule',
     'الواجبات والاختبارات': 'Assignments and quizzes',
     'تابع إنجازك': 'Track your progress',
-    'جدول المعلم': 'Teacher schedule',
+    'جدول المعلّم': 'Teacher schedule',
     'حصصك وتوفرك': 'Your sessions and availability',
     'قائمة الطلاب': 'Students',
     'طلابك وتقدمهم': 'Your students and their progress',
@@ -351,26 +397,42 @@ export function DashboardActions({ role, onAction, showSmartTeacher = true }: { 
     'نظرة على مواعيدك': 'Your schedule at a glance',
   };
   return (
-    <View style={styles.dashboardActions}>
-      <SectionHeading title={role === 'student' ? t('خدمات الطالب', 'Student tools') : t('أدوات المعلم', 'Teacher tools')} />
-      <View style={styles.dashboardActionGrid}>
+      <View style={[styles.dashboardActions, role === 'student' && [styles.studentToolsSurface, { backgroundColor: colors.card, borderColor: colors.border }]]}>
+      <SectionHeading title={role === 'student' ? t('أدوات الطالب', 'Student tools') : t('أدوات المعلّم', 'Teacher tools')} />
+      <View style={[styles.dashboardActionGrid, role === 'student' && styles.studentToolsGrid]}>
         {actions.map((action) => {
+          const isSubscriptionsCard = action.id === 'subscriptions';
           const iconColor = action.tone === 'navy' ? colors.primary : action.tone === 'gold' ? colors.accentForeground : colors.teal;
           const iconBackground = action.tone === 'navy' ? colors.navySoft : action.tone === 'gold' ? colors.goldSoft : colors.tealSoft;
+          const depthColor = action.tone === 'navy' ? colors.navySoft : action.tone === 'gold' ? colors.goldSoft : colors.tealSoft;
           return (
-            <Pressable
-              key={action.id}
-              testID={`dashboard-action-${action.id}`}
-              onPress={() => onAction(action.id)}
-              style={({ pressed }) => [styles.dashboardAction, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.cardPressed]}
-            >
-              <View style={[styles.dashboardActionIcon, { backgroundColor: iconBackground }]}>
-                <Icon name={action.icon} size={19} color={iconColor} />
-              </View>
-              <Text style={[styles.dashboardActionTitle, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>{t(action.title, translations[action.title] ?? action.title)}</Text>
-              <Text style={[styles.dashboardActionSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>{t(action.subtitle, translations[action.subtitle] ?? action.subtitle)}</Text>
-              <Icon name={direction === 'rtl' ? 'arrow-left' : 'arrow-right'} size={13} color={colors.mutedForeground} style={styles.dashboardActionArrow} />
-            </Pressable>
+            <View key={action.id} style={[styles.dashboardActionWrap, isSubscriptionsCard && styles.dashboardSubscriptionsAction]}>
+              <View style={[styles.dashboardActionBackplate, { backgroundColor: depthColor, borderColor: colors.border }]} />
+              <Pressable
+                testID={`dashboard-action-${action.id}`}
+                onPress={() => onAction(action.id)}
+                style={({ pressed }) => [styles.dashboardAction, { borderColor: colors.border }, pressed && styles.cardPressed]}
+              >
+                <LinearGradient
+                  colors={isSubscriptionsCard ? [colors.card, colors.goldSoft] : [colors.card, colors.card]}
+                  start={{ x: 0.05, y: 0 }}
+                  end={{ x: 0.95, y: 1 }}
+                  style={styles.dashboardActionGradient}
+                >
+                  <View style={[styles.dashboardActionGlow, { backgroundColor: iconBackground }]} />
+                  <View style={[styles.dashboardActionAccent, { backgroundColor: iconColor }]} />
+                  <View style={[styles.dashboardActionIcon, { backgroundColor: iconBackground, borderColor: colors.card }]}>
+                    <Icon name={action.icon} size={20} color={iconColor} />
+                    <View style={[styles.dashboardActionIconDot, { backgroundColor: iconColor }]} />
+                  </View>
+                  <Text numberOfLines={2} ellipsizeMode="tail" style={[styles.dashboardActionTitle, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>{t(action.title, translations[action.title] ?? action.title)}</Text>
+                  <Text style={[styles.dashboardActionSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>{t(action.subtitle, translations[action.subtitle] ?? action.subtitle)}</Text>
+                  <View style={[styles.dashboardActionArrow, { backgroundColor: colors.card }]}>
+                    <Icon name={direction === 'rtl' ? 'arrow-left' : 'arrow-right'} size={13} color={iconColor} />
+                  </View>
+                </LinearGradient>
+              </Pressable>
+            </View>
           );
         })}
       </View>
@@ -380,22 +442,30 @@ export function DashboardActions({ role, onAction, showSmartTeacher = true }: { 
 
 export const styles = StyleSheet.create({
   screen: { flex: 1 },
+  revealFill: { flex: 1 },
   scrollContent: { paddingHorizontal: 18 },
-  header: { minHeight: 68, flexDirection: 'row', alignItems: 'center', marginBottom: 17, gap: 12 },
+  headerShell: { marginBottom: 14 },
+  brandBar: { minHeight: 50, borderRadius: 19, borderWidth: 1, paddingHorizontal: 11, paddingVertical: 7, alignItems: 'center', gap: 9, marginBottom: 10, shadowColor: '#173E8C', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  brandCopy: { flex: 1 },
+  brandName: { fontSize: 13, lineHeight: 17, fontFamily: 'Inter_700Bold' },
+  brandTagline: { fontSize: 8, lineHeight: 12, marginTop: 1, fontFamily: 'Inter_500Medium' },
+  brandLogoFrame: { width: 35, height: 35, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  brandLogo: { width: 25, height: 25, borderRadius: 8 },
+  header: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerCopy: { flex: 1, alignItems: 'flex-end' },
   headerSpacer: { width: 42 },
-  eyebrow: { fontSize: 11, fontFamily: 'Inter_500Medium', marginBottom: 4, writingDirection: 'rtl' },
-  headerTitle: { fontSize: 25, letterSpacing: -0.5, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  avatar: { width: 43, height: 43, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  eyebrow: { maxWidth: '100%', fontSize: 10, lineHeight: 14, fontFamily: 'Inter_500Medium', marginTop: 2, writingDirection: 'rtl' },
+  headerTitle: { fontSize: 22, lineHeight: 26, letterSpacing: -0.4, fontFamily: 'Inter_700Bold', writingDirection: 'rtl', flexShrink: 1 },
+  avatar: { width: 40, height: 40, borderRadius: 14, alignItems: 'center', justifyContent: 'center', shadowColor: '#173E8C', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
   avatarText: { fontSize: 16, fontFamily: 'Inter_700Bold' },
-  bell: { width: 43, height: 43, borderRadius: 15, borderWidth: 1, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  bell: { width: 40, height: 40, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center', position: 'relative', shadowColor: '#173E8C', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
   dot: { position: 'absolute', width: 8, height: 8, borderRadius: 5, top: 8, right: 8, borderWidth: 2 },
-  roleSwitcher: { flexDirection: 'row', padding: 4, borderRadius: 15, alignSelf: 'flex-end', marginBottom: 17, gap: 2 },
+  roleSwitcher: { flexDirection: 'row', padding: 4, borderRadius: 15, alignSelf: 'flex-end', marginBottom: 17, gap: 2, borderWidth: 1, borderColor: 'rgba(23,62,140,0.06)' },
   roleItem: { minWidth: 91, height: 35, paddingHorizontal: 12, borderRadius: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
   roleText: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
   pressed: { opacity: 0.72 },
   cardPressed: { transform: [{ scale: 0.985 }], opacity: 0.92 },
-  banner: { minHeight: 224, borderRadius: 25, padding: 21, overflow: 'hidden', marginBottom: 28, position: 'relative' },
+  banner: { minHeight: 224, borderRadius: 25, padding: 21, overflow: 'hidden', marginBottom: 28, position: 'relative', shadowColor: '#173E8C', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 4 },
   bannerCopy: { alignItems: 'flex-end', zIndex: 2 },
   bannerKicker: { flexDirection: 'row', alignItems: 'center', gap: 7, alignSelf: 'flex-end' },
   liveDot: { width: 6, height: 6, borderRadius: 4 },
@@ -409,40 +479,49 @@ export const styles = StyleSheet.create({
   bannerDecorTwo: { position: 'absolute', width: 120, height: 120, borderRadius: 60, opacity: 0.12, right: -45, bottom: -39 },
   bannerRule: { position: 'absolute', width: 52, height: 3, borderRadius: 2, left: 21, top: 22, opacity: 0.6 },
   dashboardActions: { marginBottom: 8 },
+  studentToolsSurface: { borderRadius: 24, borderWidth: 1, padding: 14, marginBottom: 16, shadowColor: '#173E8C', shadowOpacity: 0.045, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 1 },
   dashboardActionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 18 },
-  dashboardAction: { width: '48%', minHeight: 122, borderRadius: 18, borderWidth: 1, padding: 12, alignItems: 'flex-end', position: 'relative' },
-  dashboardActionIcon: { width: 39, height: 39, borderRadius: 13, alignItems: 'center', justifyContent: 'center', marginBottom: 11 },
-  dashboardActionTitle: { width: '100%', fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
-  dashboardActionSubtitle: { width: '100%', fontSize: 9, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl', marginTop: 4 },
-  dashboardActionArrow: { position: 'absolute', bottom: 12, left: 12 },
+  studentToolsGrid: { marginBottom: 0 },
+  dashboardActionWrap: { width: '48%', minHeight: 134, position: 'relative', overflow: 'visible' },
+  dashboardActionBackplate: { position: 'absolute', left: 2, right: -2, top: 4, bottom: -4, borderRadius: 18, borderWidth: 1, opacity: 0.9 },
+  dashboardAction: { width: '100%', minHeight: 134, borderRadius: 18, borderWidth: 1, overflow: 'hidden', shadowColor: '#173E8C', shadowOpacity: 0.055, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
+  dashboardSubscriptionsAction: { shadowColor: '#B87916', shadowOpacity: 0.08 },
+  dashboardActionGradient: { flex: 1, minHeight: 132, padding: 12, alignItems: 'flex-end', position: 'relative', overflow: 'hidden' },
+  dashboardActionGlow: { position: 'absolute', width: 96, height: 96, borderRadius: 48, top: -48, left: -36, opacity: 0.16 },
+  dashboardActionAccent: { position: 'absolute', width: 22, height: 3, borderRadius: 4, top: 11, left: 11, opacity: 0.58 },
+  dashboardActionIcon: { width: 42, height: 42, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginBottom: 9, position: 'relative', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  dashboardActionIconDot: { position: 'absolute', width: 6, height: 6, borderRadius: 3, top: 6, right: 6 },
+  dashboardActionTitle: { width: '100%', flexShrink: 1, fontSize: 12, lineHeight: 17, minHeight: 34, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  dashboardActionSubtitle: { width: '100%', fontSize: 9, lineHeight: 14, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl', marginTop: 2 },
+  dashboardActionArrow: { position: 'absolute', bottom: 11, left: 11, width: 25, height: 25, borderRadius: 9, alignItems: 'center', justifyContent: 'center', shadowColor: '#173E8C', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, marginTop: 1 },
-  sectionTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sectionMark: { width: 5, height: 19, borderRadius: 3 },
-  sectionTitle: { fontSize: 18, letterSpacing: -0.2, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  sectionTitleWrap: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  sectionMark: { width: 4, height: 16, borderRadius: 3 },
+  sectionTitle: { flex: 1, minWidth: 0, fontSize: 16, lineHeight: 20, letterSpacing: -0.15, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   sectionActionWrap: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   sectionAction: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   progressTrack: { flex: 1, height: 5, borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 3 },
-  sessionCard: { minHeight: 126, borderRadius: 21, borderWidth: 1, padding: 13, flexDirection: 'row', alignItems: 'center', marginBottom: 11, gap: 12 },
-  sessionDate: { width: 66, height: 88, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  sessionDateDay: { fontSize: 25, fontFamily: 'Inter_700Bold' },
-  sessionDateMonth: { fontSize: 10, marginTop: 4, fontFamily: 'Inter_600SemiBold' },
+  sessionCard: { minHeight: 108, borderRadius: 18, borderWidth: 1, padding: 12, flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 9, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  sessionDate: { width: 58, height: 74, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  sessionDateDay: { fontSize: 22, fontFamily: 'Inter_700Bold' },
+  sessionDateMonth: { fontSize: 9, marginTop: 3, fontFamily: 'Inter_600SemiBold' },
   sessionBody: { flex: 1, alignItems: 'flex-end' },
   sessionTopline: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sessionSubject: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
-  sessionStatusBadge: { borderRadius: 9, paddingHorizontal: 7, paddingVertical: 5, flexDirection: 'row-reverse', alignItems: 'center', gap: 4 },
+  sessionStatusBadge: { borderRadius: 8, paddingHorizontal: 6, paddingVertical: 4, flexDirection: 'row-reverse', alignItems: 'center', gap: 3 },
   sessionStatusDot: { width: 5, height: 5, borderRadius: 3 },
-  sessionStatusText: { fontSize: 9, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  sessionTitle: { width: '100%', fontSize: 15, lineHeight: 20, fontFamily: 'Inter_700Bold', marginTop: 7, textAlign: 'right', writingDirection: 'rtl' },
-  sessionMeta: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', gap: 6, marginTop: 10 },
-  sessionInfoPill: { minHeight: 27, borderRadius: 8, paddingHorizontal: 7, flexDirection: 'row-reverse', alignItems: 'center', gap: 4 },
-  metaText: { fontSize: 10, fontFamily: 'Inter_400Regular' },
-  sessionPerson: { flex: 1, fontSize: 10, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
-  joinSessionButton: { minHeight: 31, borderRadius: 9, borderWidth: 1, paddingHorizontal: 9, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 8, alignSelf: 'flex-end' },
-  joinSessionText: { fontSize: 9, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  sessionStatusText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  sessionTitle: { width: '100%', fontSize: 14, lineHeight: 18, fontFamily: 'Inter_700Bold', marginTop: 5, textAlign: 'right', writingDirection: 'rtl' },
+  sessionMeta: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', gap: 5, marginTop: 7 },
+  sessionInfoPill: { minHeight: 24, borderRadius: 7, paddingHorizontal: 6, flexDirection: 'row-reverse', alignItems: 'center', gap: 3 },
+  metaText: { fontSize: 9, fontFamily: 'Inter_400Regular' },
+  sessionPerson: { flex: 1, fontSize: 9, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
+  joinSessionButton: { minHeight: 28, borderRadius: 8, borderWidth: 1, paddingHorizontal: 8, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 6, alignSelf: 'flex-end' },
+  joinSessionText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   cancelled: { fontSize: 10, marginTop: 5, fontFamily: 'Inter_600SemiBold' },
   cancelButton: { padding: 5 },
-  assignmentRow: { minHeight: 91, borderRadius: 18, borderWidth: 1, flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10, marginBottom: 9 },
+  assignmentRow: { minHeight: 91, borderRadius: 18, borderWidth: 1, flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10, marginBottom: 9, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   assignmentIcon: { width: 43, height: 43, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   assignmentMain: { flex: 1, alignItems: 'flex-end' },
   assignmentTitleLine: { flexDirection: 'row', width: '100%', alignItems: 'center', gap: 7 },
@@ -452,13 +531,14 @@ export const styles = StyleSheet.create({
   assignmentSubject: { width: '100%', textAlign: 'right', fontSize: 10, fontFamily: 'Inter_400Regular', marginTop: 5, writingDirection: 'rtl' },
   assignmentProgressLine: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 9 },
   percent: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
-  emptyState: { borderRadius: 20, borderWidth: 1, alignItems: 'center', padding: 26, marginTop: 5 },
-  emptyIcon: { width: 54, height: 54, borderRadius: 19, alignItems: 'center', justifyContent: 'center', marginBottom: 13 },
-  emptyTitle: { fontSize: 15, fontFamily: 'Inter_700Bold', textAlign: 'center', writingDirection: 'rtl' },
-  emptyBody: { fontSize: 12, lineHeight: 20, textAlign: 'center', marginTop: 6, maxWidth: 270, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
-  smallButton: { borderRadius: 11, paddingHorizontal: 15, paddingVertical: 10, marginTop: 17 },
+  emptyState: { borderRadius: 18, borderWidth: 1, alignItems: 'center', padding: 18, marginTop: 4, position: 'relative', overflow: 'hidden', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  emptyGlow: { position: 'absolute', width: 170, height: 170, borderRadius: 85, top: -112, right: -66, opacity: 0.72 },
+  emptyIcon: { width: 46, height: 46, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 9, shadowColor: '#173E8C', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  emptyTitle: { fontSize: 14, fontFamily: 'Inter_700Bold', textAlign: 'center', writingDirection: 'rtl' },
+  emptyBody: { fontSize: 11, lineHeight: 17, textAlign: 'center', marginTop: 4, maxWidth: 270, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
+  smallButton: { borderRadius: 10, paddingHorizontal: 13, paddingVertical: 8, marginTop: 12 },
   smallButtonText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
-  loadingBlock: { borderRadius: 19, borderWidth: 1, padding: 16, marginBottom: 12, minHeight: 112 },
+  loadingBlock: { borderRadius: 18, borderWidth: 1, padding: 16, marginBottom: 12, minHeight: 112, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   loadingDot: { width: 32, height: 32, borderRadius: 12, alignSelf: 'flex-end', marginBottom: 12 },
   loadingLine: { height: 12, width: '64%', borderRadius: 6, alignSelf: 'flex-end' },
   loadingShort: { width: '36%', marginTop: 10 },

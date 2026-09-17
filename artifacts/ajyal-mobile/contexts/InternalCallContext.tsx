@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
@@ -7,9 +7,13 @@ import * as Speech from 'expo-speech';
 import * as TaskManager from 'expo-task-manager';
 import type * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/lib/auth';
 import { useInternalCallWebRTC } from '@/hooks/useInternalCallWebRTC';
 import { supabase } from '@/lib/supabase';
+import { useColors } from '@/hooks/useColors';
+import { Icon } from '@/components/AjyalUI';
+import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import {
   registerPushToken as registerPushTokenOnServer,
   sendCallAccepted as sendCallAcceptedNotification,
@@ -24,15 +28,17 @@ export const CALL_ACCEPTED_TYPE = 'call_accepted';
 export const ACCEPT_CALL_ACTION = 'accept-call';
 export const DECLINE_CALL_ACTION = 'decline-call';
 export const BACKGROUND_CALL_NOTIFICATION_TASK = 'ajyal-call-notification-task';
-export const APP_NOTIFICATION_CHANNEL = 'app-notifications-v1';
-export const MESSAGE_NOTIFICATION_CHANNEL = 'message-notifications-v1';
-export const SESSION_NOTIFICATION_CHANNEL = 'session-notifications-v1';
-export const APPROVAL_NOTIFICATION_CHANNEL = 'approval-notifications-v1';
-const INCOMING_CALL_SOUND = require('@/assets/audio/incoming-call.wav');
+export const DEFAULT_NOTIFICATION_CHANNEL = 'default';
+export const APP_NOTIFICATION_CHANNEL = 'app-notifications-v2';
+export const MESSAGE_NOTIFICATION_CHANNEL = 'message-notifications-v2';
+export const SESSION_NOTIFICATION_CHANNEL = 'session-notifications-v2';
+export const APPROVAL_NOTIFICATION_CHANNEL = 'approval-notifications-v2';
+const INCOMING_CALL_SOUND = require('@/assets/audio/incoming_call.wav');
+const APP_NOTIFICATION_SOUND = require('@/assets/audio/message_notification.wav');
 export const INCOMING_CALL_CHANNEL = 'incoming-call-v2';
 const isExpoGo = Platform.OS !== 'web' && Constants.appOwnership === 'expo';
 
-export type CallStatus = 'ringing' | 'active' | 'declined' | 'ended';
+export type CallStatus = 'ringing' | 'active' | 'busy' | 'declined' | 'ended';
 
 export type IncomingCall = {
   id: string;
@@ -68,6 +74,8 @@ type InternalCallContextValue = {
   muted: boolean;
   callConnectionState: 'idle' | 'connecting' | 'connected' | 'failed';
   toggleMute: () => void;
+  speakerEnabled: boolean;
+  toggleSpeaker: () => void;
   callError: string | null;
 };
 
@@ -89,7 +97,12 @@ async function getNotificationsModule(): Promise<NotificationsModule | null> {
         notificationsModule = module;
         return module;
       })
-      .catch(() => null);
+      .catch((error) => {
+        console.warn('[push] notifications_module_unavailable', {
+          errorName: error instanceof Error ? error.name : 'unknown',
+        });
+        return null;
+      });
   }
   return notificationsLoadPromise;
 }
@@ -119,6 +132,8 @@ async function configureNotificationsModule(notifications: NotificationsModule):
       const data = notification.request.content.data ?? {};
       const isCallEnded = isEndedPayload(data);
       return {
+        // Use the native notification surface for every regular push in every
+        // app state. Realtime-only events still use the in-app banner below.
         shouldShowBanner: !isCallEnded,
         shouldShowList: !isCallEnded,
         shouldPlaySound: !isCallEnded,
@@ -130,6 +145,12 @@ async function configureNotificationsModule(notifications: NotificationsModule):
   if (Platform.OS === 'android') {
     const channels = [
       {
+        id: DEFAULT_NOTIFICATION_CHANNEL,
+        name: 'تنبيهات أجيال المعرفة',
+        description: 'الإشعارات العامة من منصة أجيال المعرفة',
+        sound: 'default',
+      },
+      {
         id: APP_NOTIFICATION_CHANNEL,
         name: 'تنبيهات عامة',
         description: 'تحديثات الحساب والمنصة',
@@ -139,19 +160,19 @@ async function configureNotificationsModule(notifications: NotificationsModule):
         id: MESSAGE_NOTIFICATION_CHANNEL,
         name: 'الرسائل',
         description: 'رسائل المعلمين والطلاب',
-        sound: 'message-notification.wav',
+        sound: 'message_notification.wav',
       },
       {
         id: SESSION_NOTIFICATION_CHANNEL,
         name: 'الجلسات',
         description: 'تذكيرات الجلسات وبدءها وانتهاؤها',
-        sound: 'session-notification.wav',
+        sound: 'session_notification.wav',
       },
       {
         id: APPROVAL_NOTIFICATION_CHANNEL,
         name: 'الحجوزات والموافقات',
         description: 'طلبات الحجز والقبول والرفض والإلغاء',
-        sound: 'approval-notification.wav',
+        sound: 'approval_notification.wav',
       },
     ];
     await Promise.all(channels.map((channel) =>
@@ -200,8 +221,11 @@ function isAcceptedPayload(data: Record<string, unknown>): boolean {
 
 function remoteCallStatus(row: RemoteCallRow): CallStatus | null {
   const status = asString(row.status)?.toLowerCase();
-  if (!status || status === 'ringing' || status === 'connecting') return 'ringing';
-  if (status === 'connected' || status === 'active') return 'active';
+  if (!status || status === 'ringing') return 'ringing';
+  // connecting means the callee accepted. Both sides must start WebRTC now;
+  // treating it as active also prevents losing the initial offer.
+  if (status === 'connecting' || status === 'connected' || status === 'active') return 'active';
+  if (status === 'busy') return 'busy';
   if (status === 'rejected' || status === 'declined') return 'declined';
   if (status === 'cancelled' || status === 'missed' || status === 'ended' || status === 'failed') return 'ended';
   return null;
@@ -212,7 +236,7 @@ function remoteIncomingCall(row: RemoteCallRow, userId: string): { call: Incomin
   if (!id) return null;
   const callerId = asString(row.caller_id) ?? asString(row.from_user_id);
   const calleeId = asString(row.callee_id) ?? asString(row.receiver_id) ?? asString(row.to_user_id) ?? asString(row.student_id);
-  if (callerId === userId || (calleeId && calleeId !== userId)) return null;
+  if ((!callerId && !calleeId) || (callerId !== userId && calleeId !== userId)) return null;
   const status = remoteCallStatus(row);
   if (!status) return null;
   const callerName = asString(row.caller_name) ?? asString(row.from_name) ?? 'مستخدم أجيال المعرفة';
@@ -229,14 +253,73 @@ function remoteIncomingCall(row: RemoteCallRow, userId: string): { call: Incomin
   };
 }
 
-function routeForNotification(data: Record<string, unknown>): '/bookings' | '/messages' | '/notifications' | null {
+type AppNotificationRoute =
+  | '/bookings'
+  | '/messages'
+  | '/assignments'
+  | '/support'
+  | '/subscription'
+  | '/invoices'
+  | '/profile'
+  | '/notifications';
+
+function routeForNotification(data: Record<string, unknown>): AppNotificationRoute | null {
   const explicitRoute = asString(data.route);
-  if (explicitRoute === '/bookings' || explicitRoute === '/messages' || explicitRoute === '/notifications') {
+  if (
+    explicitRoute === '/bookings'
+    || explicitRoute === '/messages'
+    || explicitRoute === '/assignments'
+    || explicitRoute === '/support'
+    || explicitRoute === '/subscription'
+    || explicitRoute === '/invoices'
+    || explicitRoute === '/profile'
+    || explicitRoute === '/notifications'
+  ) {
     return explicitRoute;
   }
-  if (data.type === 'booking_request' || data.type === 'booking_confirmed' || data.type === 'booking_cancelled') return '/bookings';
-  if (data.type === 'chat_message') return '/messages';
-  return null;
+  if (
+    data.type === 'support_reply'
+    || data.type === 'support_message'
+    || data.type === 'support_ticket'
+    || data.type === 'support_response'
+    || data.type === 'support_ticket_reply'
+    || data.type === 'ticket_reply'
+  ) return '/support';
+  if (data.type === 'assignment_submission' || data.type === 'assignment_graded') return '/assignments';
+  if (data.type === 'payment' || data.type === 'subscription' || data.type === 'subscription_updated') return '/subscription';
+  if (data.type === 'invoice') return '/invoices';
+  if (data.type === 'profile' || data.type === 'rating' || data.type === 'review') return '/profile';
+  if (
+    data.type === 'booking_request'
+    || data.type === 'booking_confirmed'
+    || data.type === 'booking_accepted'
+    || data.type === 'booking_rejected'
+    || data.type === 'booking_cancelled'
+    || data.type === 'session_reminder'
+    || data.type === 'session_starting'
+    || data.type === 'session_started'
+    || data.type === 'session_ended'
+    || data.type === 'instant_session'
+    || data.type === 'expired_no_show'
+    || data.type === 'no_show'
+    || data.type === 'booking_expired'
+    || data.type === 'session_auto_cancelled'
+    || data.type === 'automatic_cancellation'
+    || data.type === 'session_cancelled'
+  ) return '/bookings';
+  if (data.type === 'chat_message' || data.type === 'message' || data.type === 'new_message') return '/messages';
+  if (
+    data.type === 'teacher_cancellation_warning'
+    || data.type === 'first_impression'
+    || data.type === 'admin_announcement'
+    || data.type === 'announcement'
+    || data.type === 'system_notification'
+    || data.type === 'notification'
+  ) return '/notifications';
+  // Unknown account notifications still belong in the in-app inbox.
+  return data.type === INCOMING_CALL_TYPE || data.type === CALL_ENDED_TYPE || data.type === CALL_ACCEPTED_TYPE
+    ? null
+    : '/notifications';
 }
 
 function backgroundNotificationData(
@@ -274,15 +357,20 @@ async function dismissPresentedCallNotifications(callId?: string): Promise<void>
   );
 }
 
-async function configureCallNotifications(notifications: NotificationsModule): Promise<boolean> {
-  if (Platform.OS === 'web' || isExpoGo) return false;
+type NotificationPermissionState = {
+  granted: boolean;
+  canAskAgain: boolean;
+};
+
+async function configureCallNotifications(notifications: NotificationsModule): Promise<NotificationPermissionState | null> {
+  if (Platform.OS === 'web' || isExpoGo) return null;
 
   if (Platform.OS === 'android') {
     await notifications.setNotificationChannelAsync(INCOMING_CALL_CHANNEL, {
       name: 'المكالمات الواردة',
       description: 'تنبيهات المكالمات الداخلية الواردة',
       importance: notifications.AndroidImportance.MAX,
-      sound: 'incoming-call.wav',
+      sound: 'incoming_call.wav',
       vibrationPattern: [0, 250, 200, 250],
       enableVibrate: true,
       lockscreenVisibility: notifications.AndroidNotificationVisibility.PUBLIC,
@@ -307,10 +395,35 @@ async function configureCallNotifications(notifications: NotificationsModule): P
   ).catch(() => undefined);
 
   const currentPermission = await notifications.getPermissionsAsync();
+  if (
+    !currentPermission.granted
+    && currentPermission.status === 'denied'
+    && currentPermission.canAskAgain === false
+  ) {
+    console.info('[push] notification_permission', {
+      platform: Platform.OS,
+      granted: false,
+      status: currentPermission.status,
+      canAskAgain: false,
+    });
+    return {
+      granted: false,
+      canAskAgain: false,
+    };
+  }
   const permission = currentPermission.granted
     ? currentPermission
     : await notifications.requestPermissionsAsync();
-  return permission.granted;
+  console.info('[push] notification_permission', {
+    platform: Platform.OS,
+    granted: permission.granted,
+    status: permission.status,
+    canAskAgain: permission.canAskAgain,
+  });
+  return {
+    granted: permission.granted,
+    canAskAgain: permission.canAskAgain,
+  };
 }
 
 async function requestAppPermissions(): Promise<void> {
@@ -327,15 +440,63 @@ async function requestAppPermissions(): Promise<void> {
   return appPermissionsPromise;
 }
 
-async function registerDevicePushToken(notifications: NotificationsModule): Promise<void> {
-  if (Platform.OS === 'web' || isExpoGo) return;
+async function getDevicePushToken(notifications: NotificationsModule): Promise<string | null> {
+  if (Platform.OS === 'web' || isExpoGo) return null;
 
   const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
-  const tokenResponse = await notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
-  await registerPushTokenOnServer({
-    token: tokenResponse.data,
-    platform: Platform.OS === 'ios' ? 'ios' : 'android',
-  });
+  if (!projectId) {
+    console.warn('[push] expo_token_failed', {
+      token_exists: false,
+      projectId: null,
+      reason: 'missing_project_id',
+    });
+  }
+  try {
+    const tokenResponse = await notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+    console.info('[push] expo_token_created', {
+      platform: Platform.OS,
+      projectId: projectId ?? null,
+      token_exists: Boolean(tokenResponse.data),
+    });
+    return tokenResponse.data;
+  } catch (error) {
+    console.warn('[push] expo_token_failed', {
+      platform: Platform.OS,
+      projectId: projectId ?? null,
+      token_exists: false,
+      errorName: error instanceof Error ? error.name : 'unknown',
+    });
+    throw error;
+  }
+}
+
+async function registerDevicePushToken(
+  notifications: NotificationsModule,
+  token?: string,
+): Promise<string | null> {
+  const resolvedToken = token ?? await getDevicePushToken(notifications);
+  if (!resolvedToken) return null;
+  const platform = Platform.OS === 'ios' ? 'ios' : 'android';
+  try {
+    await registerPushTokenOnServer({
+      token: resolvedToken,
+      platform,
+    });
+    console.info('[push] token_registration_succeeded', {
+      platform,
+      token_exists: true,
+      registration: 'success',
+    });
+  } catch (error) {
+    console.warn('[push] token_registration_failed', {
+      platform,
+      token_exists: true,
+      registration: 'failure',
+      errorName: error instanceof Error ? error.name : 'unknown',
+    });
+    throw error;
+  }
+  return resolvedToken;
 }
 
 function notificationData(response: Notifications.NotificationResponse): Record<string, unknown> {
@@ -359,7 +520,7 @@ export async function scheduleIncomingCallNotification(call: Omit<IncomingCall, 
         roomId: call.roomId,
       },
       categoryIdentifier: INCOMING_CALL_CATEGORY,
-      sound: 'incoming-call.wav',
+      sound: 'incoming_call.wav',
       priority: 'max',
       color: '#20B9B0',
       autoDismiss: false,
@@ -373,11 +534,58 @@ export async function scheduleIncomingCallNotification(call: Omit<IncomingCall, 
 export function InternalCallProvider({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, user } = useAuth();
   const [call, setCall] = useState<IncomingCall | null>(null);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState | null>(null);
   const callRef = useRef<IncomingCall | null>(null);
   const announcedCallIdRef = useRef<string | null>(null);
   const handledResponseIds = useRef(new Set<string>());
   const notificationIdsByCall = useRef(new Map<string, Set<string>>());
+  const registeredPushUserId = useRef<string | null>(null);
+  const registeredPushToken = useRef<string | null>(null);
   const incomingCallPlayer = useAudioPlayer(INCOMING_CALL_SOUND);
+  const appNotificationPlayer = useAudioPlayer(APP_NOTIFICATION_SOUND);
+  const [foregroundNotification, setForegroundNotification] = useState<{
+    id: string;
+    title: string;
+    body: string;
+    data: Record<string, unknown>;
+  } | null>(null);
+  const foregroundNotificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const foregroundNotificationIds = useRef(new Set<string>());
+  const foregroundNotificationFingerprints = useRef(new Map<string, number>());
+
+  const presentForegroundNotification = useCallback((
+    id: string,
+    title: string,
+    body: string,
+    data: Record<string, unknown>,
+  ) => {
+    if (foregroundNotificationIds.current.has(id)) return;
+    const fingerprint = `${title.trim()}\u0000${body.trim()}`;
+    const now = Date.now();
+    const fingerprintExpiresAt = foregroundNotificationFingerprints.current.get(fingerprint);
+    if (fingerprintExpiresAt && fingerprintExpiresAt > now) return;
+    for (const [existingFingerprint, expiresAt] of foregroundNotificationFingerprints.current) {
+      if (expiresAt <= now) foregroundNotificationFingerprints.current.delete(existingFingerprint);
+    }
+    foregroundNotificationFingerprints.current.set(fingerprint, now + 10_000);
+    foregroundNotificationIds.current.add(id);
+    if (foregroundNotificationIds.current.size > 100) {
+      const oldest = foregroundNotificationIds.current.values().next().value;
+      if (oldest) foregroundNotificationIds.current.delete(oldest);
+    }
+    setForegroundNotification({ id, title, body, data });
+    if (foregroundNotificationTimer.current) clearTimeout(foregroundNotificationTimer.current);
+    foregroundNotificationTimer.current = setTimeout(() => {
+      setForegroundNotification(null);
+      foregroundNotificationTimer.current = null;
+    }, 6500);
+    void setAudioModeAsync({
+      playsInSilentMode: true,
+      interruptionMode: 'doNotMix',
+    }).catch(() => undefined);
+    appNotificationPlayer.volume = 1;
+    appNotificationPlayer.play();
+  }, [appNotificationPlayer]);
   const callAudio = useInternalCallWebRTC({
     call,
     userId: user?.id,
@@ -537,46 +745,91 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
     if (!isAuthenticated || Platform.OS === 'web' || isExpoGo) return undefined;
 
     let mounted = true;
+    let setupInFlight = false;
     let receivedSubscription: Notifications.Subscription | null = null;
     let responseSubscription: Notifications.Subscription | null = null;
-    void (async () => {
+    const setupNotifications = async () => {
+      if (!mounted || setupInFlight) return;
+      setupInFlight = true;
       try {
         await requestAppPermissions();
         const notifications = await getNotificationsModule();
         if (!notifications || !mounted) return;
         await configureNotificationsModule(notifications);
-        if (await configureCallNotifications(notifications)) await registerDevicePushToken(notifications);
+        const permissionState = await configureCallNotifications(notifications);
+        setNotificationPermission(permissionState);
+        // Re-read and register the Expo token even when Android notification
+        // permission is currently denied. Registration is useful for
+        // diagnostics and lets a later permission change use the same device
+        // record; Android still will not display notifications until permission
+        // is granted.
+        const currentToken = await getDevicePushToken(notifications).catch(() => null);
+        if (
+          currentToken
+          && (registeredPushUserId.current !== user?.id || registeredPushToken.current !== currentToken)
+        ) {
+          try {
+            const registeredToken = await registerDevicePushToken(notifications, currentToken);
+            registeredPushUserId.current = user?.id ?? null;
+            registeredPushToken.current = registeredToken;
+          } catch {
+            // Push registration is retryable and must never block the app.
+          }
+        }
 
-        receivedSubscription = notifications.addNotificationReceivedListener((notification) => {
-          if (!mounted) return;
-          const data = notification.request.content.data ?? {};
-          const incomingCall = parseCallPayload(data);
-          if (incomingCall) {
-            rememberNotification(incomingCall.id, notification.request.identifier);
-          }
-          applyCallPayload(data);
-          if (isEndedPayload(data)) {
-            const endedCallId = asString(data.callId);
-            if (endedCallId) void dismissCallNotifications(endedCallId);
-          }
-        });
-        responseSubscription = notifications.addNotificationResponseReceivedListener((response) => {
-          handleNotificationResponse(response, notifications);
-        });
-        void notifications.getLastNotificationResponseAsync().then((response) => {
-          if (mounted && response) handleNotificationResponse(response, notifications);
-        }).catch(() => undefined);
+        if (!receivedSubscription) {
+          receivedSubscription = notifications.addNotificationReceivedListener((notification) => {
+            if (!mounted) return;
+            const data = notification.request.content.data ?? {};
+            const incomingCall = parseCallPayload(data);
+            if (incomingCall) {
+              rememberNotification(incomingCall.id, notification.request.identifier);
+            }
+            applyCallPayload(data);
+            if (isEndedPayload(data)) {
+              const endedCallId = asString(data.callId);
+              if (endedCallId) void dismissCallNotifications(endedCallId);
+            }
+          });
+        }
+        if (!responseSubscription) {
+          responseSubscription = notifications.addNotificationResponseReceivedListener((response) => {
+            handleNotificationResponse(response, notifications);
+          });
+          void notifications.getLastNotificationResponseAsync().then((response) => {
+            if (mounted && response) handleNotificationResponse(response, notifications);
+          }).catch(() => undefined);
+        }
       } catch {
         // Permission denial and missing native project configuration are non-fatal.
+      } finally {
+        setupInFlight = false;
       }
-    })();
+    };
+
+    void setupNotifications();
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void setupNotifications();
+      }
+    });
 
     return () => {
       mounted = false;
+      appStateSubscription.remove();
       receivedSubscription?.remove();
       responseSubscription?.remove();
+      if (foregroundNotificationTimer.current) clearTimeout(foregroundNotificationTimer.current);
     };
-  }, [applyCallPayload, dismissCallNotifications, handleNotificationResponse, isAuthenticated, rememberNotification]);
+  }, [applyCallPayload, dismissCallNotifications, handleNotificationResponse, isAuthenticated, presentForegroundNotification, rememberNotification, user?.id]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      registeredPushUserId.current = null;
+      registeredPushToken.current = null;
+      setNotificationPermission(null);
+    }
+  }, [isAuthenticated]);
 
   useEffect(() => {
     const client = supabase;
@@ -599,7 +852,17 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
         if (callerName) nextCall = { ...nextCall, callerName };
       }
       if (!mounted) return;
-      if (parsed.status === 'ended' || parsed.status === 'declined') {
+      const currentCall = callRef.current;
+      if (
+        currentCall
+        && currentCall.id !== nextCall.id
+        && (currentCall.status === 'ringing' || currentCall.status === 'active')
+      ) {
+        // The RPC normally prevents this row from being created. Keep the
+        // current call visible if a stale/racing Realtime row still arrives.
+        return;
+      }
+      if (parsed.status === 'ended' || parsed.status === 'declined' || parsed.status === 'busy') {
         if (callRef.current?.id === nextCall.id) {
           setCall((current) => current ? { ...current, status: parsed.status } : null);
           void dismissCallNotifications(nextCall.id);
@@ -619,8 +882,8 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
     void client
       .from('internal_calls')
       .select('*')
-      .eq('callee_id', userId)
-      .in('status', ['ringing', 'connecting'])
+      .or(`callee_id.eq.${userId},caller_id.eq.${userId}`)
+      .in('status', ['ringing', 'connecting', 'connected', 'rejected', 'busy', 'cancelled', 'missed', 'ended', 'failed'])
       .order('created_at', { ascending: false })
       .limit(1)
       .then(({ data }) => {
@@ -633,6 +896,42 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       void client.removeChannel(channel);
     };
   }, [dismissCallNotifications, isAuthenticated, user?.id]);
+
+  useEffect(() => {
+    const client = supabase;
+    const userId = user?.id;
+    if (!isAuthenticated || !client || !userId) return undefined;
+
+    // This covers notifications created directly by the platform/admin UI.
+    // Push remains the background delivery path; Realtime gives foreground
+    // users the same banner even when that producer does not call the API.
+    const channel = client
+      .channel(`mobile-notifications-${userId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
+        (payload) => {
+          const row = payload.new as {
+            id?: unknown;
+            title?: unknown;
+            body?: unknown;
+            type?: unknown;
+          };
+          const id = asString(row.id) ?? `notification-${Date.now()}`;
+          presentForegroundNotification(
+            id,
+            asString(row.title) ?? 'إشعار جديد',
+            asString(row.body) ?? 'لديك تحديث جديد من منصة أجيال المعرفة.',
+            { type: asString(row.type) ?? 'notification', notificationId: id },
+          );
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void client.removeChannel(channel);
+    };
+  }, [isAuthenticated, presentForegroundNotification, user?.id]);
 
   const startIncomingCall = useCallback((payload: Omit<IncomingCall, 'status'>) => {
     setCall({ ...payload, status: 'ringing' });
@@ -660,7 +959,10 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       callerName: user?.email ?? 'أجيال المعرفة',
       callerRole: 'معلم',
       roomId: deliveryRoomId,
-      status: 'active',
+      // The caller must wait for the callee's acceptance before opening
+      // WebRTC; otherwise the initial offer can be sent before the callee
+      // subscribes and the call has no audio.
+      status: 'ringing',
     });
     try {
       const result = await sendIncomingCallNotification({
@@ -739,11 +1041,152 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
     muted: callAudio.muted,
     callConnectionState: callAudio.connectionState,
     toggleMute: callAudio.toggleMute,
+    speakerEnabled: callAudio.speakerEnabled,
+    toggleSpeaker: callAudio.toggleSpeaker,
     callError: callAudio.error,
-  }), [acceptCall, call, callAudio.connectionState, callAudio.error, callAudio.muted, callAudio.toggleMute, clearCall, declineCall, endCall, endOutgoingCall, startIncomingCall, startOutgoingCall, testIncomingCall]);
+  }), [acceptCall, call, callAudio.connectionState, callAudio.error, callAudio.muted, callAudio.speakerEnabled, callAudio.toggleMute, callAudio.toggleSpeaker, clearCall, declineCall, endCall, endOutgoingCall, startIncomingCall, startOutgoingCall, testIncomingCall]);
 
-  return <InternalCallContext.Provider value={value}>{children}</InternalCallContext.Provider>;
+  const bannerRoute = foregroundNotification ? routeForNotification(foregroundNotification.data) : null;
+  return (
+    <InternalCallContext.Provider value={value}>
+      {children}
+      {notificationPermission && !notificationPermission.granted ? (
+        <NotificationPermissionBanner
+          canAskAgain={notificationPermission.canAskAgain}
+          onOpenSettings={() => {
+            void Linking.openSettings().catch(() => undefined);
+          }}
+        />
+      ) : null}
+      {foregroundNotification ? (
+        <ForegroundNotificationBanner
+          title={foregroundNotification.title}
+          body={foregroundNotification.body}
+          onPress={() => {
+            setForegroundNotification(null);
+            if (bannerRoute) router.push(bannerRoute);
+          }}
+          onClose={() => setForegroundNotification(null)}
+        />
+      ) : null}
+    </InternalCallContext.Provider>
+  );
 }
+
+function ForegroundNotificationBanner({
+  title,
+  body,
+  onPress,
+  onClose,
+}: {
+  title: string;
+  body: string;
+  onPress: () => void;
+  onClose: () => void;
+}) {
+  const colors = useColors();
+  const { direction } = useAppPreferences();
+  const insets = useSafeAreaInsets();
+  return (
+    <View pointerEvents="box-none" style={bannerStyles.layer}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => [
+          bannerStyles.card,
+          {
+            marginTop: insets.top + 8,
+            backgroundColor: colors.card,
+            borderColor: colors.border,
+            shadowColor: colors.primary,
+          },
+          pressed && bannerStyles.pressed,
+        ]}
+      >
+        <View style={[bannerStyles.icon, { backgroundColor: colors.tealSoft }]}>
+          <Icon name="bell" size={18} color={colors.teal} />
+        </View>
+        <View style={bannerStyles.copy}>
+          <Text numberOfLines={1} style={[bannerStyles.title, { color: colors.foreground, writingDirection: direction }]}>{title}</Text>
+          <Text numberOfLines={2} style={[bannerStyles.body, { color: colors.mutedForeground, writingDirection: direction }]}>{body}</Text>
+        </View>
+        <Pressable accessibilityLabel="إغلاق الإشعار" onPress={onClose} hitSlop={10} style={bannerStyles.close}>
+          <Icon name="x" size={16} color={colors.mutedForeground} />
+        </Pressable>
+      </Pressable>
+    </View>
+  );
+}
+
+function NotificationPermissionBanner({
+  canAskAgain,
+  onOpenSettings,
+}: {
+  canAskAgain: boolean;
+  onOpenSettings: () => void;
+}) {
+  const colors = useColors();
+  const { direction, t } = useAppPreferences();
+  const insets = useSafeAreaInsets();
+  return (
+    <View pointerEvents="box-none" style={bannerStyles.layer}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('فتح إعدادات الإشعارات', 'Open notification settings')}
+        onPress={onOpenSettings}
+        style={({ pressed }) => [
+          bannerStyles.card,
+          {
+            marginTop: insets.top + 8,
+            backgroundColor: colors.card,
+            borderColor: colors.border,
+            shadowColor: colors.primary,
+          },
+          pressed && bannerStyles.pressed,
+        ]}
+      >
+        <View style={[bannerStyles.icon, { backgroundColor: colors.tealSoft }]}>
+          <Icon name="bell-off" size={18} color={colors.teal} />
+        </View>
+        <View style={bannerStyles.copy}>
+          <Text style={[bannerStyles.title, { color: colors.foreground, writingDirection: direction }]}>
+            {t('الإشعارات غير مفعلة', 'Notifications are disabled')}
+          </Text>
+          <Text numberOfLines={2} style={[bannerStyles.body, { color: colors.mutedForeground, writingDirection: direction }]}>
+            {canAskAgain
+              ? t('فعّلها لتصلك الرسائل وتحديثات الحجوزات والجلسات.', 'Enable them to receive messages, booking updates, and session reminders.')
+              : t('افتح إعدادات الجهاز للسماح بإشعارات أجيال المعرفة.', 'Open device settings to allow Ajyal notifications.')}
+          </Text>
+        </View>
+        <Icon name="chevron-left" size={18} color={colors.mutedForeground} />
+      </Pressable>
+    </View>
+  );
+}
+
+const bannerStyles = StyleSheet.create({
+  layer: { ...StyleSheet.absoluteFill, zIndex: 1000, elevation: 1000 },
+  card: {
+    marginHorizontal: 12,
+    minHeight: 70,
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 12,
+  },
+  icon: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  copy: { flex: 1, alignItems: 'flex-end' },
+  title: { width: '100%', textAlign: 'right', fontSize: 12, fontFamily: 'Inter_700Bold' },
+  body: { width: '100%', textAlign: 'right', fontSize: 10, lineHeight: 15, marginTop: 3, fontFamily: 'Inter_400Regular' },
+  close: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  pressed: { opacity: 0.78 },
+});
 
 export function useInternalCall(): InternalCallContextValue {
   const context = useContext(InternalCallContext);

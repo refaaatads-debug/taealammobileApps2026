@@ -1,0 +1,24 @@
+{
+  "build": {
+    "production": {
+      "environment": "production",
+      "distribution": "store",
+      "pnpm": "10.26.1",
+      "env": {
+        "EXPO_PUBLIC_DOMAIN": "api.ajyalalmaerifa.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com"
+      }
+    },
+    "preview": {
+      "environment": "preview",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_DOMAIN": "api.ajyalalmaerifa.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com"
+      }
+    }
+  }
+}

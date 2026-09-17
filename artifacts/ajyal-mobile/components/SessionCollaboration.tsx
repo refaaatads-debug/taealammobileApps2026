@@ -49,6 +49,8 @@ export function SessionCollaboration({
   const [recipientId, setRecipientId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [sending, setSending] = useState(false);
   const threadBookingIdsRef = useRef<Set<string>>(new Set([bookingId]));
 
@@ -74,6 +76,7 @@ export function SessionCollaboration({
     }
 
     setLoading(true);
+    setLoadError(null);
     void (async () => {
       const { data: booking, error: bookingError } = await client
         .from('bookings')
@@ -83,6 +86,7 @@ export function SessionCollaboration({
       if (!active) return;
       if (bookingError || !booking) {
         setMessages([]);
+        setLoadError(bookingError?.message ?? 'تعذر تحميل بيانات الجلسة.');
         setLoading(false);
         return;
       }
@@ -121,7 +125,13 @@ export function SessionCollaboration({
         .gte('created_at', oneYearAgo.toISOString())
         .order('created_at', { ascending: true });
       if (!active) return;
-      setMessages(result.error ? [] : (result.data ?? []) as ChatMessage[]);
+       if (result.error) {
+         setMessages([]);
+         setLoadError(result.error.message || 'تعذر تحميل سجل المحادثة.');
+       } else {
+         setMessages((result.data ?? []) as ChatMessage[]);
+         setLoadError(null);
+       }
       setLoading(false);
     })();
 
@@ -130,7 +140,7 @@ export function SessionCollaboration({
       threadBookingIdsRef.current = new Set();
       void client.removeChannel(channel);
     };
-  }, [bookingId]);
+  }, [bookingId, reloadToken]);
 
   useEffect(() => {
     if (dataChannelState === 'open') {
@@ -174,7 +184,15 @@ export function SessionCollaboration({
         </Text>
       </View>
       <View style={styles.chatPanel}>
-        {loading ? <ActivityIndicator color={colors.teal} /> : messages.length ? messages.map((message) => (
+        {loading ? <ActivityIndicator color={colors.teal} /> : loadError ? (
+          <View style={styles.errorState}>
+            <Icon name="alert-circle" size={18} color={colors.destructive} />
+            <Text style={[styles.emptyText, { color: colors.destructive }]}>{loadError}</Text>
+            <Pressable onPress={() => { setLoadError(null); setLoading(true); setReloadToken((current) => current + 1); }} style={[styles.retryButton, { borderColor: colors.border }]}>
+              <Text style={[styles.retryText, { color: colors.teal }]}>إعادة المحاولة</Text>
+            </Pressable>
+          </View>
+        ) : messages.length ? messages.map((message) => (
           <View key={String(message.id)} style={[styles.message, { alignSelf: message.sender_id === userId ? 'flex-end' : 'flex-start', backgroundColor: message.sender_id === userId ? colors.tealSoft : colors.muted }]}>
             <Text style={[styles.messageText, { color: colors.foreground }]}>{message.content}</Text>
             <Text style={[styles.messageDate, { color: colors.mutedForeground }]}>{messageDate(message.created_at)}</Text>
@@ -201,6 +219,9 @@ const styles = StyleSheet.create({
   messageText: { textAlign: 'right', writingDirection: 'rtl', fontSize: 12, lineHeight: 18, fontFamily: 'Inter_400Regular' },
   messageDate: { textAlign: 'right', fontSize: 9, marginTop: 3, fontFamily: 'Inter_400Regular' },
   emptyText: { textAlign: 'center', paddingVertical: 18, fontSize: 11, fontFamily: 'Inter_400Regular' },
+  errorState: { alignItems: 'center', paddingVertical: 18, gap: 5 },
+  retryButton: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7 },
+  retryText: { fontSize: 10, fontFamily: 'Inter_700Bold' },
   composer: { minHeight: 45, borderRadius: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, marginTop: 5 },
   input: { flex: 1, minHeight: 38, maxHeight: 80, paddingHorizontal: 9, fontSize: 12, fontFamily: 'Inter_400Regular' },
   sendButton: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },

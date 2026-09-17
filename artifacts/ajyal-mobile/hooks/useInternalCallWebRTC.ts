@@ -16,6 +16,7 @@ type RtcModule = {
   RTCSessionDescription: new (description: unknown) => any;
   mediaDevices: { getUserMedia(constraints: unknown): Promise<any> };
   registerGlobals?: () => void;
+  RTCAudioSession?: { audioSessionDidActivate?: () => void };
 };
 
 type ConnectionState = "idle" | "connecting" | "connected" | "failed";
@@ -97,8 +98,10 @@ export function useInternalCallWebRTC({
   const readyTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const callIdRef = useRef<string | null>(null);
   const generationRef = useRef(0);
+  const speakerEnabledRef = useRef(true);
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [muted, setMuted] = useState(false);
+  const [speakerEnabled, setSpeakerEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const sendSignal = useCallback(async (signalType: string, payload: unknown) => {
@@ -196,7 +199,14 @@ export function useInternalCallWebRTC({
       const rtc = rtcRef.current ?? await getRtcModule();
       if (generation !== generationRef.current) return;
       rtcRef.current = rtc;
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        interruptionMode: "doNotMix",
+        shouldRouteThroughEarpiece: !speakerEnabledRef.current,
+      });
+      rtc.RTCAudioSession?.audioSessionDidActivate?.();
       if (generation !== generationRef.current) return;
       let localStream: any = null;
       try {
@@ -227,7 +237,10 @@ export function useInternalCallWebRTC({
       localStreamRef.current = localStream;
       peerRef.current = peer;
       if (localStream) {
-        localStream.getTracks().forEach((track: any) => peer.addTrack(track, localStream));
+        localStream.getAudioTracks?.().forEach((track: any) => {
+          track.enabled = true;
+          peer.addTrack(track, localStream);
+        });
       } else if (typeof peer.addTransceiver === "function") {
         peer.addTransceiver("audio", { direction: "recvonly" });
       }
@@ -240,6 +253,13 @@ export function useInternalCallWebRTC({
         const state = peer.connectionState;
         if (state === "connected") {
           setConnectionState("connected");
+          void setAudioModeAsync({
+            allowsRecording: true,
+            playsInSilentMode: true,
+            shouldPlayInBackground: true,
+            interruptionMode: "doNotMix",
+            shouldRouteThroughEarpiece: !speakerEnabledRef.current,
+          }).catch(() => undefined);
           if (callIdRef.current && supabase) {
             void (async () => {
               await supabase?.rpc("mark_internal_call_connected", { p_call_id: callIdRef.current });
@@ -250,6 +270,7 @@ export function useInternalCallWebRTC({
         }
       };
       peer.ontrack = (event: any) => {
+        if (event.track) event.track.enabled = true;
         // Native WebRTC routes received audio through the device audio session.
         // Browsers need an explicit autoplay audio sink.
         if (Platform.OS === "web" && event.streams?.[0]) {
@@ -295,7 +316,7 @@ export function useInternalCallWebRTC({
       if (generation !== generationRef.current) {
         await supabase.removeChannel(channel);
         peer.close?.();
-        localStream.getTracks?.().forEach((track: any) => track.stop());
+        localStream?.getTracks?.().forEach((track: any) => track.stop());
       }
     } catch (reason) {
       if (generation !== generationRef.current) return;
@@ -321,5 +342,20 @@ export function useInternalCallWebRTC({
     setMuted(nextMuted);
   }, [muted]);
 
-  return { connectionState, muted, error, start, stop, toggleMute };
+  const toggleSpeaker = useCallback(() => {
+    const nextSpeakerEnabled = !speakerEnabledRef.current;
+    speakerEnabledRef.current = nextSpeakerEnabled;
+    setSpeakerEnabled(nextSpeakerEnabled);
+    void setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
+        shouldPlayInBackground: true,
+      interruptionMode: "doNotMix",
+      shouldRouteThroughEarpiece: !nextSpeakerEnabled,
+    }).catch((reason) => {
+      setError(reason instanceof Error ? reason.message : "تعذر تغيير مخرج الصوت.");
+    });
+  }, []);
+
+  return { connectionState, muted, error, speakerEnabled, start, stop, toggleMute, toggleSpeaker };
 }

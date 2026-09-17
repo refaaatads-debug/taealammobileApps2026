@@ -5,11 +5,12 @@ import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { EmptyState, Header, Icon, Screen, SessionCard, LoadingBlock } from '@/components/AjyalUI';
 import BookingsSchedule from '@/components/BookingsSchedule';
-import { getListBookingRequestsQueryKey, getListMySessionsQueryKey, useCancelBookingRequest, useDecideBookingRequest, useDeleteBookingRequest, useListBookingRequests, useListMySessions } from '@workspace/api-client-react';
+import { getListBookingRequestsQueryKey, getListMyNotificationsQueryKey, getListMySessionsQueryKey, useCancelBookingRequest, useDecideBookingRequest, useDeleteBookingRequest, useListBookingRequests, useListMySessions } from '@workspace/api-client-react';
 import type { BookingRequest } from '@workspace/api-client-react';
 import type { Session } from '@/constants/localData';
 import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
+import { useQueryClient } from '@tanstack/react-query';
 
 type StudentRequestSection = 'pending' | 'accepted' | 'completed';
 
@@ -22,36 +23,63 @@ export default function BookingsScreen() {
   const colors = useColors();
   const { t, locale, direction, formatNumber } = useAppPreferences();
   const { role, roleResolved, profile, cancelSession } = useAjyal();
+  const queryClient = useQueryClient();
   const [view, setView] = useState<'upcoming' | 'past'>('upcoming');
   const [historyExpanded, setHistoryExpanded] = useState(true);
   const [cancelTarget, setCancelTarget] = useState<{ id: string; title: string } | null>(null);
   const [cancelRequestTarget, setCancelRequestTarget] = useState<BookingRequest | null>(null);
   const [deleteRequestTarget, setDeleteRequestTarget] = useState<BookingRequest | null>(null);
+  const [rejectRequestTarget, setRejectRequestTarget] = useState<{ request: BookingRequest; groupCount: number } | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [studentRequestSection, setStudentRequestSection] = useState<StudentRequestSection>('pending');
+  const [decisionFeedback, setDecisionFeedback] = useState<'accepted' | 'rejected' | 'error' | null>(null);
   const requestView = role === 'teacher' ? 'incoming' : 'mine';
   const sessionView = 'upcoming';
-  const sessionsQuery = useListMySessions({ view: sessionView }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: sessionView }), refetchInterval: roleResolved ? 5000 : false, refetchOnWindowFocus: true, refetchOnReconnect: true } });
-  const historyQuery = useListMySessions({ view: 'past' }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: 'past' }), refetchInterval: roleResolved ? 10000 : false, refetchOnWindowFocus: true, refetchOnReconnect: true } });
+  const sessionsQuery = useListMySessions({ view: sessionView }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: sessionView }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
+  const historyQuery = useListMySessions({ view: 'past' }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: 'past' }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
   const requestQuery = useListBookingRequests(
     { view: requestView },
-    { query: { enabled: roleResolved, queryKey: getListBookingRequestsQueryKey({ view: requestView }), refetchInterval: roleResolved ? 5000 : false, refetchOnWindowFocus: true, refetchOnReconnect: true } },
+    { query: { enabled: roleResolved, queryKey: getListBookingRequestsQueryKey({ view: requestView }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } },
   );
   const decisionMutation = useDecideBookingRequest({
     mutation: {
-      onSuccess: async () => {
+      onSuccess: async (_data, variables) => {
+        setDecisionFeedback(variables.data.status);
         await Promise.all([
           requestQuery.refetch(),
           sessionsQuery.refetch(),
           historyQuery.refetch(),
+          queryClient.invalidateQueries({ queryKey: getListMyNotificationsQueryKey() }),
+          queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] }),
         ]);
       },
       onError: (error) => {
+         setDecisionFeedback('error');
          const message = error instanceof Error ? error.message : t('تحقق من الاتصال ثم حاول مرة أخرى.', 'Check your connection and try again.');
          Alert.alert(t('تعذر تحديث الطلب', 'Could not update request'), message);
       },
     },
   });
+  const submitDecision = (request: BookingRequest, status: 'accepted' | 'rejected') => {
+    decisionMutation.mutate({
+      id: request.id,
+      data: { status, groupId: request.groupId ?? undefined },
+    });
+  };
+  const decideRequest = (request: BookingRequest, groupCount: number, status: 'accepted' | 'rejected') => {
+    setDecisionFeedback(null);
+    if (status !== 'rejected') {
+      submitDecision(request, status);
+      return;
+    }
+    setRejectRequestTarget({ request, groupCount });
+  };
+  const confirmRejectRequest = () => {
+    if (!rejectRequestTarget) return;
+    const { request } = rejectRequestTarget;
+    setRejectRequestTarget(null);
+    submitDecision(request, 'rejected');
+  };
   const cancelRequestMutation = useCancelBookingRequest({
     mutation: {
       onSuccess: async () => {
@@ -208,7 +236,7 @@ export default function BookingsScreen() {
      const actions = [
        { text: t('إغلاق', 'Close'), style: 'cancel' as const },
         ...(role !== 'teacher' && !isClosed ? [{ text: t('فتح غرفة الجلسة', 'Open session room'), onPress: () => router.push({ pathname: '/live-session', params: { booking: session.id } }) }] : []),
-       ...(session.status !== 'cancelled' ? [{ text: t('فتح المحادثة', 'Open chat'), onPress: () => router.push({ pathname: '/chat', params: { booking: session.id } }) }] : []),
+       ...(session.status !== 'cancelled' ? [{ text: t('فتح المحادثة', 'Open chat'), onPress: () => router.push({ pathname: '/(tabs)/messages', params: { booking: session.id } }) }] : []),
     ];
      Alert.alert(session.title, `${session.person}\n${session.date} · ${session.time}\n${t('مدة الجلسة:', 'Duration:')} ${session.duration}${session.status === 'expired' ? `\n${t('الحجز منتهى، ولا يمكن بدء الجلسة أو الانضمام إليها.', 'This booking has ended. You cannot start or join the session.')}` : ''}`, actions);
   };
@@ -273,7 +301,7 @@ export default function BookingsScreen() {
         style={({ pressed }) => [styles.sectionLead, { backgroundColor: colors.card, borderColor: colors.border }, isHistoryView && pressed && styles.pressed]}
       >
         <View style={[styles.sectionLeadIcon, { backgroundColor: colors.tealSoft }]}><Icon name="clock" size={19} color={colors.teal} /></View>
-        <View style={styles.sectionLeadCopy}><Text style={[styles.sectionLeadTitle, { color: colors.foreground, writingDirection: direction }]}>{view === 'upcoming' ? t('الجلسات القادمة', 'Upcoming sessions') : t('سجل الجلسات', 'Session history')}</Text><Text style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{view === 'upcoming' ? t('مواعيدك المؤكدة والجاهزة للمتابعة.', 'Confirmed sessions ready for you.') : t('الجلسات المكتملة والمنتهية سابقاً.', 'Completed and previous sessions.')}</Text></View>
+         <View style={styles.sectionLeadCopy}><Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadTitle, { color: colors.foreground, writingDirection: direction }]}>{view === 'upcoming' ? t('الجلسات القادمة', 'Upcoming sessions') : t('سجل الجلسات', 'Session history')}</Text><Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{view === 'upcoming' ? t('مواعيدك المؤكدة والجاهزة للمتابعة.', 'Confirmed sessions ready for you.') : t('الجلسات المكتملة والمنتهية سابقاً.', 'Completed and previous sessions.')}</Text></View>
         <View style={[styles.sectionLeadCount, { backgroundColor: colors.navySoft }]}><Text style={[styles.sectionLeadCountText, { color: colors.primary }]}>{formatNumber(visibleSessions.length)}</Text><Text style={[styles.sectionLeadCountLabel, { color: colors.primary }]}>{t('جلسة', 'sessions')}</Text></View>
         {isHistoryView ? <Icon name={historyExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.mutedForeground} /> : null}
         </Pressable>
@@ -282,11 +310,23 @@ export default function BookingsScreen() {
   );
   const requestSection = (
     <View style={styles.requestSections} testID="upcoming-booking-requests">
+      {decisionFeedback ? (
+        <View style={[styles.decisionFeedback, { backgroundColor: decisionFeedback === 'accepted' ? colors.tealSoft : decisionFeedback === 'rejected' ? colors.goldSoft : colors.accent, borderColor: decisionFeedback === 'accepted' ? colors.teal : decisionFeedback === 'rejected' ? colors.accentForeground : colors.destructive }]}>
+          <View style={[styles.decisionFeedbackIcon, { backgroundColor: decisionFeedback === 'accepted' ? colors.teal : decisionFeedback === 'rejected' ? colors.accent : colors.destructive }]}><Icon name={decisionFeedback === 'accepted' ? 'check-circle' : 'alert-circle'} size={17} color={colors.primaryForeground} /></View>
+          <Text style={[styles.decisionFeedbackText, { color: decisionFeedback === 'accepted' ? colors.teal : decisionFeedback === 'rejected' ? colors.accentForeground : colors.destructive, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>
+            {decisionFeedback === 'accepted'
+              ? t('تم قبول الطلب وتحديث الحجوزات والإشعارات مباشرة.', 'Request accepted. Bookings and notifications were updated immediately.')
+              : decisionFeedback === 'rejected'
+                ? t('تم رفض الطلب وإشعار الطالب مباشرة.', 'Request rejected. The student was notified immediately.')
+                : t('تعذر تحديث الطلب. تحقق من الاتصال وحاول مرة أخرى.', 'The request could not be updated. Check your connection and try again.')}
+          </Text>
+        </View>
+      ) : null}
       <View style={[styles.sectionLead, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <View style={[styles.sectionLeadIcon, { backgroundColor: colors.navySoft }]}><Icon name="inbox" size={19} color={colors.primary} /></View>
         <View style={styles.sectionLeadCopy}>
-          <Text style={[styles.sectionLeadTitle, { color: colors.foreground, writingDirection: direction }]}>{t('طلبات الحصص القادمة', 'Upcoming lesson requests')}</Text>
-          <Text style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{role === 'teacher' ? t('طلبات الطلاب الواردة بانتظار قرارك.', 'Incoming student requests waiting for your decision.') : t('طلباتك التي تنتظر قبول المعلم.', 'Your requests waiting for teacher acceptance.')}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadTitle, { color: colors.foreground, writingDirection: direction }]}>{t('طلبات الحصص القادمة', 'Upcoming lesson requests')}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{role === 'teacher' ? t('طلبات الطلاب الواردة بانتظار قرارك.', 'Incoming student requests waiting for your decision.') : t('طلباتك التي تنتظر قبول المعلم.', 'Your requests waiting for teacher acceptance.')}</Text>
         </View>
         <View style={[styles.sectionLeadCount, { backgroundColor: colors.tealSoft }]}>
           <Text style={[styles.sectionLeadCountText, { color: colors.teal }]}>{formatNumber(incomingRequestRows.length)}</Text>
@@ -309,7 +349,7 @@ export default function BookingsScreen() {
               onExpired={() => { void requestQuery.refetch(); }}
               onCancel={role === 'student' && request.status === 'open' ? () => requestBookingCancel(request) : undefined}
               onDelete={role === 'student' && ['rejected', 'cancelled', 'expired'].includes(request.status) ? () => requestBookingDelete(request) : undefined}
-              onDecision={role === 'teacher' ? (status) => decisionMutation.mutate({ id: request.id, data: { status, groupId: request.groupId ?? undefined } }) : undefined}
+               onDecision={role === 'teacher' ? (status) => decideRequest(request, count, status) : undefined}
             />
           ))}
         </View>
@@ -323,8 +363,8 @@ export default function BookingsScreen() {
       <View style={[styles.sectionLead, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <View style={[styles.sectionLeadIcon, { backgroundColor: colors.tealSoft }]}><Icon name="calendar" size={19} color={colors.teal} /></View>
         <View style={styles.sectionLeadCopy}>
-          <Text style={[styles.sectionLeadTitle, { color: colors.foreground, writingDirection: direction }]}>{t('الحصص القادمة', 'Upcoming lessons')}</Text>
-          <Text style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t('تنتقل الحصص المقبولة إلى هنا حتى موعدها.', 'Accepted lessons appear here until their scheduled time.')}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadTitle, { color: colors.foreground, writingDirection: direction }]}>{t('الحصص القادمة', 'Upcoming lessons')}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t('تنتقل الحصص المقبولة إلى هنا حتى موعدها.', 'Accepted lessons appear here until their scheduled time.')}</Text>
         </View>
         <View style={[styles.sectionLeadCount, { backgroundColor: colors.navySoft }]}>
           <Text style={[styles.sectionLeadCountText, { color: colors.primary }]}>{formatNumber(visibleSessions.length)}</Text>
@@ -345,8 +385,8 @@ export default function BookingsScreen() {
       <View style={[styles.sectionLead, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <View style={[styles.sectionLeadIcon, { backgroundColor: colors.tealSoft }]}><Icon name="video" size={19} color={colors.teal} /></View>
         <View style={styles.sectionLeadCopy}>
-          <Text style={[styles.sectionLeadTitle, { color: colors.foreground, writingDirection: direction }]}>{t('الحصص المتاحة اليوم', 'Available lessons today')}</Text>
-          <Text style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t('تظهر هنا حصص اليوم، ويتفعّل الانضمام بعد دخول المعلم.', 'Today’s lessons appear here; joining activates after the teacher enters.')}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadTitle, { color: colors.foreground, writingDirection: direction }]}>{t('الحصص المتاحة اليوم', 'Available lessons today')}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t('تظهر هنا حصص اليوم، ويتفعّل الانضمام بعد دخول المعلم.', 'Today’s lessons appear here; joining activates after the teacher enters.')}</Text>
         </View>
         <View style={[styles.sectionLeadCount, { backgroundColor: colors.tealSoft }]}>
           <Text style={[styles.sectionLeadCountText, { color: colors.teal }]}>{formatNumber(availableTodaySessions.length)}</Text>
@@ -402,8 +442,8 @@ export default function BookingsScreen() {
           <Icon name="inbox" size={18} color={colors.teal} />
         </View>
         <View style={styles.studentRequestHeaderCopy}>
-          <Text style={[styles.studentRequestHeaderTitle, { color: colors.foreground, writingDirection: direction }]}>{t('طلبات الحصص', 'Lesson requests')}</Text>
-          <Text style={[styles.studentRequestHeaderBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t('اختر القسم لعرض تفاصيله دون شغل مساحة إضافية.', 'Choose a section to view its details without taking extra space.')}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.studentRequestHeaderTitle, { color: colors.foreground, writingDirection: direction }]}>{t('طلبات الحصص', 'Lesson requests')}</Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.studentRequestHeaderBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t('اختر القسم لعرض تفاصيله دون شغل مساحة إضافية.', 'Choose a section to view its details without taking extra space.')}</Text>
         </View>
         <View style={[styles.studentRequestTotal, { backgroundColor: colors.navySoft }]}>
           <Text style={[styles.studentRequestTotalValue, { color: colors.primary }]}>{formatNumber(displayedRequests.length + completedSessions.length)}</Text>
@@ -495,33 +535,33 @@ export default function BookingsScreen() {
          <View style={[styles.heroOrb, { backgroundColor: colors.tint }]} />
          <View style={styles.introTop}>
            <View style={styles.introCopy}>
-             <View style={styles.introKicker}><View style={[styles.kickerDot, { backgroundColor: colors.accent }]} /><Text style={[styles.introLabel, { color: colors.tint }]}>{t('مساحتك التعليمية', 'Your learning space')}</Text></View>
+             <View style={styles.introKicker}><View style={[styles.kickerDot, { backgroundColor: colors.accent }]} /><Text numberOfLines={1} style={[styles.introLabel, { color: colors.primaryForeground }]}>{t('مساحتك التعليمية', 'Your learning space')}</Text></View>
              <Text numberOfLines={1} style={[styles.introTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{role === 'student' ? t('رتّب جلستك القادمة', 'Plan your next session') : t('كل جلساتك في مكان واحد', 'Your sessions, in one place')}</Text>
-             <Text numberOfLines={2} style={[styles.introBody, { color: colors.tint, writingDirection: direction }]}>{role === 'student' ? t('تابع طلباتك ومواعيدك المؤكدة بسهولة.', 'Track requests and confirmed sessions with ease.') : t('تابع طلبات الطلاب ومواعيدك القادمة بوضوح.', 'Track student requests and upcoming sessions with clarity.')}</Text>
+             <Text numberOfLines={2} style={[styles.introBody, { color: colors.primaryForeground, writingDirection: direction }]}>{role === 'student' ? t('تابع طلباتك ومواعيدك المؤكدة بسهولة.', 'Track requests and confirmed sessions with ease.') : t('تابع طلبات الطلاب ومواعيدك القادمة بوضوح.', 'Track student requests and upcoming sessions with clarity.')}</Text>
            </View>
            <View style={[styles.heroAside, { backgroundColor: colors.primaryForeground + '16', borderColor: colors.primaryForeground + '22' }]}>
              <View style={[styles.heroAsideIcon, { backgroundColor: colors.teal }]}>
                <Icon name="calendar" size={17} color={colors.primaryForeground} />
              </View>
              <Text style={[styles.heroAsideValue, { color: colors.primaryForeground }]}>{formatNumber(activeSessionCount)}</Text>
-             <Text style={[styles.heroAsideLabel, { color: colors.tint }]}>{t('جلسات قادمة', 'Upcoming')}</Text>
+             <Text numberOfLines={1} style={[styles.heroAsideLabel, { color: colors.primaryForeground }]}>{t('جلسات قادمة', 'Upcoming')}</Text>
            </View>
          </View>
           <View style={styles.introBottom}>
            <View style={styles.heroStats}>
              <View style={styles.heroStat}>
                <Text style={[styles.heroStatValue, { color: colors.primaryForeground }]}>{formatNumber(pendingRequestCount)}</Text>
-                <Text style={[styles.heroStatLabel, { color: colors.tint }]}>{t('طلبات قادمة', 'Upcoming requests')}</Text>
+                 <Text numberOfLines={1} style={[styles.heroStatLabel, { color: colors.primaryForeground }]}>{t('طلبات قادمة', 'Upcoming requests')}</Text>
              </View>
              <View style={styles.heroStatDivider} />
              <View style={styles.heroStat}>
                 <Text style={[styles.heroStatValue, { color: colors.primaryForeground }]}>{formatNumber(activeSessionCount)}</Text>
-                <Text style={[styles.heroStatLabel, { color: colors.tint }]}>{t('حصص قادمة', 'Upcoming lessons')}</Text>
+                <Text numberOfLines={1} style={[styles.heroStatLabel, { color: colors.primaryForeground }]}>{t('حصص قادمة', 'Upcoming lessons')}</Text>
              </View>
              <View style={styles.heroStatDivider} />
              <View style={styles.heroStat}>
                 <Text style={[styles.heroStatValue, { color: colors.primaryForeground }]}>{formatNumber(scheduleSessions.length)}</Text>
-                <Text style={[styles.heroStatLabel, { color: colors.tint }]}>{t('جدول الحصص', 'Lesson schedule')}</Text>
+                 <Text numberOfLines={1} style={[styles.heroStatLabel, { color: colors.primaryForeground }]}>{t('جدول الحصص', 'Lesson schedule')}</Text>
              </View>
            </View>
          </View>
@@ -548,7 +588,14 @@ export default function BookingsScreen() {
         </View>
         {sessionsQuery.isLoading || historyQuery.isLoading || requestQuery.isLoading ? <LoadingBlock /> : null}
           {role === 'teacher' ? <>{requestSection}{teacherUpcomingSection}</> : <>{studentAvailableSection}{studentRequestSections}</>}
-        {!sessionsQuery.isLoading && !historyQuery.isLoading ? <BookingsSchedule sessions={scheduleSessions} role={role === 'teacher' ? 'teacher' : 'student'} onSessionPress={(session) => openSession(session.id)} /> : null}
+        {!sessionsQuery.isLoading && !historyQuery.isLoading ? (
+          <BookingsSchedule
+            sessions={scheduleSessions}
+            role={role === 'teacher' ? 'teacher' : 'student'}
+            onSessionPress={(session) => openSession(session.id)}
+            onJoinSession={(session) => router.push({ pathname: '/live-session', params: { booking: session.id } })}
+          />
+        ) : null}
         <Modal visible={Boolean(cancelTarget)} transparent animationType="fade" onRequestClose={() => setCancelTarget(null)}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBackdrop}>
             <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -591,6 +638,47 @@ export default function BookingsScreen() {
               <View style={styles.modalActions}>
                 <Pressable onPress={() => setDeleteRequestTarget(null)} style={[styles.modalButton, { borderColor: colors.border }]}><Text style={[styles.modalButtonText, { color: colors.mutedForeground }]}>{t('تراجع', 'Go back')}</Text></Pressable>
                 <Pressable disabled={deleteRequestMutation.isPending} onPress={confirmRequestDelete} style={[styles.modalButton, { backgroundColor: deleteRequestMutation.isPending ? colors.muted : colors.destructive }]}><Text style={[styles.modalButtonText, { color: colors.destructiveForeground }]}>{deleteRequestMutation.isPending ? t('جارٍ الحذف…', 'Deleting…') : t('حذف الطلب', 'Delete request')}</Text></Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+        <Modal visible={Boolean(rejectRequestTarget)} transparent animationType="fade" onRequestClose={() => setRejectRequestTarget(null)}>
+          <View style={styles.modalBackdrop}>
+            <View style={[styles.modalCard, styles.rejectModalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[styles.rejectModalIcon, { backgroundColor: colors.tealSoft }]}>
+                <Icon name="alert-triangle" size={22} color={colors.teal} />
+              </View>
+              <Text style={[styles.modalTitle, { color: colors.foreground, writingDirection: direction }]}>
+                {t('تحذير قبل رفض الطلب', 'Warning before rejecting')}
+              </Text>
+              <Text style={[styles.modalBody, { color: colors.mutedForeground, writingDirection: direction }]}>
+                {rejectRequestTarget
+                  ? t(
+                    `هل أنت متأكد من رفض طلب ${rejectRequestTarget.request.studentName ? `الطالب ${rejectRequestTarget.request.studentName}` : 'الطالب'}؟ سيتم رفض ${rejectRequestTarget.groupCount > 1 ? 'هذه المواعيد' : 'هذا الموعد'} وإشعار الطالب بذلك، وستعود دقائق الحجز إلى رصيد الطالب. لا يمكن التراجع عن هذا الإجراء.`,
+                    `Are you sure you want to reject ${rejectRequestTarget.request.studentName ? `student ${rejectRequestTarget.request.studentName}'s` : 'this student’s'} request? ${rejectRequestTarget.groupCount > 1 ? 'These appointments' : 'This appointment'} will be rejected and the student will be notified. The booking minutes will return to the student’s balance. This cannot be undone.`,
+                  )
+                  : ''}
+              </Text>
+              <View style={styles.modalActions}>
+                <Pressable
+                  testID="cancel-reject-booking-request"
+                  accessibilityRole="button"
+                  onPress={() => setRejectRequestTarget(null)}
+                  style={({ pressed }) => [styles.modalButton, { borderColor: colors.border }, pressed && styles.pressed]}
+                >
+                  <Text style={[styles.modalButtonText, { color: colors.mutedForeground }]}>{t('تراجع', 'Go back')}</Text>
+                </Pressable>
+                <Pressable
+                  testID="confirm-reject-booking-request"
+                  accessibilityRole="button"
+                  disabled={decisionMutation.isPending}
+                  onPress={confirmRejectRequest}
+                  style={({ pressed }) => [styles.modalButton, { backgroundColor: decisionMutation.isPending ? colors.muted : colors.destructive }, pressed && styles.pressed]}
+                >
+                  <Text style={[styles.modalButtonText, { color: colors.destructiveForeground }]}>
+                    {decisionMutation.isPending ? t('جارٍ الرفض…', 'Rejecting…') : t('تأكيد الرفض', 'Confirm rejection')}
+                  </Text>
+                </Pressable>
               </View>
             </View>
           </View>
@@ -704,71 +792,85 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], b
       {request.acceptedBy ? <Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{t('تم القبول بواسطة المعلم', 'Accepted by the teacher')}</Text> : null}
         {onCancel && request.status === 'open' ? <Pressable disabled={cancelling} onPress={onCancel} style={[styles.requestCancelButton, { borderColor: colors.destructive }]}><Icon name="x-circle" size={14} color={colors.destructive} /><Text style={[styles.requestCancelText, { color: colors.destructive }]}>{cancelling ? t('جارٍ الإلغاء…', 'Cancelling…') : t('إلغاء الطلب', 'Cancel request')}</Text></Pressable> : null}
          {onDelete && (request.status === 'accepted' || ['rejected', 'cancelled', 'expired'].includes(request.status)) ? <Pressable disabled={deleting} onPress={onDelete} style={[styles.requestCancelButton, { borderColor: colors.destructive }]}><Icon name="trash-2" size={14} color={colors.destructive} /><Text style={[styles.requestCancelText, { color: colors.destructive }]}>{deleting ? t('جارٍ الحذف…', 'Deleting…') : t('حذف الطلب', 'Delete request')}</Text></Pressable> : null}
-      {onDecision && request.status === 'open' ? <View style={styles.requestActions}><Pressable disabled={busy} onPress={() => onDecision('rejected')} style={[styles.requestButton, { borderColor: colors.border }]}><Text style={[styles.requestButtonText, { color: colors.destructive }]}>{t('رفض', 'Reject')}</Text></Pressable><Pressable disabled={busy} onPress={() => onDecision('accepted')} style={[styles.requestButton, { backgroundColor: busy ? colors.muted : colors.teal }]}><Text style={[styles.requestButtonText, { color: colors.primaryForeground }]}>{busy ? t('جارٍ التحديث…', 'Updating…') : t('قبول الطلب', 'Accept request')}</Text></Pressable></View> : null}</> : null}
+       {onDecision && request.status === 'open' ? <View style={styles.requestActions}><Pressable
+         testID={`reject-booking-request-${request.id}`}
+         accessibilityRole="button"
+         accessibilityLabel={t('رفض طلب الحجز', 'Reject booking request')}
+         disabled={busy}
+         onPress={() => onDecision('rejected')}
+         style={({ pressed }) => [styles.requestButton, { borderColor: colors.border, opacity: busy ? 0.55 : 1 }, pressed && styles.pressed]}
+       ><Text style={[styles.requestButtonText, { color: colors.destructive }]}>{t('رفض', 'Reject')}</Text></Pressable><Pressable
+         testID={`accept-booking-request-${request.id}`}
+         accessibilityRole="button"
+         accessibilityLabel={t('قبول طلب الحجز', 'Accept booking request')}
+         disabled={busy}
+         onPress={() => onDecision('accepted')}
+         style={({ pressed }) => [styles.requestButton, { backgroundColor: busy ? colors.muted : colors.teal }, pressed && styles.pressed]}
+       ><Text style={[styles.requestButtonText, { color: colors.primaryForeground }]}>{busy ? t('جارٍ التحديث…', 'Updating…') : t('قبول الطلب', 'Accept request')}</Text></Pressable></View> : null}</> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  intro: { borderRadius: 20, minHeight: 158, padding: 16, flexDirection: 'column', alignItems: 'stretch', marginBottom: 14, overflow: 'hidden', position: 'relative' },
+  intro: { borderRadius: 18, minHeight: 142, padding: 13, flexDirection: 'column', alignItems: 'stretch', marginBottom: 11, overflow: 'hidden', position: 'relative' },
   heroOrb: { position: 'absolute', width: 190, height: 190, borderRadius: 95, opacity: 0.08, left: -100, top: -86 },
   heroOrbSmall: { position: 'absolute', width: 94, height: 94, borderRadius: 47, opacity: 0.12, right: -35, bottom: -42 },
-  introTop: { flexDirection: 'row-reverse', alignItems: 'center', gap: 11, zIndex: 1 },
+  introTop: { flexDirection: 'row-reverse', alignItems: 'center', gap: 9, zIndex: 1 },
   introCopy: { flex: 1, alignItems: 'flex-end', zIndex: 1 },
   introKicker: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-end' },
   kickerDot: { width: 6, height: 6, borderRadius: 3 },
-  introLabel: { fontSize: 10, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
-  introTitle: { width: '100%', fontSize: 20, lineHeight: 26, letterSpacing: -0.3, fontFamily: 'Inter_700Bold', marginTop: 6, textAlign: 'right', writingDirection: 'rtl' },
-  introBody: { width: '100%', fontSize: 10, lineHeight: 15, marginTop: 4, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
-  heroAside: { width: 72, minHeight: 88, borderRadius: 15, borderWidth: 1, alignItems: 'center', justifyContent: 'center', gap: 2 },
-  heroAsideIcon: { width: 31, height: 31, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
-  heroAsideValue: { fontSize: 20, fontFamily: 'Inter_700Bold' },
-  heroAsideLabel: { fontSize: 8, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl', textAlign: 'center' },
-  introBottom: { flexDirection: 'row-reverse', alignItems: 'center', gap: 9, marginTop: 11, paddingTop: 9, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.16)', zIndex: 1 },
+  introLabel: { flexShrink: 1, fontSize: 10, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
+  introTitle: { width: '100%', fontSize: 18, lineHeight: 23, letterSpacing: -0.25, fontFamily: 'Inter_700Bold', marginTop: 5, textAlign: 'right', writingDirection: 'rtl' },
+  introBody: { width: '100%', fontSize: 9, lineHeight: 13, marginTop: 3, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl', opacity: 0.9 },
+  heroAside: { width: 64, minHeight: 70, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center', gap: 1 },
+  heroAsideIcon: { width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginBottom: 1 },
+  heroAsideValue: { fontSize: 18, fontFamily: 'Inter_700Bold' },
+  heroAsideLabel: { fontSize: 7, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl', textAlign: 'center', opacity: 0.9 },
+  introBottom: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8, marginTop: 8, paddingTop: 7, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.16)', zIndex: 1 },
   heroStats: { flex: 1, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between' },
   heroStat: { flex: 1, alignItems: 'center' },
-  heroStatValue: { fontSize: 15, fontFamily: 'Inter_700Bold' },
-  heroStatLabel: { fontSize: 7, fontFamily: 'Inter_500Medium', marginTop: 2, writingDirection: 'rtl', textAlign: 'center' },
-  heroStatDivider: { width: 1, height: 24, backgroundColor: 'rgba(255,255,255,0.18)' },
-  introAction: { width: '100%', minHeight: 50, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 12, zIndex: 2 },
-  introActionText: { fontSize: 14, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  heroStatValue: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  heroStatLabel: { flexShrink: 1, fontSize: 6.5, fontFamily: 'Inter_500Medium', marginTop: 1, writingDirection: 'rtl', textAlign: 'center', opacity: 0.9 },
+  heroStatDivider: { width: 1, height: 20, backgroundColor: 'rgba(255,255,255,0.18)' },
+  introAction: { width: '100%', minHeight: 43, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 9, zIndex: 2 },
+  introActionText: { fontSize: 12, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   segmented: { borderRadius: 15, padding: 4, flexDirection: 'row-reverse', marginBottom: 16, alignSelf: 'stretch' },
   segment: { flex: 1, minHeight: 44, paddingVertical: 8, borderRadius: 11, alignItems: 'center', justifyContent: 'center', flexDirection: 'row-reverse', gap: 6 },
   segmentText: { fontSize: 11, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   addButton: { borderRadius: 15, minHeight: 50, justifyContent: 'center', alignItems: 'center', flexDirection: 'row', gap: 8, marginTop: 7 },
   addButtonText: { fontSize: 13, fontFamily: 'Inter_700Bold' },
-  sectionLead: { minHeight: 64, borderRadius: 16, borderWidth: 1, padding: 9, flexDirection: 'row-reverse', alignItems: 'center', gap: 9, marginBottom: 8 },
-  sectionLeadIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  sectionLead: { minHeight: 56, borderRadius: 18, borderWidth: 1, padding: 12, flexDirection: 'row-reverse', alignItems: 'center', gap: 8, marginBottom: 8, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  sectionLeadIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center', shadowColor: '#173E8C', shadowOpacity: 0.1, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   sectionLeadCopy: { flex: 1, alignItems: 'flex-end' },
-  sectionLeadTitle: { width: '100%', fontSize: 13, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
-  sectionLeadBody: { width: '100%', fontSize: 8, lineHeight: 13, marginTop: 2, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
-  sectionLeadCount: { minWidth: 38, borderRadius: 10, paddingHorizontal: 5, paddingVertical: 6, alignItems: 'center' },
-  sectionLeadCountText: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  sectionLeadTitle: { width: '100%', flexShrink: 1, fontSize: 11.5, lineHeight: 15, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  sectionLeadBody: { width: '100%', flexShrink: 1, fontSize: 7.5, lineHeight: 11, marginTop: 1, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
+  sectionLeadCount: { minWidth: 34, borderRadius: 9, paddingHorizontal: 4, paddingVertical: 5, alignItems: 'center' },
+  sectionLeadCountText: { fontSize: 13, fontFamily: 'Inter_700Bold' },
   sectionLeadCountLabel: { fontSize: 7, fontFamily: 'Inter_600SemiBold', marginTop: 1, writingDirection: 'rtl' },
-  studentRequestCard: { borderRadius: 20, borderWidth: 1, padding: 11, gap: 11, marginBottom: 18, shadowColor: '#08264A', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
-  studentRequestHeader: { flexDirection: 'row-reverse', alignItems: 'center', gap: 9 },
-  studentRequestHeaderIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  studentRequestCard: { borderRadius: 18, borderWidth: 1, padding: 12, gap: 8, marginBottom: 13, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  studentRequestHeader: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8 },
+  studentRequestHeaderIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   studentRequestHeaderCopy: { flex: 1, alignItems: 'flex-end' },
-  studentRequestHeaderTitle: { width: '100%', fontSize: 14, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
-  studentRequestHeaderBody: { width: '100%', fontSize: 9, lineHeight: 14, marginTop: 2, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
-  studentRequestTotal: { minWidth: 43, borderRadius: 11, paddingHorizontal: 6, paddingVertical: 6, alignItems: 'center' },
-  studentRequestTotalValue: { fontSize: 15, fontFamily: 'Inter_700Bold' },
+  studentRequestHeaderTitle: { width: '100%', flexShrink: 1, fontSize: 12, lineHeight: 15, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  studentRequestHeaderBody: { width: '100%', flexShrink: 1, fontSize: 8, lineHeight: 12, marginTop: 1, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
+  studentRequestTotal: { minWidth: 38, borderRadius: 10, paddingHorizontal: 5, paddingVertical: 5, alignItems: 'center' },
+  studentRequestTotalValue: { fontSize: 14, fontFamily: 'Inter_700Bold' },
   studentRequestTotalLabel: { fontSize: 7, fontFamily: 'Inter_600SemiBold', marginTop: 1, writingDirection: 'rtl' },
-  studentRequestTabs: { borderRadius: 14, padding: 4, flexDirection: 'row-reverse', gap: 4 },
-  studentRequestTab: { flex: 1, minHeight: 53, borderRadius: 11, borderWidth: 1, borderColor: 'transparent', alignItems: 'center', justifyContent: 'center', gap: 4, paddingHorizontal: 3 },
-  studentRequestTabText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl', textAlign: 'center' },
-  studentRequestTabCount: { minWidth: 21, height: 18, borderRadius: 9, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center' },
-  studentRequestTabCountText: { fontSize: 9, fontFamily: 'Inter_700Bold' },
-  studentRequestPanel: { borderRadius: 15, borderWidth: 1, borderRightWidth: 3, padding: 10, gap: 10 },
-  studentRequestPanelHeader: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8 },
-  studentRequestPanelIcon: { width: 31, height: 31, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  studentRequestTabs: { borderRadius: 12, padding: 3, flexDirection: 'row-reverse', gap: 3 },
+  studentRequestTab: { flex: 1, minHeight: 44, borderRadius: 10, borderWidth: 1, borderColor: 'transparent', alignItems: 'center', justifyContent: 'center', gap: 3, paddingHorizontal: 2 },
+  studentRequestTabText: { fontSize: 9, fontFamily: 'Inter_700Bold', writingDirection: 'rtl', textAlign: 'center' },
+  studentRequestTabCount: { minWidth: 19, height: 16, borderRadius: 8, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
+  studentRequestTabCountText: { fontSize: 8, fontFamily: 'Inter_700Bold' },
+  studentRequestPanel: { borderRadius: 18, borderWidth: 1, borderRightWidth: 2, padding: 12, gap: 8, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  studentRequestPanelHeader: { flexDirection: 'row-reverse', alignItems: 'center', gap: 7 },
+  studentRequestPanelIcon: { width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   studentRequestPanelCopy: { flex: 1, alignItems: 'flex-end' },
-  studentRequestPanelTitle: { width: '100%', fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
-  studentRequestPanelBody: { width: '100%', fontSize: 8, lineHeight: 12, marginTop: 2, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
-  studentRequestPanelCount: { minWidth: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
-  studentRequestPanelCountText: { fontSize: 12, fontFamily: 'Inter_700Bold' },
+  studentRequestPanelTitle: { width: '100%', fontSize: 11, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  studentRequestPanelBody: { width: '100%', fontSize: 7.5, lineHeight: 11, marginTop: 1, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
+  studentRequestPanelCount: { minWidth: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  studentRequestPanelCountText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
   studentGroups: { gap: 10, marginBottom: 16 },
-  studentGroup: { borderRadius: 19, borderWidth: 1, overflow: 'hidden' },
+  studentGroup: { borderRadius: 18, borderWidth: 1, overflow: 'hidden', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   studentGroupHeader: { minHeight: 72, paddingHorizontal: 13, paddingVertical: 11, flexDirection: 'row-reverse', alignItems: 'center', gap: 10 },
   studentGroupAvatar: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   studentGroupCopy: { flex: 1, alignItems: 'flex-end' },
@@ -780,30 +882,35 @@ const styles = StyleSheet.create({
   requestTabText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl', textAlign: 'center' },
   requestTabCount: { minWidth: 19, height: 17, borderRadius: 9, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
   requestTabCountText: { fontSize: 9, fontFamily: 'Inter_700Bold' },
-  requests: { gap: 10, marginBottom: 16 },
-  requestSections: { gap: 10, marginBottom: 18 },
+  requests: { gap: 8, marginBottom: 12 },
+  requestSections: { gap: 8, marginBottom: 13 },
+  decisionFeedback: { minHeight: 54, borderRadius: 15, borderWidth: 1, padding: 10, flexDirection: 'row-reverse', alignItems: 'center', gap: 9 },
+  decisionFeedbackIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  decisionFeedbackText: { flex: 1, fontSize: 11, lineHeight: 17, fontFamily: 'Inter_600SemiBold' },
   requestSection: { gap: 8 },
-  requestSectionHeader: { minHeight: 50, borderRadius: 15, borderWidth: 1, paddingHorizontal: 13, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between' },
+  requestSectionHeader: { minHeight: 50, borderRadius: 18, borderWidth: 1, paddingHorizontal: 12, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   requestSectionTitle: { flex: 1, fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
-  requestCard: { borderRadius: 19, borderWidth: 1, borderRightWidth: 3, padding: 14, gap: 9 },
-  requestTop: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8 },
+  requestCard: { borderRadius: 18, borderWidth: 1, borderRightWidth: 2, padding: 12, gap: 7, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  requestTop: { flexDirection: 'row-reverse', alignItems: 'center', gap: 7 },
   requestTopToggle: { flex: 1, flexDirection: 'row-reverse', alignItems: 'center', gap: 10, minHeight: 40 },
   requestDeleteButton: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  requestSubject: { flex: 1, fontSize: 15, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  requestSubject: { flex: 1, fontSize: 14, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   requestStatus: { borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6 },
   requestStatusText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  requestMeta: { fontSize: 11, lineHeight: 18, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
+  requestMeta: { fontSize: 10, lineHeight: 16, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
   requestSlotList: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 6, marginTop: 2 },
   requestSlot: { borderRadius: 8, paddingHorizontal: 7, paddingVertical: 5, fontSize: 9, fontFamily: 'Inter_500Medium', writingDirection: 'rtl' },
-  requestReserveNote: { fontSize: 10, lineHeight: 16, fontFamily: 'Inter_600SemiBold', textAlign: 'right', writingDirection: 'rtl' },
-  requestCancelButton: { minHeight: 41, borderRadius: 11, borderWidth: 1, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 3 },
-  requestCancelText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  requestActions: { flexDirection: 'row-reverse', gap: 8, marginTop: 3 },
-  requestButton: { flex: 1, minHeight: 43, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  requestButtonText: { fontSize: 12, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  requestReserveNote: { fontSize: 9, lineHeight: 14, fontFamily: 'Inter_600SemiBold', textAlign: 'right', writingDirection: 'rtl' },
+  requestCancelButton: { minHeight: 36, borderRadius: 10, borderWidth: 1, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 2 },
+  requestCancelText: { fontSize: 9, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  requestActions: { flexDirection: 'row-reverse', gap: 7, marginTop: 2 },
+  requestButton: { flex: 1, minHeight: 38, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  requestButtonText: { fontSize: 11, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   pressed: { opacity: 0.72 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(6, 24, 44, 0.55)', justifyContent: 'center', padding: 20 },
   modalCard: { borderRadius: 20, borderWidth: 1, padding: 17, gap: 10 },
+  rejectModalCard: { alignItems: 'stretch' },
+  rejectModalIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-end', marginBottom: 2 },
   modalTitle: { fontSize: 16, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   modalBody: { fontSize: 11, lineHeight: 18, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
   reasonInput: { minHeight: 105, borderRadius: 13, borderWidth: 1, padding: 12, fontSize: 12, fontFamily: 'Inter_400Regular', textAlignVertical: 'top' },

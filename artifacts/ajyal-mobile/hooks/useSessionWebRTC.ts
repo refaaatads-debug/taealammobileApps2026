@@ -3,6 +3,7 @@ import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setAudioModeAsync } from 'expo-audio';
 import { supabase } from '@/lib/supabase';
+import { mergeRemoteSessionTracks, removeRemoteSessionTrack } from '@/lib/remoteSessionTracks';
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'failed';
 export type SessionDataMessage = {
@@ -389,22 +390,11 @@ export function useSessionWebRTC({
       }
     };
     const publishRemoteTracks = (incomingStream?: any, incomingTrack?: any) => {
-      const incomingTracks = [
-        ...(incomingStream?.getTracks?.() ?? []),
-        ...(incomingTrack ? [incomingTrack] : []),
-      ];
-      for (const track of incomingTracks) {
-        if (!track) continue;
-        const trackId = track.id ? String(track.id) : null;
-        const existingIndex = remoteTracksRef.current.findIndex((item: any) => (
-          item === track || (trackId && item?.id && String(item.id) === trackId)
-        ));
-        if (existingIndex === -1) {
-          remoteTracksRef.current.push(track);
-        } else if (remoteTracksRef.current[existingIndex] !== track && remoteTracksRef.current[existingIndex]?.readyState === 'ended') {
-          remoteTracksRef.current[existingIndex] = track;
-        }
-      }
+      remoteTracksRef.current = mergeRemoteSessionTracks(
+        remoteTracksRef.current,
+        incomingStream,
+        incomingTrack,
+      );
       remoteTrackIdsRef.current = new Set(
         remoteTracksRef.current
           .map((track: any, index: number) => String(track?.id ?? `${track?.kind ?? 'track'}-${index}`)),
@@ -439,7 +429,7 @@ export function useSessionWebRTC({
     peer.onremovetrack = (event: any) => {
       const track = event?.track;
       if (!track) return;
-      remoteTracksRef.current = remoteTracksRef.current.filter((item: any) => item !== track && item?.id !== track.id);
+      remoteTracksRef.current = removeRemoteSessionTrack(remoteTracksRef.current, track);
       remoteTrackIdsRef.current.delete(String(track.id));
       const Stream = rtc.MediaStream;
       if (Stream && remoteTracksRef.current.length) {

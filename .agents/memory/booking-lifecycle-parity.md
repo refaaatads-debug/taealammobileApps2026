@@ -9,6 +9,12 @@ The published booking flow treats a grouped booking request as one teacher decis
 
 **How to apply:** Before allowing a teacher decision, use the group's earliest expiry, block a teacher with an in-progress session scheduled within the last four hours, and check each requested slot against pending/confirmed bookings in the platform's bounded conflict window. After confirmation, mirror the platform's notification and first-chat behavior.
 
+The platform's first-impression reminder is global per student: after acceptance, claim `teacher_first_impressions` for that student, verify there are no prior bookings excluding the newly created booking IDs, then show the teacher reminder once. It is not a recurring teacher/student-pair notification.
+
+**Why:** The original acceptance flow uses the persisted claim to prevent the reminder from appearing again when the same student books another teacher or when the teacher refreshes/retries the acceptance flow.
+
+**How to apply:** Keep the claim and prior-booking check after confirmed booking creation, and treat failure to create the optional reminder as non-fatal to the booking.
+
 Cancellation is asymmetric: a student cancellation updates booking/session status and notifies the teacher; a teacher cancellation requires a non-empty reason, records the cancellation metadata, tracks the monthly cancellation count, and warns administration after the published limit. Session listings use confirmed/pending bookings within the platform's bounded history/future window.
 
 Booking requests use the platform's broadcast model: `booking_requests` has no assigned teacher column, and teacher visibility is controlled by RLS using the resolved subject and (when present) the student's teaching stage. The published direct-teacher flow sends a notification to the selected teacher but does not enforce target-only visibility in the table.

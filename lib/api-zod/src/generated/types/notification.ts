@@ -13,4 +13,10 @@ export interface Notification {
   time: string;
   icon: string;
   unread: boolean;
+  /** Notification category from the platform */
+  type?: string;
+  /** In-app route to open when the notification is pressed */
+  route?: string;
+  /** Related booking identifier when available */
+  bookingId?: string;
 }

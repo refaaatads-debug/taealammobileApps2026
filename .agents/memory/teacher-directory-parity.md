@@ -9,11 +9,11 @@ The published platform's read flow treats `public_teacher_profiles.is_approved =
 
 **How to apply:** When extending the mobile directory or booking preview, preserve these read-only joins and filters. Directory API paths must remain Supabase-Bearer/student-only with no local DB fallback. Do not infer availability or start booking work until authenticated parity is proven with the same account.
 
-The legacy web booking page contains a direct-teacher fallback to fixed days/hours when Availability is empty, while the teacher directory treats empty Availability as unpublished. Treat the fallback as legacy UI behavior, not as an Availability contract to copy into Mobile/API.
+The teacher directory treats empty Availability as unpublished, but the specific-teacher booking route intentionally mirrors the legacy web fallback: all weekdays from 15:00 to 21:00 when no schedule is published. Open booking still requires real availability.
 
-**Why:** Copying the old fallback would make a teacher with no published schedule appear bookable and would contradict the directory/source parity rule.
+**Why:** Production's test teacher has empty `available_days` while the legacy web booking page still exposes the fixed 15:00–21:00 schedule; specific booking must match that user-visible source behavior.
 
-**How to apply:** Preserve empty-Availability blocking in current Mobile/API work; classify the source fallback as a source inconsistency until the platform owner confirms it.
+**How to apply:** Keep the fallback scoped to `/booking` with a selected `teacherId`; do not apply it to `/find-teacher` labels or open subject booking.
 
 When consuming availability through PostgREST, accept native text-array values and serialized postgres-array/JSON representations, including comma-delimited strings, before matching day names; otherwise a published schedule can look empty only in the mobile client.
 

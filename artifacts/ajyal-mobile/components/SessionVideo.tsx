@@ -9,6 +9,7 @@ type SessionVideoProps = {
   height?: number;
   fit?: 'contain' | 'cover';
   scale?: number;
+  fill?: boolean;
 };
 
 export function SessionVideo({
@@ -19,6 +20,7 @@ export function SessionVideo({
   height,
   fit = 'cover',
   scale = 1,
+  fill = false,
 }: SessionVideoProps) {
   const videoRef = useRef<any>(null);
   const videoTracks = stream?.getVideoTracks?.() ?? [];
@@ -35,7 +37,7 @@ export function SessionVideo({
 
   if (!stream || !hasLiveVideo) {
     return (
-      <View style={[styles.empty, compact && styles.compact, height ? { height } : null, { backgroundColor: '#112D4E', transform: [{ scale }] }]}>
+      <View style={[styles.empty, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { backgroundColor: '#112D4E', transform: [{ scale }] }]}>
         <Text style={styles.emptyLabel}>{stream && !compact ? 'الصوت متصل — بانتظار فيديو المعلم' : label}</Text>
       </View>
     );
@@ -49,7 +51,7 @@ export function SessionVideo({
     } as const;
 
     return (
-      <View style={[styles.frame, compact && styles.compact, height ? { height } : null, { transform: [{ scale }] }]}>
+      <View style={[styles.frame, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { transform: [{ scale }] }]}>
         {React.createElement('video', {
           ref: videoRef,
           autoPlay: true,
@@ -65,14 +67,14 @@ export function SessionVideo({
 
   if (!nativeView) {
     return (
-      <View style={[styles.empty, compact && styles.compact, height ? { height } : null, { backgroundColor: '#112D4E', transform: [{ scale }] }]}>
+      <View style={[styles.empty, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { backgroundColor: '#112D4E', transform: [{ scale }] }]}>
         <Text style={styles.emptyLabel}>جارٍ تجهيز الفيديو…</Text>
       </View>
     );
   }
 
   return (
-    <View style={[styles.frame, compact && styles.compact, height ? { height } : null, { transform: [{ scale }] }]}>
+    <View style={[styles.frame, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { transform: [{ scale }] }]}>
       {React.createElement(nativeView, {
         streamURL: stream.toURL?.() ?? stream.id,
         objectFit: fit,
@@ -87,5 +89,6 @@ const styles = StyleSheet.create({
   compact: { width: 108, height: 80, borderRadius: 13 },
   video: { width: '100%', height: '100%', objectFit: 'cover' } as any,
   empty: { width: '100%', height: 220, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  fill: { flex: 1, height: '100%' },
   emptyLabel: { color: '#FFFFFF', fontSize: 12, fontFamily: 'Inter_600SemiBold' },
 });

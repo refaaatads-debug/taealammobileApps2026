@@ -63,7 +63,7 @@ export default function StudentsScreen() {
            {students.map((student) => (
                <View key={student.id} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={[styles.avatar, { backgroundColor: colors.navySoft }]}><Text style={[styles.initial, { color: colors.primary }]}>{student.displayName.slice(0, 1)}</Text></View>
-               <Pressable testID={`student-${student.id}`} onPress={() => router.push({ pathname: '/chat', params: { student: student.id } })} style={({ pressed }) => [styles.copy, pressed && styles.pressed]}>
+               <Pressable testID={`student-${student.id}`} onPress={() => router.push({ pathname: '/(tabs)/messages', params: { student: student.id } })} style={({ pressed }) => [styles.copy, pressed && styles.pressed]}>
                 <Text style={[styles.name, { color: colors.foreground }]}>{student.displayName}</Text>
                 <Text style={[styles.meta, { color: colors.mutedForeground }]}>{student.email || 'طالب مرتبط بحسابك'}</Text>
                 <View style={styles.progressRow}><ProgressBar progress={student.progress} color={colors.teal} /><Text style={[styles.progressText, { color: colors.teal }]}>{student.progress}٪</Text></View>

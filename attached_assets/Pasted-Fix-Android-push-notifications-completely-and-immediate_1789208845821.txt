@@ -1,0 +1,47 @@
+Fix Android push notifications completely and immediately.
+
+The phone notification permission is already enabled. The current problem is:
+- Notifications do not appear outside the app.
+- Notifications have no sound.
+
+Work directly on the mobile app and API notification implementation. Do not modify the production database schema, Supabase tables, authentication, VPS configuration, or existing platform.
+
+Apply the smallest safe production-ready fix:
+
+MOBILE APP:
+1. Verify expo-notifications is installed and configured in app.json.
+2. Ensure Android notification permission is requested.
+3. Create an Android notification channel named "default" with:
+   - importance: MAX or HIGH
+   - sound: "default"
+   - vibration pattern enabled
+   - lockscreen visibility PUBLIC
+4. Set the notification handler so notifications show as alerts with sound and badge.
+5. Ensure the app registers a real ExpoPushToken using the correct EAS projectId.
+6. Ensure the token is sent to the API after login and on app startup.
+7. Ensure foreground, background, and terminated-app notification handling works.
+8. Ensure incoming call notifications use a separate high-importance channel with sound if already supported.
+9. Do not use Expo Go. This must work in an EAS-built standalone Android app.
+
+API:
+1. Verify the API sends notifications through https://exp.host/--/api/v2/push/send.
+2. Send a valid payload containing:
+   to, title, body, sound: "default", priority: "high", channelId: "default".
+3. Log Expo push ticket errors safely without exposing secrets.
+4. Do not silently ignore invalid tokens.
+5. Keep existing API routes and database behavior unchanged.
+
+CONFIGURATION:
+1. Verify google-services.json is included through app.json.
+2. Verify FCM V1 credentials are linked to the EAS preview profile.
+3. Verify the preview profile creates an installable APK.
+4. Do not commit or expose any Firebase service-account private key.
+
+VALIDATION:
+- Run TypeScript checks.
+- Run Expo config validation.
+- Run prebuild/export checks if applicable.
+- Confirm the exact files changed.
+- Then provide the exact command to build a NEW Android preview APK.
+
+Do not only report findings. Implement the fix now, but do not touch production database/schema/auth/VPS.

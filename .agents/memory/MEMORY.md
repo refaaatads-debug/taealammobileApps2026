@@ -2,6 +2,7 @@
 - [Workspace TypeScript references](typescript-workspace-project-references.md) — standalone app checks can read stale or missing declaration outputs from referenced workspace libraries.
 - [Expo build concurrency](expo-build-concurrency.md) — Metro needs a free port, and codegen cleanup can require an Expo restart before judging logs.
 - [Supabase runtime verification](supabase-runtime-verification.md) — secret existence does not prove the key is valid for the live custom domain.
+- [EAS runtime environments](eas-runtime-environments.md) — Replit Secrets are not proof that EAS Preview/Production has the mobile runtime key.
 - [Supabase Replit egress fallback](supabase-replit-egress-fallback.md) — API auth must use the Replit Supabase PostgREST proxy when the custom VPS domain is unreachable from Replit.
 - [Supabase bearer precedence](supabase-bearer-precedence.md) — legacy session cookies must not mask authenticated Supabase Bearer requests.
 - [OpenAPI integer generation](openapi-zod-compatibility.md) — the current Orval/Zod combination emits unsupported `zod.int()` for integer schemas.
@@ -11,6 +12,7 @@
 - [Session billing parity](session-billing-parity.md) — only ending a session through the platform session trigger can deduct minutes; cancellation has no proven automatic refund path.
 - [Mobile logout reliability](mobile-logout-reliability.md) — clear the local Supabase session without waiting for global network sign-out.
 - [Authenticated API caching](authenticated-api-caching.md) — 304 responses without a body must be retried or disabled for React Query API calls.
+- [Profile bootstrap caching](profile-bootstrap-caching.md) — identity bootstrap should use a short user-scoped cache and parallel upstream checks; cold Supabase latency is not a reason to poll.
 - [Mobile identity gates](mobile-identity-gates.md) — never fall back to student when role, teacher approval, or ban status cannot be resolved from Supabase.
 - [Expo native WebRTC](expo-native-webrtc.md) — native calls require a Development Build and Expo config plugin; Expo Go is not enough.
 - [WebRTC receive-only fallback](webrtc-receive-only-fallback.md) — missing mobile media devices must not block joining; negotiate recvonly audio/video and show a nonfatal warning.
@@ -41,3 +43,23 @@
 - [Whiteboard data-channel compatibility](whiteboard-datachannel-compatibility.md) — accept event/kind envelopes and normalize varied path/permission payloads before rendering.
 - [Invoice source parity](invoice-source-parity.md) — student invoice history comes from invoices by student_id; payment_records is payment state, not an invoice.
 - [PostgREST session query batching](postgrest-session-query-batching.md) — batch booking IDs when loading session lifecycle rows to avoid proxy URI limits.
+- [In-app material recordings](expo-material-recordings.md) — private session recordings need signed URLs plus the native Expo video player, not Linking.openURL.
+- [Production API TLS](production-api-tls.md) — the mobile API hostname must be covered by its certificate; a healthy endpoint with disabled TLS verification is not production-ready.
+- [Android RTCView track selection](android-rtcview-track-selection.md) — native RTCView renders only the first video track, so a newly renegotiated screen track must be promoted ahead of camera.
+- [Push notification audio names](push-notification-audio-names.md) — Expo custom sounds must use the exact packaged filenames in server payloads and Android channels.
+- [Native OAuth callback idempotency](native-oauth-callback-idempotency.md) — native Google can deliver one PKCE callback through both the browser session and Expo Router.
+- [Dashboard partial failures](dashboard-partial-failures.md) — optional Supabase dashboard sections should degrade visibly instead of blanking the whole role dashboard.
+- [Booking subject metadata](booking-subject-metadata.md) — mobile booking rows expose subject_id; do not request nonexistent subject or title columns.
+- [Workflow port cleanup](workflow-port-cleanup.md) — restarting managed services can leave an old fixed-port process behind; verify and clean stale listeners before judging a restart.
+- [Message thread grouping](message-thread-grouping.md) — show one thread per participant while retaining every booking_id as the message reference.
+- [Mobile tab bar spacing](mobile-tab-bar-spacing.md) — internal tab screens must preserve Screen's bottom inset or fixed tab-bar content can cover composers.
+- [Foreground push deduplication](foreground-push-deduplication.md) — Realtime and Expo Push can represent the same foreground event, so render one app banner and dedupe by identity.
+- [VPS Supavisor API connection](vps-supavisor-api-connection.md) — self-hosted pooler needs the qualified supabase_admin.default API user for the existing local pooler password.
+- [Mobile onboarding order](mobile-onboarding-order.md) — show first-use onboarding before login, but never cover a restored authenticated session.
+- [Production push-token storage](production-push-token-storage.md) — API push delivery requires a separate public push_tokens table; production has Supabase profiles/auth users, not the local users table.
+- [Expo static Preview isolation](expo-static-preview-isolation.md) — never expose the temporary Metro build port as the artifact Preview port; Preview requests can race the build and exhaust the Workspace.
+- [Expo web Preview host](expo-web-preview-host.md) — Replit's remote Simulate on Web needs Expo's LAN host mode; localhost can cause periodic blank reloads.
+- [Expo Metro watch folders](expo-metro-watchfolders.md) — pnpm monorepo defaults can watch every workspace package and exhaust inotify during a clean Web rebuild.
+- [Expo Preview build gating](expo-preview-build-gating.md) — reuse a fresh static bundle on workflow restarts; repeated export can restart the Workspace and look like Preview reloads.
+- [Replit Expo Go simulator routing](expo-go-simulator-routing.md) — force Expo Go when expo-dev-client is installed and proxy native requests through the artifact port.
+- [Mobile API workflow dependency](mobile-api-workflow-dependency.md) — authenticated native startup needs the API artifact workflow running alongside Expo.

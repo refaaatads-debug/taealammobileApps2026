@@ -42,13 +42,20 @@ const AuthContext = createContext<AuthContextValue>({
   logout: async () => undefined,
 });
 
+const AUTH_REQUEST_TIMEOUT_MS = 12_000;
+const OAUTH_BROWSER_TIMEOUT_MS = 120_000;
+
+function withTimeout<T>(promise: PromiseLike<T>, message: string, timeoutMs = AUTH_REQUEST_TIMEOUT_MS): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), timeoutMs)),
+  ]);
+}
+
 export async function getAuthToken(): Promise<string | null> {
   if (!supabase) return null;
   try {
-    const { data } = await Promise.race([
-      supabase.auth.getSession(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("انتهت مهلة الاتصال بالمنصة")), 12_000)),
-    ]);
+    const { data } = await withTimeout(supabase.auth.getSession(), "انتهت مهلة الاتصال بالمنصة");
     return data.session?.access_token ?? null;
   } catch {
     return null;
@@ -99,10 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     let mounted = true;
     const initialSessionVersion = authStateVersion.current;
-    void Promise.race([
-      supabase.auth.getSession(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("انتهت مهلة الاتصال بالمنصة")), 12_000)),
-    ])
+    void withTimeout(supabase.auth.getSession(), "انتهت مهلة الاتصال بالمنصة")
       .then(({ data }) => {
         const stale = authStateVersion.current !== initialSessionVersion;
         if (!mounted || stale) return;
@@ -212,7 +216,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await AsyncStorage.multiRemove([PENDING_ROLE_KEY, PENDING_ROLE_EMAIL_KEY]);
       return;
     }
-    const { error } = await supabase.rpc("set_new_user_role", { _role: "teacher" });
+    const { error } = await withTimeout(
+      supabase.rpc("set_new_user_role", { _role: "teacher" }),
+      "انتهت مهلة إعداد دور المعلم",
+    );
     if (error) throw new Error(`تعذر تثبيت دور المعلم: ${error.message}`);
     await AsyncStorage.removeItem(PENDING_ROLE_KEY);
     await AsyncStorage.removeItem(PENDING_ROLE_EMAIL_KEY);
@@ -244,19 +251,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     if (Platform.OS === "web") return;
     try {
-      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      const result = await withTimeout(
+        WebBrowser.openAuthSessionAsync(data.url, redirectTo),
+        "انتهت مهلة تسجيل الدخول عبر Google",
+        OAUTH_BROWSER_TIMEOUT_MS,
+      );
       if (result.type !== "success") throw new Error("تم إلغاء تسجيل الدخول");
       const callbackUrl = new URL(result.url);
       const callbackError = callbackUrl.searchParams.get("error_description") ?? callbackUrl.searchParams.get("error");
       if (callbackError) throw new Error(callbackError);
       const code = callbackUrl.searchParams.get("code");
       if (code) {
-        const exchange = await supabase.auth.exchangeCodeForSession(code);
-        if (exchange.error) throw new Error(exchange.error.message);
-        await completePendingRole(exchange.data.session?.user.email);
-        if (exchange.data.session?.user) {
+        const exchange = await withTimeout(
+          supabase.auth.exchangeCodeForSession(code),
+          "انتهت مهلة تأكيد جلسة Google",
+        );
+        let authenticatedUser = exchange.data.session?.user ?? null;
+        if (exchange.error && !authenticatedUser) {
+          // The callback route can receive the same PKCE code at the same
+          // time as this browser session. If the other path redeemed it
+          // successfully, keep using that resulting session.
+          const currentSession = await withTimeout(
+            supabase.auth.getSession(),
+            "انتهت مهلة قراءة جلسة Google",
+          );
+          authenticatedUser = currentSession.data.session?.user ?? null;
+          if (!authenticatedUser) throw new Error(exchange.error.message);
+        }
+        await completePendingRole(authenticatedUser?.email);
+        if (authenticatedUser) {
           deferSignedInUser.current = false;
-          setUser(mapUser(exchange.data.session.user));
+          setUser(mapUser(authenticatedUser));
           setIsLoading(false);
         }
         return;
@@ -264,10 +289,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const accessToken = callbackUrl.hash.match(/(?:^|&)access_token=([^&]+)/)?.[1];
       const refreshToken = callbackUrl.hash.match(/(?:^|&)refresh_token=([^&]+)/)?.[1];
       if (accessToken && refreshToken) {
-        const session = await supabase.auth.setSession({
-          access_token: decodeURIComponent(accessToken),
-          refresh_token: decodeURIComponent(refreshToken),
-        });
+        const session = await withTimeout(
+          supabase.auth.setSession({
+            access_token: decodeURIComponent(accessToken),
+            refresh_token: decodeURIComponent(refreshToken),
+          }),
+          "انتهت مهلة تأكيد جلسة Google",
+        );
         if (session.error) throw new Error(session.error.message);
         await completePendingRole(session.data.session?.user.email);
         if (session.data.session?.user) {

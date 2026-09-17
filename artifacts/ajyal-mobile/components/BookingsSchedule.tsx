@@ -44,10 +44,21 @@ function sessionStatusLabel(session: Session, t: (arabic: string, english: strin
   if (session.status === 'expired') return t('منتهى', 'Expired');
   if (session.status === 'done') return t('مكتمل', 'Completed');
   if (session.status === 'cancelled') return t('ملغى', 'Cancelled');
+  if (session.sessionStatus === 'in_progress') return t('جارية الآن', 'In progress');
   return t('قادمة', 'Upcoming');
 }
 
-export default function BookingsSchedule({ sessions, role, onSessionPress }: { sessions: Session[]; role: 'student' | 'teacher'; onSessionPress?: (session: Session) => void }) {
+export default function BookingsSchedule({
+  sessions,
+  role,
+  onSessionPress,
+  onJoinSession,
+}: {
+  sessions: Session[];
+  role: 'student' | 'teacher';
+  onSessionPress?: (session: Session) => void;
+  onJoinSession?: (session: Session) => void;
+}) {
   const colors = useColors();
   const { t, locale, direction, formatNumber } = useAppPreferences();
   const isRTL = direction === 'rtl';
@@ -193,6 +204,37 @@ export default function BookingsSchedule({ sessions, role, onSessionPress }: { s
                  <Text style={[styles.eventStatusText, { color: session.status === 'cancelled' || session.status === 'expired' ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal, writingDirection: direction }]}>{sessionStatusLabel(session, t)}</Text>
                  <View style={[styles.statusDot, { backgroundColor: session.status === 'cancelled' || session.status === 'expired' ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal }]} />
                </View>
+                {role === 'student' && session.status === 'upcoming' ? (
+                  <Pressable
+                    testID={`schedule-join-session-${session.id}`}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: session.sessionStatus !== 'in_progress' }}
+                    disabled={session.sessionStatus !== 'in_progress'}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      if (session.sessionStatus === 'in_progress') onJoinSession?.(session);
+                    }}
+                    style={({ pressed }) => [
+                      styles.scheduleJoinButton,
+                      {
+                        backgroundColor: session.sessionStatus === 'in_progress' ? colors.teal : colors.muted,
+                        borderColor: session.sessionStatus === 'in_progress' ? colors.teal : colors.border,
+                      },
+                      pressed && session.sessionStatus === 'in_progress' && styles.pressed,
+                    ]}
+                  >
+                    <Icon
+                      name={session.sessionStatus === 'in_progress' ? 'video' : 'clock'}
+                      size={12}
+                      color={session.sessionStatus === 'in_progress' ? colors.primaryForeground : colors.mutedForeground}
+                    />
+                    <Text style={[styles.scheduleJoinText, { color: session.sessionStatus === 'in_progress' ? colors.primaryForeground : colors.mutedForeground, writingDirection: direction }]}>
+                      {session.sessionStatus === 'in_progress'
+                        ? t('انضمام إلى الجلسة', 'Join session')
+                        : t('بانتظار دخول المعلم', 'Waiting for teacher')}
+                    </Text>
+                  </Pressable>
+                ) : null}
             </Pressable>
           ))}
         </View>
@@ -206,7 +248,7 @@ export default function BookingsSchedule({ sessions, role, onSessionPress }: { s
 }
 
 const styles = StyleSheet.create({
-  wrapper: { borderRadius: 19, borderWidth: 1, padding: 13, marginBottom: 22 },
+  wrapper: { borderRadius: 18, borderWidth: 1, padding: 12, marginBottom: 22, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   headingRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   headingCopy: { flex: 1, alignItems: 'flex-end' },
   helper: { width: '100%', fontSize: 10, lineHeight: 16, textAlign: 'right', writingDirection: 'rtl', marginTop: -8 },
@@ -229,7 +271,7 @@ const styles = StyleSheet.create({
   selectedTitle: { flex: 1, fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   selectedCount: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   events: { gap: 7, marginTop: 9 },
-  eventRow: { minHeight: 59, borderRadius: 13, borderWidth: 1, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  eventRow: { minHeight: 59, borderRadius: 18, borderWidth: 1, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   eventTime: { minWidth: 64, borderRadius: 9, paddingVertical: 6, paddingHorizontal: 5, alignItems: 'center' },
   eventTimeText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   eventDuration: { fontSize: 8, marginTop: 2, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
@@ -239,5 +281,8 @@ const styles = StyleSheet.create({
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   eventStatus: { alignItems: 'center', gap: 4 },
   eventStatusText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  scheduleJoinButton: { minHeight: 30, maxWidth: 104, borderRadius: 9, borderWidth: 1, paddingHorizontal: 7, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  scheduleJoinText: { fontSize: 8, lineHeight: 11, fontFamily: 'Inter_700Bold', textAlign: 'center' },
   periodHint: { fontSize: 10, textAlign: 'center', writingDirection: 'rtl', paddingVertical: 12 },
+  pressed: { opacity: 0.72 },
 });

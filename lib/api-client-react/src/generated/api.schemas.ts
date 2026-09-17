@@ -104,6 +104,50 @@ export const PushTokenRegistrationResultValue = {
 } as const;
 export type PushTokenRegistrationResult = typeof PushTokenRegistrationResultValue;
 
+export type PushNotificationRequestRoute = typeof PushNotificationRequestRoute[keyof typeof PushNotificationRequestRoute];
+
+
+export const PushNotificationRequestRoute = {
+  '/bookings': '/bookings',
+  '/messages': '/messages',
+  '/notifications': '/notifications',
+  '/assignments': '/assignments',
+  '/support': '/support',
+  '/subscription': '/subscription',
+  '/invoices': '/invoices',
+  '/profile': '/profile',
+} as const;
+
+export interface PushNotificationRequest {
+  /** @minLength 1 */
+  recipientId: string;
+  /**
+     * @minLength 1
+     * @maxLength 160
+     */
+  title: string;
+  /**
+     * @minLength 1
+     * @maxLength 1000
+     */
+  body: string;
+  /**
+     * @minLength 1
+     * @maxLength 80
+     */
+  type: string;
+  route?: PushNotificationRequestRoute;
+  /**
+     * @minLength 1
+     * @maxLength 128
+     */
+  bookingId?: string;
+}
+
+export interface PushDeliveryResult {
+  delivered: boolean;
+}
+
 export interface IncomingCallRequest {
   /** @minLength 1 */
   recipientId: string;
@@ -241,6 +285,7 @@ export interface TeacherDashboard {
   /** @minimum 0 */
   warningCount: number;
   upcomingSessions: Session[];
+  degradedSections: string[];
 }
 
 export interface StudentDashboardStats {
@@ -291,6 +336,7 @@ export interface StudentDashboard {
   /** @minimum 0 */
   unreadNotifications: number;
   upcomingSessions: Session[];
+  degradedSections: string[];
 }
 
 export type SessionInputTone = typeof SessionInputTone[keyof typeof SessionInputTone];
@@ -469,6 +515,12 @@ export interface Notification {
   time: string;
   icon: string;
   unread: boolean;
+  /** Notification category from the platform */
+  type?: string;
+  /** In-app route to open when the notification is pressed */
+  route?: string;
+  /** Related booking identifier when available */
+  bookingId?: string;
 }
 
 export interface ReadAllNotificationsResult {

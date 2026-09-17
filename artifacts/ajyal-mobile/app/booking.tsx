@@ -42,7 +42,28 @@ type BookingSuccessSummary = {
   slots: Array<{ label: string; time: string }>;
 };
 
+type DirectTeacherAvailability = {
+  availableDays: unknown;
+  availableFrom: string | null;
+  availableTo: string | null;
+};
+
 const MAX_GROUP_SLOTS = 20;
+// The legacy web direct-teacher booking page shows this schedule when the
+// selected teacher has no published days/hours. Keep this compatibility rule
+// scoped to the specific-teacher booking path; open bookings still require
+// real published availability from eligible teachers.
+const LEGACY_DIRECT_TEACHER_FALLBACK_DAYS = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+];
+const LEGACY_DIRECT_TEACHER_FALLBACK_FROM = '15:00';
+const LEGACY_DIRECT_TEACHER_FALLBACK_TO = '21:00';
 
 function requestMatchesBooking(request: BalanceRequest, booking: BalanceBooking) {
   return request.status === 'accepted'
@@ -87,6 +108,9 @@ export default function BookingScreen() {
   const [availableSubjects, setAvailableSubjects] = useState<Array<{ id: string; name: string }>>([]);
   const [subjectsLoading, setSubjectsLoading] = useState(false);
   const [subjectsError, setSubjectsError] = useState(false);
+  const [directTeacherAvailability, setDirectTeacherAvailability] = useState<DirectTeacherAvailability | null>(null);
+  const [directTeacherAvailabilityLoading, setDirectTeacherAvailabilityLoading] = useState(false);
+  const [directTeacherAvailabilityError, setDirectTeacherAvailabilityError] = useState(false);
   const [balanceLoading, setBalanceLoading] = useState(true);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createSuccess, setCreateSuccess] = useState<BookingSuccessSummary | null>(null);
@@ -132,14 +156,40 @@ export default function BookingScreen() {
   });
   const teacherName = paramString('teacherName');
   const teacherId = paramString('teacherId');
-  const teacherRate = paramString('teacherHourlyRate');
   const availableFrom = paramString('teacherAvailableFrom');
   const availableTo = paramString('teacherAvailableTo');
+  const routeAvailableDays = useMemo(
+    () => normalizeDays(paramString('teacherAvailableDays')),
+    [params.teacherAvailableDays],
+  );
+  const needsTeacherDirectoryFallback = Boolean(
+    teacherId
+      && (!routeAvailableDays.length || !availableFrom.trim() || !availableTo.trim() || !teacherName.trim()),
+  );
   const openTeachersQuery = useListTeachers(
     undefined,
-    { query: { enabled: !teacherId, queryKey: getListTeachersQueryKey(undefined), staleTime: 30_000 } },
+    {
+      query: {
+        enabled: true,
+        queryKey: getListTeachersQueryKey(undefined),
+        staleTime: 30_000,
+      },
+    },
   );
   const openTeachers = openTeachersQuery.data ?? [];
+  const directoryTeacher = useMemo(
+    () => (teacherId ? openTeachers.find((teacher) => teacher.id === teacherId) : undefined),
+    [openTeachers, teacherId],
+  );
+  const directoryTeacherResolved = Boolean(
+    teacherId && !openTeachersQuery.isLoading && !openTeachersQuery.isError,
+  );
+  const directTeacherAvailabilityResolved = Boolean(
+    teacherId
+      && directTeacherAvailability !== null
+      && !directTeacherAvailabilityLoading
+      && !directTeacherAvailabilityError,
+  );
   const openSubjectTeachers = useMemo(() => {
     const selectedSubject = subject.trim();
     if (!selectedSubject) return [];
@@ -148,9 +198,42 @@ export default function BookingScreen() {
       && (!teachingStage || teacher.teachingStages?.includes(teachingStage))
     ));
   }, [openTeachers, subject, teachingStage]);
+  const usesLegacyDirectTeacherFallback = Boolean(
+    teacherId
+      && directTeacherAvailabilityResolved
+      && !normalizeDays(directTeacherAvailability?.availableDays).length
+      && !normalizeDays(directoryTeacher?.availableDays).length
+      && !routeAvailableDays.length
+  );
   const availableDays = useMemo(() => {
-    return normalizeDays(paramString('teacherAvailableDays'));
-  }, [params.teacherAvailableDays]);
+    const directDays = normalizeDays(directTeacherAvailability?.availableDays);
+    const directoryDays = normalizeDays(directoryTeacher?.availableDays);
+    if (teacherId && directTeacherAvailabilityResolved && directDays.length) {
+      return directDays;
+    }
+    if (directoryTeacherResolved && directoryDays.length) return directoryDays;
+    if (usesLegacyDirectTeacherFallback) return LEGACY_DIRECT_TEACHER_FALLBACK_DAYS;
+    return routeAvailableDays;
+  }, [
+    directTeacherAvailability?.availableDays,
+    directTeacherAvailabilityResolved,
+    directoryTeacher?.availableDays,
+    directoryTeacherResolved,
+    routeAvailableDays,
+    teacherId,
+    usesLegacyDirectTeacherFallback,
+  ]);
+  const resolvedAvailableFrom = usesLegacyDirectTeacherFallback
+    ? LEGACY_DIRECT_TEACHER_FALLBACK_FROM
+    : (teacherId && directTeacherAvailabilityResolved ? directTeacherAvailability?.availableFrom : null)
+    || (directoryTeacherResolved ? directoryTeacher?.availableFrom : null)
+    || availableFrom.trim();
+  const resolvedAvailableTo = usesLegacyDirectTeacherFallback
+    ? LEGACY_DIRECT_TEACHER_FALLBACK_TO
+    : (teacherId && directTeacherAvailabilityResolved ? directTeacherAvailability?.availableTo : null)
+    || (directoryTeacherResolved ? directoryTeacher?.availableTo : null)
+    || availableTo.trim();
+  const resolvedTeacherName = directoryTeacher?.displayName || teacherName.trim() || 'معلم من المنصة';
   useEffect(() => {
     if (!teachingStage && profile?.teachingStage) setTeachingStage(profile.teachingStage);
   }, [profile?.teachingStage, teachingStage]);
@@ -286,6 +369,74 @@ export default function BookingScreen() {
       mounted = false;
     };
   }, [teacherId]);
+  useEffect(() => {
+    let mounted = true;
+    const loadDirectTeacherAvailability = async () => {
+      if (!teacherId) {
+        setDirectTeacherAvailability(null);
+        setDirectTeacherAvailabilityLoading(false);
+        setDirectTeacherAvailabilityError(false);
+        return;
+      }
+      if (!supabase) {
+        setDirectTeacherAvailability(null);
+        setDirectTeacherAvailabilityLoading(false);
+        setDirectTeacherAvailabilityError(true);
+        return;
+      }
+      setDirectTeacherAvailabilityLoading(true);
+      setDirectTeacherAvailabilityError(false);
+      const [publicResult, profileResult] = await Promise.all([
+        supabase
+          .from('public_teacher_profiles')
+          .select('available_days, available_from, available_to')
+          .eq('user_id', teacherId)
+          .maybeSingle(),
+        supabase
+          .from('teacher_profiles')
+          .select('available_days, available_from, available_to')
+          .eq('user_id', teacherId)
+          .maybeSingle(),
+      ]);
+      if (!mounted) return;
+      if (publicResult.error && profileResult.error) {
+        setDirectTeacherAvailability(null);
+        setDirectTeacherAvailabilityError(true);
+        setDirectTeacherAvailabilityLoading(false);
+        return;
+      }
+      const publicRow = publicResult.data as {
+        available_days?: unknown;
+        available_from?: unknown;
+        available_to?: unknown;
+      } | null;
+      const profileRow = profileResult.data as {
+        available_days?: unknown;
+        available_from?: unknown;
+        available_to?: unknown;
+      } | null;
+      const publicDays = normalizeDays(publicRow?.available_days);
+      const profileDays = normalizeDays(profileRow?.available_days);
+      setDirectTeacherAvailability({
+        availableDays: publicDays.length ? publicDays : profileDays,
+        availableFrom: typeof profileRow?.available_from === 'string'
+          ? profileRow.available_from
+          : typeof publicRow?.available_from === 'string'
+            ? publicRow.available_from
+            : null,
+        availableTo: typeof profileRow?.available_to === 'string'
+          ? profileRow.available_to
+          : typeof publicRow?.available_to === 'string'
+            ? publicRow.available_to
+            : null,
+      });
+      setDirectTeacherAvailabilityLoading(false);
+    };
+    void loadDirectTeacherAvailability();
+    return () => {
+      mounted = false;
+    };
+  }, [teacherId]);
   const subjectOptions = availableSubjects;
   const effectiveAvailableDays = useMemo(() => {
     if (teacherId) return availableDays;
@@ -330,13 +481,13 @@ export default function BookingScreen() {
       for (let hour = firstStartHour; hour <= lastStartHour; hour += 1) slots.add(hour);
     };
     if (teacherId) {
-      if (!availableFrom || !availableTo) return [];
-      addWindow(availableFrom, availableTo, availableDays);
+      if (!resolvedAvailableFrom || !resolvedAvailableTo) return [];
+      addWindow(resolvedAvailableFrom, resolvedAvailableTo, availableDays);
     } else {
       openSubjectTeachers.forEach((teacher) => addWindow(teacher.availableFrom, teacher.availableTo, teacher.availableDays));
     }
     return [...slots].sort((left, right) => left - right);
-  }, [availableDays, availableFrom, availableTo, dayOptions, durationMinutes, openSubjectTeachers, selectedDayOffset, teacherId]);
+  }, [availableDays, dayOptions, durationMinutes, openSubjectTeachers, resolvedAvailableFrom, resolvedAvailableTo, selectedDayOffset, teacherId]);
   const activeDayOffset = dayOptions.some((option) => option.offset === selectedDayOffset)
     ? selectedDayOffset
     : dayOptions[0]?.offset ?? selectedDayOffset;
@@ -515,8 +666,7 @@ export default function BookingScreen() {
             <View style={[styles.selectedTeacherCard, { backgroundColor: colors.tealSoft, borderColor: colors.teal }]}>
               <View style={styles.selectedTeacherCopy}>
                 <Text style={[styles.selectedTeacherLabel, { color: colors.mutedForeground }]}>المعلم المحدد</Text>
-                <Text style={[styles.selectedTeacherName, { color: colors.foreground }]}>{teacherName || 'معلم من المنصة'}</Text>
-                {teacherRate ? <Text style={[styles.helper, { color: colors.mutedForeground }]}>{teacherRate} ر.س/ساعة</Text> : null}
+                <Text style={[styles.selectedTeacherName, { color: colors.foreground }]}>{resolvedTeacherName}</Text>
               </View>
               <Icon name="user" size={21} color={colors.teal} />
             </View>
@@ -526,8 +676,8 @@ export default function BookingScreen() {
             </Pressable>
           </>
         )}
-        {!teacherId && openTeachersQuery.isLoading ? <Text style={[styles.availabilityEmpty, { color: colors.mutedForeground }]}>جارٍ قراءة Availability المعلمين المؤهلين…</Text> : null}
-        {!teacherId && openTeachersQuery.isError ? <Text style={[styles.availabilityEmpty, { color: colors.destructive }]}>تعذر قراءة المعلمين المؤهلين من المنصة.</Text> : null}
+        {openTeachersQuery.isLoading && (!teacherId || needsTeacherDirectoryFallback) ? <Text style={[styles.availabilityEmpty, { color: colors.mutedForeground }]}>جارٍ قراءة Availability المعلمين المؤهلين…</Text> : null}
+        {openTeachersQuery.isError && (!teacherId || needsTeacherDirectoryFallback) ? <Text style={[styles.availabilityEmpty, { color: colors.destructive }]}>تعذر قراءة المعلمين المؤهلين من المنصة.</Text> : null}
          {!balanceLoading && projectedRemainingMinutes !== null ? <View style={[styles.balanceCard, { backgroundColor: projectedRemainingMinutes > 0 ? colors.tealSoft : colors.accent, borderColor: projectedRemainingMinutes > 0 ? colors.teal : colors.border }]}>
            <View style={styles.balanceCopy}>
              <Text style={[styles.balanceLabel, { color: colors.mutedForeground }]}>{selectedSlots.length ? 'المتاح بعد الاختيار' : 'الرصيد المتاح للحجز'}</Text>
@@ -575,8 +725,12 @@ export default function BookingScreen() {
           </View>
         ) : (
           <Text style={[styles.availabilityEmpty, { color: colors.mutedForeground }]}>
-            {teacherId && availableDays.length
+            {teacherId && (openTeachersQuery.isLoading || directTeacherAvailabilityLoading) && !availableDays.length
+              ? t('جارٍ استعادة جدول توفر المعلم من المنصة…', 'Restoring the teacher availability from the platform…')
+              : teacherId && availableDays.length
               ? t('جدول المعلم لا يحتوي على يوم متاح خلال الأيام السبعة القادمة.', 'The teacher has no available day in the next seven days.')
+              : teacherId && directTeacherAvailabilityError
+                ? t('تعذر قراءة جدول توفر المعلم من المنصة.', 'The teacher availability could not be read from the platform.')
               : teacherId
                 ? t('لم تصل أيام توفر المعلم من المنصة.', 'The teacher availability days did not arrive from the platform.')
                 : t('اختر مادة لعرض الأيام المنشورة للمعلمين المؤهلين.', 'Choose a subject to show days published by eligible teachers.')}

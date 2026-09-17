@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "1eYYjq5llcldw05YbggE8"
+uri = "file://screenshots/ajyal-app-working.jpg"
+type = "image"
+title = "شاشة تطبيق أجيال المعرفة تعمل داخل Preview"
+description = "لقطة موثقة من شاشة التطبيق بعد تشغيل Expo Web ونجاح تحميل Manifest وحزم iOS وAndroid من نفس خادم التطوير."
+logical_id = "9d272235-08a8-47e5-bd22-21c1924c3e14"
+content_hash = "sha256:ca2b9401e4d0442da441797249208782b1f0120f0a39e60be64b0030fc5d9e34"
+size = 19893
+mtime_ms = 1789578417227
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:2a184f84-f507-46a5-a5e0-bb1bb782f8cf/9d272235-08a8-47e5-bd22-21c1924c3e14/d2a43e68-1d99-4177-a7cc-530e8285f02d"
+storage_version_token = "1789578462785786"
+content_type = "image/jpeg"

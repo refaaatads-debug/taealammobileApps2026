@@ -201,6 +201,24 @@
       .open-button:hover {
         opacity: 0.9;
       }
+      .legal-links {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 16px;
+        margin-top: 28px;
+        padding-top: 18px;
+        border-top: 1px solid #ddd;
+      }
+      .legal-links a {
+        color: #52627a;
+        font-size: 13px;
+        text-decoration: none;
+      }
+      .legal-links a:hover {
+        color: #173e8c;
+        text-decoration: underline;
+      }
 
       /* Desktop styles */
       @media (min-width: 768px) {
@@ -326,6 +344,12 @@
         .open-button:hover {
           background: #e0e0e0;
         }
+        .legal-links {
+          border-top-color: #333;
+        }
+        .legal-links a {
+          color: #aeb8c9;
+        }
       }
     </style>
   </head>
@@ -391,6 +415,10 @@
             >
           </div>
         </div>
+        <nav class="legal-links" aria-label="الوثائق القانونية">
+          <a href="BASE_URL_PLACEHOLDERPUBLIC_BASE_PATH_PLACEHOLDER/privacy">سياسة الخصوصية</a>
+          <a href="BASE_URL_PLACEHOLDERPUBLIC_BASE_PATH_PLACEHOLDER/terms">شروط الاستخدام</a>
+        </nav>
       </div>
     </div>
 

@@ -134,9 +134,10 @@ function useUnreadMessageCount() {
       setCount(0);
       return;
     }
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     try {
       const timeout = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('MESSAGES_BADGE_TIMEOUT')), 12_000);
+        timeoutId = setTimeout(() => reject(new Error('MESSAGES_BADGE_TIMEOUT')), 12_000);
       });
       const loadData = (async () => {
         const bookingsResult = await supabase
@@ -167,6 +168,8 @@ function useUnreadMessageCount() {
         error instanceof Error ? error.message : error,
       );
       setCount(0);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
   }, [user]);
 
@@ -195,13 +198,13 @@ function useUnreadMessageCount() {
 }
 
 const styles = StyleSheet.create({
-  tabBar: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: 1, elevation: 8, overflow: 'visible', shadowColor: '#082A50', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: -4 } },
-  tabRow: { flex: 1, flexDirection: 'row-reverse', alignItems: 'stretch', justifyContent: 'space-around', paddingHorizontal: 8 },
+  tabBar: { position: 'absolute', left: 0, right: 0, bottom: 0, borderTopWidth: 1, borderTopLeftRadius: 24, borderTopRightRadius: 24, elevation: 8, overflow: 'visible', shadowColor: '#082A50', shadowOpacity: 0.1, shadowRadius: 15, shadowOffset: { width: 0, height: -5 } },
+  tabRow: { flex: 1, flexDirection: 'row-reverse', alignItems: 'stretch', justifyContent: 'space-around', paddingHorizontal: 12 },
   tabItem: { flex: 1, height: '100%', minHeight: 70, alignItems: 'center', justifyContent: 'center', gap: 3, position: 'relative', paddingTop: 7 },
   centerTabItem: { justifyContent: 'flex-start', paddingTop: 0, marginTop: -14, gap: 4 },
-  iconWrap: { width: 40, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  iconWrap: { width: 42, height: 35, borderRadius: 13, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   centerTabCircle: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', borderWidth: 5, shadowColor: '#082A50', shadowOpacity: 0.22, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 7 },
-  tabLabel: { fontSize: 10, lineHeight: 14, fontFamily: 'Inter_600SemiBold' },
+  tabLabel: { fontSize: 10, lineHeight: 15, fontFamily: 'Inter_600SemiBold', textAlign: 'center', includeFontPadding: false },
   unreadBadge: { minWidth: 17, height: 17, borderRadius: 9, borderWidth: 2, alignItems: 'center', justifyContent: 'center', position: 'absolute', top: -6, right: -9, zIndex: 20, elevation: 20 },
   unreadBadgeText: { fontSize: 8, lineHeight: 11, fontFamily: 'Inter_700Bold' },
   pressed: { opacity: 0.72 },

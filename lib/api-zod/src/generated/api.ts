@@ -132,6 +132,34 @@ export const UnregisterPushTokenResponse = zod.object({
 
 
 /**
+ * @summary Send a regular notification to an authenticated user's device
+ */
+
+export const sendUserNotificationBodyTitleMax = 160;
+
+export const sendUserNotificationBodyBodyMax = 1000;
+
+export const sendUserNotificationBodyTypeMax = 80;
+
+export const sendUserNotificationBodyBookingIdMax = 128;
+
+
+
+export const SendUserNotificationBody = zod.object({
+  "recipientId": zod.string().min(1),
+  "title": zod.string().min(1).max(sendUserNotificationBodyTitleMax),
+  "body": zod.string().min(1).max(sendUserNotificationBodyBodyMax),
+  "type": zod.string().min(1).max(sendUserNotificationBodyTypeMax),
+  "route": zod.enum(['/bookings', '/messages', '/notifications', '/assignments', '/support', '/subscription', '/invoices', '/profile']).optional(),
+  "bookingId": zod.string().min(1).max(sendUserNotificationBodyBookingIdMax).optional()
+})
+
+export const SendUserNotificationResponse = zod.object({
+  "delivered": zod.boolean()
+})
+
+
+/**
  * @summary Send a remote incoming-call notification to another user
  */
 
@@ -257,7 +285,8 @@ export const GetTeacherDashboardResponse = zod.object({
   "tone": zod.enum(['teal', 'gold', 'navy']),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
-}))
+})),
+  "degradedSections": zod.array(zod.string())
 })
 
 
@@ -339,42 +368,8 @@ export const GetStudentDashboardResponse = zod.object({
   "tone": zod.enum(['teal', 'gold', 'navy']),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
-}))
-})
-
-
-/**
- * @summary Create a lesson booking
- */
-
-
-
-export const createSessionBodyDurationMinutesMin = 15;
-export const createSessionBodyDurationMinutesMax = 180;
-
-
-
-export const CreateSessionBody = zod.object({
-  "teacherId": zod.string().min(1),
-  "title": zod.string().min(1),
-  "subject": zod.string().min(1),
-  "startsAt": zod.coerce.date(),
-  "durationMinutes": zod.number().min(createSessionBodyDurationMinutesMin).max(createSessionBodyDurationMinutesMax).describe('Whole minutes'),
-  "tone": zod.enum(['teal', 'gold', 'navy']).optional()
-})
-
-export const CreateSessionResponse = zod.object({
-  "id": zod.string(),
-  "title": zod.string(),
-  "subject": zod.string(),
-  "person": zod.string(),
-  "date": zod.string(),
-  "time": zod.string(),
-  "scheduledAt": zod.coerce.date(),
-  "duration": zod.string(),
-  "tone": zod.enum(['teal', 'gold', 'navy']),
-  "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
-  "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
+})),
+  "degradedSections": zod.array(zod.string())
 })
 
 
@@ -686,7 +681,10 @@ export const ListMyNotificationsResponseItem = zod.object({
   "body": zod.string(),
   "time": zod.string(),
   "icon": zod.string(),
-  "unread": zod.boolean()
+  "unread": zod.boolean(),
+  "type": zod.string().optional().describe('Notification category from the platform'),
+  "route": zod.string().optional().describe('In-app route to open when the notification is pressed'),
+  "bookingId": zod.string().optional().describe('Related booking identifier when available')
 })
 export const ListMyNotificationsResponse = zod.array(ListMyNotificationsResponseItem)
 
@@ -707,7 +705,10 @@ export const MarkNotificationReadResponse = zod.object({
   "body": zod.string(),
   "time": zod.string(),
   "icon": zod.string(),
-  "unread": zod.boolean()
+  "unread": zod.boolean(),
+  "type": zod.string().optional().describe('Notification category from the platform'),
+  "route": zod.string().optional().describe('In-app route to open when the notification is pressed'),
+  "bookingId": zod.string().optional().describe('Related booking identifier when available')
 })
 
 

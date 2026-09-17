@@ -1,0 +1,82 @@
+أوقف أي EAS Build نهائيًا الآن.
+
+الهدف: تجهيز نسخة Android تعمل فعليًا بعد التثبيت، وليس مجرد نجاح Gradle/Prebuild.
+
+نفّذ Production Runtime Audit كامل لتطبيق:
+artifacts/ajyal-mobile
+
+راجع بشكل شامل:
+
+1. جميع متغيرات البيئة المستخدمة في runtime:
+   - Supabase URL
+   - Supabase publishable/anon key
+   - API URL
+   - أي OAuth / Auth configuration
+   - Notifications
+   - أي متغيرات أخرى يستخدمها التطبيق عند التشغيل
+
+2. ابحث في كامل كود التطبيق عن:
+   process.env
+   EXPO_PUBLIC_
+   Supabase initialization
+   auth initialization
+   API base URL
+   أي startup checks تمنع الدخول أو تغلق التطبيق.
+
+3. قارن المتغيرات المطلوبة فعليًا مع:
+   - EAS preview environment
+   - EAS production environment
+   - eas.json
+   - app.json
+
+4. تأكد أن كل قيمة PUBLIC المطلوبة للتطبيق موجودة في EAS بطريقة صحيحة.
+   لا تستخدم service_role أو أي secret server-side داخل تطبيق الهاتف.
+
+5. راجع Native/Expo configuration:
+   - expo-notifications
+   - expo-auth-session
+   - expo-secure-store
+   - expo-crypto
+   - WebRTC
+   - splash
+   - plugins
+   - Android permissions
+
+6. راجع startup path كاملًا:
+   _layout.tsx
+   auth
+   supabase
+   API initialization
+   navigation
+
+7. افحص أن التطبيق لا يعتمد وقت التشغيل على:
+   Replit
+   localhost
+   REPLIT_*
+   عنوان API قديم
+   متغير غير موجود في EAS
+
+8. استخدم expo-doctor وأي فحوص محلية مناسبة.
+
+9. لا تكتفِ بنجاح build أو prebuild.
+   المطلوب إثبات أن APK عند تشغيله لأول مرة لديه كل الإعدادات اللازمة للـstartup/login.
+
+10. أصلح جميع المشاكل المؤكدة دفعة واحدة، وليس مشكلة واحدة كل مرة.
+
+قواعد صارمة:
+- لا EAS Build.
+- لا commit.
+- لا push.
+- لا deploy.
+- لا تغيّر قاعدة البيانات.
+- لا تغيّر API.
+- لا تغيّر المنصة الرئيسية.
+- لا تغيّر OAuth إلا إذا كان الإصلاح داخل mobile runtime configuration نفسه.
+- لا تعرض أي secret أو key كامل في output.
+
+في النهاية أعطني فقط:
+A) كل مشاكل runtime التي وجدتها.
+B) كل الملفات التي عُدّلت.
+C) ما المتغيرات المطلوبة في EAS Preview وProduction، بالأسماء فقط.
+D) نتيجة الفحوص.
+E) هل أنت متأكد أن APK الجديد لن يتوقف بسبب missing environment/configuration عند startup؟ نعم/لا، مع السبب.

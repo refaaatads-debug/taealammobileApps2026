@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { Image, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -24,10 +25,21 @@ import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollV
 import { AppPreferencesProvider, useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { StatusBar } from 'expo-status-bar';
 import { clearRememberedLogin } from '@/lib/rememberedLogin';
+import OnboardingScreen from '@/components/OnboardingScreen';
+import TeacherReviewAccessScreen from '@/components/TeacherReviewAccessScreen';
 
 SplashScreen.preventAutoHideAsync();
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60_000,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    },
+  },
+});
 const APP_FONT_MAP = {
   Inter_400Regular: Cairo_400Regular,
   Inter_500Medium: Cairo_500Medium,
@@ -52,6 +64,16 @@ const PUBLIC_PATHS = new Set([
   '/reset-password',
   '/payment-success',
 ]);
+const ONBOARDING_COMPLETED_KEY = 'ajyal.onboarding.completed.v1';
+const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
+  '/profile',
+  '/(tabs)/profile',
+  '/support',
+  '/help-center',
+  '/settings',
+  '/privacy',
+  '/terms',
+]);
 
 function RootLayoutNav() {
   const colors = useColors();
@@ -69,10 +91,32 @@ function RootLayoutNav() {
   const [authSubmitting, setAuthSubmitting] = React.useState(false);
   const [authError, setAuthError] = React.useState<string | null>(null);
   const [bootstrapTimedOut, setBootstrapTimedOut] = React.useState(false);
+  const [onboardingResolved, setOnboardingResolved] = React.useState(false);
+  const [showOnboarding, setShowOnboarding] = React.useState(false);
+  const autoOpenedSessionIds = React.useRef(new Set<string>());
   useEffect(() => {
     // Remove credentials saved by older releases. Session persistence is
     // handled by Supabase and must never depend on a stored password.
     void clearRememberedLogin();
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void AsyncStorage.getItem(ONBOARDING_COMPLETED_KEY)
+      .then((completed) => {
+        if (!mounted) return;
+        setShowOnboarding(completed !== '1');
+        setOnboardingResolved(true);
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        console.warn('[onboarding] Could not read completion state:', error instanceof Error ? error.message : error);
+        setShowOnboarding(true);
+        setOnboardingResolved(true);
+      });
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const bootstrapLoading = authLoading || (isAuthenticated && profileLoading);
@@ -116,17 +160,42 @@ function RootLayoutNav() {
     }
   }, [homeReady, isAuthenticated, isPasswordRecovery, pathname]);
 
-  // The web platform announces an instant-session start through the booking
-  // Realtime update. Keep this listener at the app shell level so a student
-  // is not required to remain on the bookings tab while waiting for the
-  // teacher to start from the computer.
+  // Keep this listener at the app shell level so a student is not required to
+  // remain on the bookings tab while waiting for the teacher to start from the
+  // computer. The booking status and sessions.started_at lifecycle row are
+  // both supported because different teacher clients can publish either
+  // update first.
   useEffect(() => {
     const client = supabase;
     if (!client || !profile?.id || role !== 'student' || pathname === '/live-session') return undefined;
     let mounted = true;
-    const instantWaitingIds = new Set<string>();
+    const openStartedBooking = (bookingId: string) => {
+      if (!mounted || pathname === '/live-session' || autoOpenedSessionIds.current.has(bookingId)) return;
+      autoOpenedSessionIds.current.add(bookingId);
+      router.replace({ pathname: '/live-session', params: { booking: bookingId } });
+    };
 
-    const loadPendingInstantSessions = async () => {
+    const loadActiveSessions = async () => {
+      const { data: lifecycleRows } = await client
+        .from('sessions')
+        .select('booking_id, started_at, ended_at')
+        .not('started_at', 'is', null)
+        .is('ended_at', null);
+      if (!mounted) return;
+      const lifecycleBookingIds = [...new Set((lifecycleRows ?? [])
+        .filter((row) => typeof row.booking_id === 'string' && typeof row.started_at === 'string' && !row.ended_at)
+        .map((row) => row.booking_id as string))];
+      if (lifecycleBookingIds.length) {
+        const { data: ownedLifecycleBookings } = await client
+          .from('bookings')
+          .select('id')
+          .eq('student_id', profile.id)
+          .in('id', lifecycleBookingIds);
+        for (const row of ownedLifecycleBookings ?? []) {
+          if (typeof row.id === 'string') openStartedBooking(row.id);
+        }
+      }
+
       const { data } = await client
         .from('bookings')
         .select('id, session_status, scheduled_at, created_at')
@@ -134,22 +203,19 @@ function RootLayoutNav() {
         .in('session_status', ['waiting_acceptance', 'in_progress']);
       if (!mounted) return;
       for (const row of data ?? []) {
-        const scheduledAt = typeof row.scheduled_at === 'string' ? Date.parse(row.scheduled_at) : Number.NaN;
-        const createdAt = typeof row.created_at === 'string' ? Date.parse(row.created_at) : Number.NaN;
-        const looksInstant = Number.isFinite(scheduledAt) && Number.isFinite(createdAt)
-          && Math.abs(scheduledAt - createdAt) <= 5 * 60 * 1000;
-        if (row.session_status === 'waiting_acceptance' || (row.session_status === 'in_progress' && looksInstant)) {
-          instantWaitingIds.add(String(row.id));
-          if (row.session_status === 'in_progress' && looksInstant && pathname !== '/live-session') {
-            router.replace({ pathname: '/live-session', params: { booking: String(row.id) } });
-          }
+        const bookingId = String(row.id);
+        if (row.session_status === 'waiting_acceptance') {
+          continue;
+        }
+        if (row.session_status === 'in_progress') {
+          openStartedBooking(bookingId);
         }
       }
     };
 
-    void loadPendingInstantSessions();
+    void loadActiveSessions();
     const channel = client
-      .channel(`mobile-instant-session-start-${profile.id}`)
+      .channel(`mobile-session-start-${profile.id}`)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -163,19 +229,36 @@ function RootLayoutNav() {
           created_at?: unknown;
         };
         const bookingId = typeof updated.id === 'string' ? updated.id : null;
-        const scheduledAt = typeof updated.scheduled_at === 'string' ? Date.parse(updated.scheduled_at) : Number.NaN;
-        const createdAt = typeof updated.created_at === 'string' ? Date.parse(updated.created_at) : Number.NaN;
-        const looksInstant = Number.isFinite(scheduledAt) && Number.isFinite(createdAt)
-          && Math.abs(scheduledAt - createdAt) <= 5 * 60 * 1000;
         if (!bookingId) return;
         if (updated.session_status === 'waiting_acceptance') {
-          instantWaitingIds.add(bookingId);
           return;
         }
-        if (updated.session_status !== 'in_progress' || (!instantWaitingIds.has(bookingId) && !looksInstant)) return;
-        instantWaitingIds.delete(bookingId);
-        if (!mounted || pathname === '/live-session') return;
-        router.replace({ pathname: '/live-session', params: { booking: bookingId } });
+        if (updated.session_status !== 'in_progress') {
+          return;
+        }
+        openStartedBooking(bookingId);
+      })
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'sessions',
+      }, (payload) => {
+        const updated = payload.new as {
+          booking_id?: unknown;
+          started_at?: unknown;
+          ended_at?: unknown;
+        };
+        const bookingId = typeof updated.booking_id === 'string' ? updated.booking_id : null;
+        if (!bookingId || typeof updated.started_at !== 'string' || updated.ended_at) return;
+        void client
+          .from('bookings')
+          .select('id')
+          .eq('id', bookingId)
+          .eq('student_id', profile.id)
+          .maybeSingle()
+          .then(({ data }) => {
+            if (data?.id && typeof data.id === 'string') openStartedBooking(data.id);
+          });
       })
       .subscribe();
 
@@ -314,25 +397,27 @@ function RootLayoutNav() {
 
             {isSignup ? (
               <>
-                 <AuthInput icon="user" placeholder={t('الاسم الكامل', 'Full name')} value={fullName} onChangeText={setFullName} colors={colors} />
                 <View style={styles.rolePicker}>
                    <Text style={[styles.roleLabel, { color: colors.mutedForeground }]}>{t('أريد التسجيل كـ', 'I want to join as')}</Text>
                   <View style={styles.roleOptions}>
                     {([
-                       { value: 'student' as const, title: t('طالب', 'Student'), body: t('أبحث عن معلم', 'I am looking for a teacher'), icon: '🎓' },
-                       { value: 'teacher' as const, title: t('معلم', 'Teacher'), body: t('أريد التدريس', 'I want to teach'), icon: '📚' },
+                        { value: 'student' as const, title: t('طالب', 'Student'), body: t('أبحث عن معلم', 'I am looking for a teacher') },
+                        { value: 'teacher' as const, title: t('معلم', 'Teacher'), body: t('أريد التدريس', 'I want to teach') },
                     ]).map((item) => {
                       const active = signupRole === item.value;
                       return (
-                        <Pressable key={item.value} testID={`signup-role-${item.value}`} onPress={() => setSignupRole(item.value)} style={[styles.roleOption, { borderColor: active ? colors.teal : colors.border, backgroundColor: active ? colors.tealSoft : colors.card }]}>
-                          <Text style={styles.roleEmoji}>{item.icon}</Text>
-                          <Text style={[styles.roleTitle, { color: active ? colors.teal : colors.foreground }]}>{item.title}</Text>
-                          <Text style={[styles.roleBody, { color: colors.mutedForeground }]}>{item.body}</Text>
+                        <Pressable key={item.value} testID={`signup-role-${item.value}`} onPress={() => setSignupRole(item.value)} style={({ pressed }) => [styles.roleOption, { borderColor: active ? colors.teal : colors.border, backgroundColor: active ? colors.tealSoft : colors.card }, pressed && styles.pressed]}>
+                          <Feather name={item.value === 'student' ? 'book-open' : 'briefcase'} size={19} color={active ? colors.teal : colors.mutedForeground} />
+                          <View style={styles.roleOptionCopy}>
+                            <Text style={[styles.roleTitle, { color: active ? colors.teal : colors.foreground }]}>{item.title}</Text>
+                            <Text style={[styles.roleBody, { color: colors.mutedForeground }]}>{item.body}</Text>
+                          </View>
                         </Pressable>
                       );
                     })}
                   </View>
                 </View>
+                 <AuthInput icon="user" placeholder={t('الاسم الكامل', 'Full name')} value={fullName} onChangeText={setFullName} colors={colors} />
               </>
             ) : null}
 
@@ -405,17 +490,11 @@ function RootLayoutNav() {
     );
   }
   if (!isPasswordRecovery && isAuthenticated && profile?.role === 'teacher' && profile.teacherApproved !== true) {
-    overlay = (
-      <AccessStateScreen
-        title={profile.teacherApproved === false ? t("حساب المعلم قيد المراجعة", "Teacher account under review") : t("تعذر التحقق من اعتماد المعلم", "Couldn't verify teacher approval")}
-        body={profile.teacherApproved === false
-          ? t("سيظهر محتوى المعلم بعد اعتماد الملف من إدارة المنصة.", "Teacher features will appear after the platform approves your profile.")
-          : t("لم تصل حالة اعتماد المعلم من المنصة. حاول مرة أخرى لاحقاً.", "Teacher approval status did not arrive. Try again later.")}
-        actionLabel={profile.teacherApproved === false ? t("تسجيل الخروج", "Sign out") : t("إعادة المحاولة", "Try again")}
-        onAction={() => void (profile.teacherApproved === false ? logoutAjyal() : retryProfile())}
-        colors={colors}
-      />
-    );
+    if (TEACHER_REVIEW_ALLOWED_PATHS.has(pathname)) {
+      overlay = null;
+    } else {
+      overlay = <TeacherReviewAccessScreen status={profile.teacherApproved === false ? "rejected" : "pending"} onRetry={() => void retryProfile()} onLogout={() => void logoutAjyal()} />;
+    }
   }
   if (!isPasswordRecovery && isAuthenticated && profile && profile.role !== 'student' && profile.role !== 'teacher') {
     overlay = (
@@ -428,9 +507,31 @@ function RootLayoutNav() {
       />
     );
   }
+  const canShowOnboarding = onboardingResolved
+    && showOnboarding
+    && !isPublicRoute
+    && !isPasswordRecovery
+    && !bootstrapLoading
+    && !bootstrapTimedOut
+    // Onboarding is a first-use, pre-auth flow. A restored session should
+    // never be covered by welcome screens, even if local onboarding storage
+    // was cleared or the app was updated on the device.
+    && !isAuthenticated;
+  if (canShowOnboarding) {
+    overlay = (
+      <OnboardingScreen
+        onComplete={() => {
+          setShowOnboarding(false);
+          void AsyncStorage.setItem(ONBOARDING_COMPLETED_KEY, '1').catch((error) => {
+            console.warn('[onboarding] Could not save completion state:', error instanceof Error ? error.message : error);
+          });
+        }}
+      />
+    );
+  }
   return (
     <View style={styles.rootNavigator}>
-      <Stack screenOptions={{ headerBackTitle: 'رجوع' }}>
+      <Stack screenOptions={{ headerBackTitle: 'رجوع', animation: 'fade' }}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="find-teacher" options={{ headerShown: false }} />
         <Stack.Screen name="subscriptions" options={{ headerShown: false }} />
@@ -512,6 +613,7 @@ function AuthInput({
 }
 
 const styles = StyleSheet.create({
+  initialLoadingScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F6F7F9' },
   rootNavigator: { flex: 1 },
   overlay: { ...StyleSheet.absoluteFill, zIndex: 20 },
   authScreen: { flex: 1 },
@@ -568,13 +670,13 @@ const styles = StyleSheet.create({
   authOptionsRow: { width: '100%', maxWidth: 340, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', marginTop: -2, marginBottom: 15 },
   forgotInlineButton: { alignItems: 'flex-start', paddingVertical: 4 },
   forgotText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  rolePicker: { width: '100%', maxWidth: 340, marginBottom: 10 },
-  roleLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold', textAlign: 'right', writingDirection: 'rtl', marginBottom: 8 },
-  roleOptions: { flexDirection: 'row', gap: 9 },
-  roleOption: { flex: 1, minHeight: 83, borderRadius: 14, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', padding: 8 },
-  roleEmoji: { fontSize: 18, marginBottom: 2 },
-  roleTitle: { fontSize: 12, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  roleBody: { fontSize: 9, fontFamily: 'Inter_400Regular', writingDirection: 'rtl', marginTop: 2 },
+   rolePicker: { width: '100%', maxWidth: 340, marginBottom: 9 },
+   roleLabel: { fontSize: 10, fontFamily: 'Inter_600SemiBold', textAlign: 'right', writingDirection: 'rtl', marginBottom: 6 },
+   roleOptions: { flexDirection: 'row', gap: 8 },
+   roleOption: { flex: 1, minHeight: 68, borderRadius: 14, borderWidth: 1.5, flexDirection: 'row-reverse', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 7, gap: 8 },
+   roleOptionCopy: { flex: 1, alignItems: 'flex-end' },
+   roleTitle: { fontSize: 11, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+   roleBody: { fontSize: 8, lineHeight: 12, fontFamily: 'Inter_400Regular', writingDirection: 'rtl', marginTop: 2 },
   loginButton: { width: '100%', maxWidth: 340, minHeight: 51, borderRadius: 14, paddingHorizontal: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 11, marginTop: 1 },
   loginButtonText: { fontSize: 13, fontFamily: 'Inter_700Bold' },
   loginArrow: { fontSize: 18, lineHeight: 17 },
@@ -620,7 +722,15 @@ export default function RootLayout() {
     void enforceAvailableUpdate();
   }, []);
 
-  if (!fontsReady) return null;
+  if (!fontsReady) {
+    return (
+      <View style={styles.initialLoadingScreen}>
+        <View style={styles.loadingLogo}>
+          <Image source={BRAND_ICON} style={styles.logoImage} />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaProvider>

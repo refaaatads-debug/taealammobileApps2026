@@ -1,38 +1,42 @@
 {
   "expo": {
-    "name": "أجيال المعرفة",
+    "name": "ajyalalmaerifa",
     "slug": "ajyal-mobile",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/ajyal-icon.png",
     "scheme": "ajyalalmaerifa",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.ajyalalmaarefa.mobile",
+      "bundleIdentifier": "com.ajyalalmaerifa.app",
       "buildNumber": "1",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية.",
         "NSCameraUsageDescription": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
         "NSPhotoLibraryUsageDescription": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
-      }
+      },
+      "bitcode": false
     },
     "android": {
-      "package": "com.ajyalalmaarefa.mobile",
+      "package": "com.ajyalalmaerifa.app",
+      "googleServicesFile": "./google-services.json",
       "versionCode": 1,
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.RECORD_AUDIO",
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.INTERNET",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WAKE_LOCK",
+        "android.permission.BLUETOOTH"
       ]
     },
     "web": {
+      "bundler": "metro",
       "favicon": "./assets/images/ajyal-icon.png"
-    },
-    "splash": {
-      "backgroundColor": "#F6F7F9",
-      "image": "./assets/images/ajyal-icon.png",
-      "resizeMode": "contain"
     },
     "updates": {
       "checkAutomatically": "ON_ERROR_RECOVERY",
@@ -45,6 +49,9 @@
       "updatePolicy": {
         "mandatory": true,
         "minimumSupportedVersion": "1.0.0"
+      },
+      "eas": {
+        "projectId": "4f6614d5-2a55-410c-8c71-f9430594fbfd"
       }
     },
     "plugins": [
@@ -62,10 +69,10 @@
           "color": "#2E9E79",
           "enableBackgroundRemoteNotifications": true,
           "sounds": [
-            "./assets/audio/incoming-call.wav",
-            "./assets/audio/message-notification.wav",
-            "./assets/audio/session-notification.wav",
-            "./assets/audio/approval-notification.wav"
+            "./assets/audio/incoming_call.wav",
+            "./assets/audio/message_notification.wav",
+            "./assets/audio/session_notification.wav",
+            "./assets/audio/approval_notification.wav"
           ]
         }
       ],
@@ -74,11 +81,24 @@
         {
           "photosPermission": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
         }
-      ]
+      ],
+      "expo-screen-orientation",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#F6F7F9",
+          "image": "./assets/images/ajyal-icon.png",
+          "resizeMode": "contain"
+        }
+      ],
+      "expo-asset",
+      "expo-audio",
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "owner": "ajyalalmaerifa"
   }
 }

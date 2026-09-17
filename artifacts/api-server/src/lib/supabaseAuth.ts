@@ -127,10 +127,14 @@ export function toAuthUser(user: SupabaseUser): AuthUser {
   };
 }
 
-export async function getSupabaseProfile(accessToken: string, userId: string): Promise<Record<string, unknown> | null> {
+export async function getSupabaseProfile(
+  accessToken: string,
+  userId: string,
+  select = "*",
+): Promise<Record<string, unknown> | null> {
   if (!publishableKey) return null;
   try {
-    const query = new URLSearchParams({ user_id: `eq.${userId}`, select: "*" });
+    const query = new URLSearchParams({ user_id: `eq.${userId}`, select });
     const response = await supabaseRequest(`/rest/v1/profiles?${query.toString()}`, accessToken);
     if (!response.ok) return null;
     const rows = await response.json() as unknown;
@@ -170,6 +174,20 @@ export async function getSupabaseRoles(accessToken: string, userId: string): Pro
     .filter((role): role is PlatformRole => typeof role === "string" && PLATFORM_ROLES.has(role as PlatformRole));
 }
 
+export async function hasSupabaseTeacherProfile(accessToken: string, userId: string): Promise<boolean> {
+  const rows = await supabaseTable<{ user_id?: unknown }>(accessToken, "teacher_profiles", {
+    user_id: `eq.${userId}`,
+    select: "user_id",
+    limit: "1",
+  });
+  return rows.length > 0;
+}
+
+export async function hasSupabaseTeacherSignupHint(accessToken: string): Promise<boolean> {
+  const user = await getSupabaseUser(accessToken);
+  return user?.user_metadata?.role === "teacher";
+}
+
 export async function getSupabaseTeacherApproval(accessToken: string, userId: string): Promise<boolean | null> {
   const rows = await supabaseTable<{ is_approved?: unknown }>(accessToken, "teacher_profiles", {
     user_id: `eq.${userId}`,
@@ -177,7 +195,9 @@ export async function getSupabaseTeacherApproval(accessToken: string, userId: st
     limit: "1",
   });
   if (!rows[0]) return null;
-  return rows[0].is_approved === true;
+  if (rows[0].is_approved === true) return true;
+  if (rows[0].is_approved === false) return false;
+  return null;
 }
 
 export async function isSupabaseUserBanned(accessToken: string, userId: string): Promise<boolean> {
