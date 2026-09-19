@@ -63,3 +63,4 @@
 - [Expo Preview build gating](expo-preview-build-gating.md) — reuse a fresh static bundle on workflow restarts; repeated export can restart the Workspace and look like Preview reloads.
 - [Replit Expo Go simulator routing](expo-go-simulator-routing.md) — force Expo Go when expo-dev-client is installed and proxy native requests through the artifact port.
 - [Mobile API workflow dependency](mobile-api-workflow-dependency.md) — authenticated native startup needs the API artifact workflow running alongside Expo.
+- [GitHub connector publishing](github-connector-publishing.md) — use the connected GitHub API when the git remote lacks auth, and exclude generated builds and credential files.
