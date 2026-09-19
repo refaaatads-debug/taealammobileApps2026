@@ -7,4 +7,4 @@ When publishing a Replit workspace to GitHub, the configured HTTPS git remote ma
 
 **Why:** The remote can have an unrelated import history, direct git push can fail authentication, and repository secret scanning can reject blobs before a tree or commit is created.
 
-**How to apply:** Verify the remote branch first, compare trees, create blobs/tree/commit through the GitHub connection, update the branch without force, and verify the final ref and sensitive-file absence.
+**How to apply:** Verify the remote branch first, compare trees with UTF-8 path output (`core.quotePath=false`), create blobs/tree/commit through the GitHub connection, update the branch without force, and verify the final ref and sensitive-file absence.
