@@ -52,7 +52,9 @@ const appFontsReady = loadAsync(APP_FONT_MAP)
     console.warn('[fonts] Could not preload app fonts:', error);
     return false;
   });
-const apiDomain = process.env.EXPO_PUBLIC_DOMAIN;
+// The API is hosted outside Replit. EXPO_PUBLIC_DOMAIN remains the Expo
+// preview/packager domain, so it must not be used as the mobile API origin.
+const apiDomain = process.env.EXPO_PUBLIC_API_DOMAIN;
 if (apiDomain) setBaseUrl(`https://${apiDomain}`);
 setAuthTokenGetter(getAuthToken);
 

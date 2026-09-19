@@ -5,6 +5,7 @@
       "distribution": "store",
       "pnpm": "10.26.1",
       "env": {
+        "EXPO_PUBLIC_API_DOMAIN": "api.ajyalalmaerifa.com",
         "EXPO_PUBLIC_DOMAIN": "api.ajyalalmaerifa.com",
         "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com"
       }
@@ -16,6 +17,7 @@
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_API_DOMAIN": "api.ajyalalmaerifa.com",
         "EXPO_PUBLIC_DOMAIN": "api.ajyalalmaerifa.com",
         "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com"
       }

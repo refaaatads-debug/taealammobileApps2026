@@ -29,6 +29,7 @@ _Populate as you build — short repo map plus pointers to the source-of-truth f
 - منصة الويب وSupabase Production هما مصدر الحقيقة الوحيد للهوية والأدوار والجداول وRPC والـFunctions والمنطق المالي.
 - كل تعديل خاص بتطبيق الهاتف أو API الخاص به فقط؛ لا ننشئ بديلاً للمنصة أو قاعدة بيانات أو منطقاً مالياً موازياً.
 - GitHub هو مصدر الكود الرسمي للتطبيق؛ Replit بيئة التطوير والبرمجة والاختبار فقط. لا نعتبر أي تعديل محلي في Replit إصداراً نهائياً قبل مزامنته مع مستودع GitHub.
+- API الإنتاج يعمل على الـVPS الخارجي عبر `api.ajyalalmaerifa.com`. تطبيق الهاتف يستخدم `EXPO_PUBLIC_API_DOMAIN` لهذا العنوان؛ خدمة API داخل Replit مخصصة للتشخيص المحلي فقط وليست مسار تشغيل التطبيق.
 
 ## Product
 
