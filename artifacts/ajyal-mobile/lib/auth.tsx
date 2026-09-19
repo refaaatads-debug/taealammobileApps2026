@@ -44,6 +44,7 @@ const AuthContext = createContext<AuthContextValue>({
 
 const AUTH_REQUEST_TIMEOUT_MS = 12_000;
 const OAUTH_BROWSER_TIMEOUT_MS = 120_000;
+const INITIAL_AUTH_GRACE_MS = 500;
 
 function withTimeout<T>(promise: PromiseLike<T>, message: string, timeoutMs = AUTH_REQUEST_TIMEOUT_MS): Promise<T> {
   return Promise.race([
@@ -106,23 +107,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     let mounted = true;
     const initialSessionVersion = authStateVersion.current;
-    void withTimeout(supabase.auth.getSession(), "انتهت مهلة الاتصال بالمنصة")
-      .then(({ data }) => {
-        const stale = authStateVersion.current !== initialSessionVersion;
-        if (!mounted || stale) return;
-        setUser(data.session?.user ? mapUser(data.session.user) : null);
-      })
-      .catch((error) => {
-        if (!mounted) return;
-        console.warn("[auth] Initial session could not be loaded:", error instanceof Error ? error.message : error);
+    const initialAuthEventReceived = { current: false };
+    let initialAuthFallback: ReturnType<typeof setTimeout> | null = null;
+    const finishSignedOutFallback = () => {
+      if (!mounted || initialAuthEventReceived.current || initialAuthFallback) return;
+      initialAuthFallback = setTimeout(() => {
+        initialAuthFallback = null;
+        if (!mounted || initialAuthEventReceived.current) return;
         setUser(null);
-      })
-      .finally(() => {
-        if (mounted) setIsLoading(false);
-      });
+        setIsLoading(false);
+      }, INITIAL_AUTH_GRACE_MS);
+    };
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
       authStateVersion.current += 1;
+      if (_event === "INITIAL_SESSION") {
+        initialAuthEventReceived.current = true;
+        if (initialAuthFallback) {
+          clearTimeout(initialAuthFallback);
+          initialAuthFallback = null;
+        }
+      }
       if (_event === "PASSWORD_RECOVERY") setIsPasswordRecovery(true);
       if (_event === "SIGNED_OUT") setIsPasswordRecovery(false);
       if (_event === "SIGNED_IN" && deferSignedInUser.current) {
@@ -132,8 +137,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(session?.user ? mapUser(session.user) : null);
       setIsLoading(false);
     });
+    void withTimeout(supabase.auth.getSession(), "انتهت مهلة الاتصال بالمنصة")
+      .then(({ data }) => {
+        const stale = authStateVersion.current !== initialSessionVersion;
+        if (!mounted || stale) return;
+        if (data.session?.user) {
+          setUser(mapUser(data.session.user));
+          setIsLoading(false);
+        } else {
+          // Supabase can resolve storage just before emitting INITIAL_SESSION.
+          // Keep the auth gate closed briefly so a restored session never
+          // flashes the login form before that event arrives.
+          finishSignedOutFallback();
+        }
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        console.warn("[auth] Initial session could not be loaded:", error instanceof Error ? error.message : error);
+        finishSignedOutFallback();
+      })
     return () => {
       mounted = false;
+      if (initialAuthFallback) clearTimeout(initialAuthFallback);
       listener.subscription.unsubscribe();
     };
   }, []);

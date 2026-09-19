@@ -36,6 +36,7 @@
 - [AI tutor fixed composer](ai-tutor-fixed-composer.md) — the student AI chat lives in SmartTeacherScreen; fixed input needs a non-scrolling screen and its own message scroller.
 - [Payment return verification](payment-return-verification.md) — a checkout redirect is never payment proof; mobile may only reread confirmed source state without creating financial records.
 - [Booking error visibility](booking-error-visibility.md) — a booking POST can reach the API and be rejected by platform validation; always surface structured API errors in the mobile UI.
+- [Assignment review status parity](assignment-review-status-parity.md) — teacher review labels come from submission statuses, not the assignment's active lifecycle.
 - [Group booking contract](group-booking-contract.md) — keep grouped slots on a separate endpoint; local parity is not Production E2E proof.
 - [Supabase Realtime channel lifecycle](supabase-realtime-channel-lifecycle.md) — use unique topics or await cleanup when effects create postgres_changes channels under React Strict Mode.
 - [Production assignments schema](production-assignments-schema.md) — do not assume assignments exposes a progress column when building teacher student lists.
@@ -63,3 +64,4 @@
 - [Expo Preview build gating](expo-preview-build-gating.md) — reuse a fresh static bundle on workflow restarts; repeated export can restart the Workspace and look like Preview reloads.
 - [Replit Expo Go simulator routing](expo-go-simulator-routing.md) — force Expo Go when expo-dev-client is installed and proxy native requests through the artifact port.
 - [Mobile API workflow dependency](mobile-api-workflow-dependency.md) — authenticated native startup needs the API artifact workflow running alongside Expo.
+- [GitHub connector publishing](github-connector-publishing.md) — use the connected GitHub API when the git remote lacks auth, and exclude generated builds and credential files.

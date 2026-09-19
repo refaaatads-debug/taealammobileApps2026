@@ -266,30 +266,57 @@ export function SessionCard({ session, role, cancelled, onPress, onJoin, onCance
   );
 }
 
-export function AssignmentRow({ assignment, completed, submissionCount = 0, onPress }: { assignment: Assignment; completed?: boolean; submissionCount?: number; onPress: () => void }) {
+export function AssignmentRow({ assignment, completed, submissionCount = 0, teacherReviewStatus, onPress }: { assignment: Assignment; completed?: boolean; submissionCount?: number; teacherReviewStatus?: 'submitted' | 'ai_graded' | 'reviewed' | 'mixed'; onPress: () => void }) {
   const colors = useColors();
   const { t, direction, formatNumber } = useAppPreferences();
   const isDone = completed || assignment.status === 'مكتمل';
-  const statusColor = isDone ? colors.success : assignment.status === 'قيد التقدم' ? colors.teal : colors.mutedForeground;
+  const isReviewed = teacherReviewStatus === 'reviewed';
+  const statusColor = isReviewed || isDone ? colors.success : teacherReviewStatus === 'ai_graded' || assignment.status === 'قيد التقدم' ? colors.teal : colors.mutedForeground;
+  const statusLabel = isReviewed
+    ? t('تم التصحيح', 'Reviewed')
+    : teacherReviewStatus === 'ai_graded'
+      ? t('تصحيح آلي', 'AI graded')
+      : teacherReviewStatus === 'submitted' || teacherReviewStatus === 'mixed'
+        ? t('قيد المراجعة', 'Awaiting review')
+        : isDone
+          ? t('مكتمل', 'Completed')
+          : assignment.status === 'قيد التقدم'
+            ? t('قيد التقدم', 'In progress')
+            : assignment.kind === 'اختبار'
+              ? t('اختبار', 'Quiz')
+              : t('واجب', 'Assignment');
   return (
-    <Pressable testID={`assignment-${assignment.id}`} onPress={onPress} style={({ pressed }) => [styles.assignmentRow, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.cardPressed]}>
-      <View style={[styles.assignmentIcon, { backgroundColor: isDone ? colors.tealSoft : colors.navySoft }]}>
+    <Pressable testID={`assignment-${assignment.id}`} accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.assignmentRow, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.cardPressed]}>
+      <View style={[styles.assignmentAccent, { backgroundColor: statusColor }]} />
+      <View style={[styles.assignmentIcon, { backgroundColor: isDone ? colors.tealSoft : assignment.kind === 'اختبار' ? colors.goldSoft : colors.navySoft }]}>
         <Icon name={assignment.kind === 'اختبار' ? 'edit-3' : 'file-text'} size={18} color={isDone ? colors.teal : colors.primary} />
       </View>
       <View style={styles.assignmentMain}>
         <View style={styles.assignmentTitleLine}>
-            <Text style={[styles.assignmentTitle, { color: colors.foreground, writingDirection: direction }]} numberOfLines={1}>{assignment.title}</Text>
-          <View style={[styles.badge, { backgroundColor: isDone ? colors.tealSoft : colors.goldSoft }]}>
-            <Text style={[styles.badgeText, { color: isDone ? colors.success : colors.accentForeground }]}>{isDone ? t('مكتمل', 'Completed') : assignment.kind === 'اختبار' ? t('اختبار', 'Quiz') : t('واجب', 'Assignment')}</Text>
+          <Text style={[styles.assignmentTitle, { color: colors.foreground, writingDirection: direction }]} numberOfLines={2}>{assignment.title}</Text>
+          <View style={[styles.badge, { backgroundColor: isReviewed || isDone ? colors.tealSoft : teacherReviewStatus === 'ai_graded' || assignment.status === 'قيد التقدم' ? colors.navySoft : colors.goldSoft }]}>
+            <Text style={[styles.badgeText, { color: isReviewed || isDone ? colors.success : teacherReviewStatus === 'ai_graded' || assignment.status === 'قيد التقدم' ? colors.primary : colors.accentForeground }]}>{statusLabel}</Text>
           </View>
         </View>
-        <Text style={[styles.assignmentSubject, { color: colors.mutedForeground, writingDirection: direction }]}>{assignment.subject} · {assignment.due}{submissionCount ? ` · ${formatNumber(submissionCount)} ${t('تسليم', 'submissions')}` : ''}</Text>
-        <View style={styles.assignmentProgressLine}>
-          <ProgressBar progress={isDone ? 100 : assignment.progress} color={statusColor} />
+        <View style={styles.assignmentMeta}>
+          <Icon name="book-open" size={11} color={colors.mutedForeground} />
+          <Text style={[styles.assignmentSubject, { color: colors.mutedForeground, writingDirection: direction }]} numberOfLines={1}>{assignment.subject}</Text>
+          <View style={[styles.assignmentMetaDot, { backgroundColor: colors.border }]} />
+          <Icon name="calendar" size={11} color={colors.mutedForeground} />
+          <Text style={[styles.assignmentDue, { color: colors.mutedForeground, writingDirection: direction }]} numberOfLines={1}>{assignment.due}</Text>
+          {submissionCount ? <Text style={[styles.assignmentSubmission, { color: colors.teal, writingDirection: direction }]}>{` · ${formatNumber(submissionCount)} ${t('تسليم', 'submissions')}`}</Text> : null}
+        </View>
+        <View style={styles.assignmentProgressHeader}>
+          <Text style={[styles.assignmentProgressLabel, { color: colors.mutedForeground, writingDirection: direction }]}>{t('نسبة الإنجاز', 'Progress')}</Text>
           <Text style={[styles.percent, { color: statusColor }]}>{isDone ? '100%' : `${formatNumber(assignment.progress)}%`}</Text>
         </View>
+        <View style={[styles.assignmentProgressTrack, { backgroundColor: colors.muted }]}>
+          <View style={[styles.assignmentProgressFill, { width: `${Math.min(Math.max(isDone ? 100 : assignment.progress, 0), 100)}%`, backgroundColor: statusColor }]} />
+        </View>
       </View>
-      <Icon name="arrow-left" size={15} color={colors.mutedForeground} />
+      <View style={[styles.assignmentArrow, { backgroundColor: isDone ? colors.tealSoft : colors.navySoft }]}>
+        <Icon name="arrow-left" size={14} color={isDone ? colors.teal : colors.primary} />
+      </View>
     </Pressable>
   );
 }
@@ -397,7 +424,12 @@ export function DashboardActions({ role, onAction, showSmartTeacher = true }: { 
     'نظرة على مواعيدك': 'Your schedule at a glance',
   };
   return (
-      <View style={[styles.dashboardActions, role === 'student' && [styles.studentToolsSurface, { backgroundColor: colors.card, borderColor: colors.border }]]}>
+      <View style={[
+        styles.dashboardActions,
+        role === 'student'
+          ? [styles.studentToolsSurface, { backgroundColor: colors.card, borderColor: colors.border }]
+          : [styles.teacherToolsSurface, { backgroundColor: colors.card, borderColor: colors.border }],
+      ]}>
       <SectionHeading title={role === 'student' ? t('أدوات الطالب', 'Student tools') : t('أدوات المعلّم', 'Teacher tools')} />
       <View style={[styles.dashboardActionGrid, role === 'student' && styles.studentToolsGrid]}>
         {actions.map((action) => {
@@ -410,11 +442,13 @@ export function DashboardActions({ role, onAction, showSmartTeacher = true }: { 
               <View style={[styles.dashboardActionBackplate, { backgroundColor: depthColor, borderColor: colors.border }]} />
               <Pressable
                 testID={`dashboard-action-${action.id}`}
+                accessibilityRole="button"
+                accessibilityLabel={t(action.title, translations[action.title] ?? action.title)}
                 onPress={() => onAction(action.id)}
                 style={({ pressed }) => [styles.dashboardAction, { borderColor: colors.border }, pressed && styles.cardPressed]}
               >
                 <LinearGradient
-                  colors={isSubscriptionsCard ? [colors.card, colors.goldSoft] : [colors.card, colors.card]}
+                  colors={isSubscriptionsCard ? [colors.card, colors.goldSoft] : [colors.card, depthColor]}
                   start={{ x: 0.05, y: 0 }}
                   end={{ x: 0.95, y: 1 }}
                   style={styles.dashboardActionGradient}
@@ -478,22 +512,23 @@ export const styles = StyleSheet.create({
   bannerDecorOne: { position: 'absolute', width: 215, height: 215, borderRadius: 108, opacity: 0.08, left: -99, top: -68 },
   bannerDecorTwo: { position: 'absolute', width: 120, height: 120, borderRadius: 60, opacity: 0.12, right: -45, bottom: -39 },
   bannerRule: { position: 'absolute', width: 52, height: 3, borderRadius: 2, left: 21, top: 22, opacity: 0.6 },
-  dashboardActions: { marginBottom: 8 },
+  dashboardActions: { marginBottom: 10 },
   studentToolsSurface: { borderRadius: 24, borderWidth: 1, padding: 14, marginBottom: 16, shadowColor: '#173E8C', shadowOpacity: 0.045, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 1 },
-  dashboardActionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 18 },
+  teacherToolsSurface: { borderRadius: 24, borderWidth: 1, padding: 14, marginBottom: 16, shadowColor: '#173E8C', shadowOpacity: 0.055, shadowRadius: 18, shadowOffset: { width: 0, height: 7 }, elevation: 2 },
+  dashboardActionGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12, marginBottom: 18 },
   studentToolsGrid: { marginBottom: 0 },
-  dashboardActionWrap: { width: '48%', minHeight: 134, position: 'relative', overflow: 'visible' },
-  dashboardActionBackplate: { position: 'absolute', left: 2, right: -2, top: 4, bottom: -4, borderRadius: 18, borderWidth: 1, opacity: 0.9 },
-  dashboardAction: { width: '100%', minHeight: 134, borderRadius: 18, borderWidth: 1, overflow: 'hidden', shadowColor: '#173E8C', shadowOpacity: 0.055, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
+  dashboardActionWrap: { width: '48.5%', minHeight: 140, position: 'relative', overflow: 'visible' },
+  dashboardActionBackplate: { position: 'absolute', left: 3, right: -3, top: 5, bottom: -5, borderRadius: 23, borderWidth: 1, opacity: 0.52 },
+  dashboardAction: { width: '100%', minHeight: 140, borderRadius: 23, borderWidth: 1, overflow: 'hidden', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 4 },
   dashboardSubscriptionsAction: { shadowColor: '#B87916', shadowOpacity: 0.08 },
-  dashboardActionGradient: { flex: 1, minHeight: 132, padding: 12, alignItems: 'flex-end', position: 'relative', overflow: 'hidden' },
-  dashboardActionGlow: { position: 'absolute', width: 96, height: 96, borderRadius: 48, top: -48, left: -36, opacity: 0.16 },
-  dashboardActionAccent: { position: 'absolute', width: 22, height: 3, borderRadius: 4, top: 11, left: 11, opacity: 0.58 },
-  dashboardActionIcon: { width: 42, height: 42, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginBottom: 9, position: 'relative', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+  dashboardActionGradient: { flex: 1, minHeight: 138, padding: 14, alignItems: 'flex-end', position: 'relative', overflow: 'hidden' },
+  dashboardActionGlow: { position: 'absolute', width: 132, height: 132, borderRadius: 66, top: -66, left: -50, opacity: 0.2 },
+  dashboardActionAccent: { position: 'absolute', width: 30, height: 4, borderRadius: 4, top: 13, left: 13, opacity: 0.7 },
+  dashboardActionIcon: { width: 48, height: 48, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginBottom: 9, position: 'relative', shadowColor: '#173E8C', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   dashboardActionIconDot: { position: 'absolute', width: 6, height: 6, borderRadius: 3, top: 6, right: 6 },
-  dashboardActionTitle: { width: '100%', flexShrink: 1, fontSize: 12, lineHeight: 17, minHeight: 34, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
-  dashboardActionSubtitle: { width: '100%', fontSize: 9, lineHeight: 14, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl', marginTop: 2 },
-  dashboardActionArrow: { position: 'absolute', bottom: 11, left: 11, width: 25, height: 25, borderRadius: 9, alignItems: 'center', justifyContent: 'center', shadowColor: '#173E8C', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  dashboardActionTitle: { width: '100%', flexShrink: 1, fontSize: 13.5, lineHeight: 19, minHeight: 38, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  dashboardActionSubtitle: { width: '100%', fontSize: 10, lineHeight: 15, minHeight: 15, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl', marginTop: 2 },
+  dashboardActionArrow: { position: 'absolute', bottom: 13, left: 13, width: 30, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, marginTop: 1 },
   sectionTitleWrap: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 7 },
   sectionMark: { width: 4, height: 16, borderRadius: 3 },
@@ -521,16 +556,25 @@ export const styles = StyleSheet.create({
   joinSessionText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   cancelled: { fontSize: 10, marginTop: 5, fontFamily: 'Inter_600SemiBold' },
   cancelButton: { padding: 5 },
-  assignmentRow: { minHeight: 91, borderRadius: 18, borderWidth: 1, flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10, marginBottom: 9, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
-  assignmentIcon: { width: 43, height: 43, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  assignmentRow: { minHeight: 112, borderRadius: 20, borderWidth: 1, flexDirection: 'row', alignItems: 'center', padding: 13, gap: 11, marginBottom: 10, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 3, position: 'relative', overflow: 'hidden' },
+  assignmentAccent: { position: 'absolute', top: 14, bottom: 14, left: 0, width: 4, borderRadius: 3 },
+  assignmentIcon: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   assignmentMain: { flex: 1, alignItems: 'flex-end' },
-  assignmentTitleLine: { flexDirection: 'row', width: '100%', alignItems: 'center', gap: 7 },
-  assignmentTitle: { flex: 1, textAlign: 'right', fontSize: 13, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  badge: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 7 },
-  badgeText: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
-  assignmentSubject: { width: '100%', textAlign: 'right', fontSize: 10, fontFamily: 'Inter_400Regular', marginTop: 5, writingDirection: 'rtl' },
-  assignmentProgressLine: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 9 },
-  percent: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
+  assignmentTitleLine: { flexDirection: 'row', width: '100%', alignItems: 'flex-start', gap: 7 },
+  assignmentTitle: { flex: 1, textAlign: 'right', fontSize: 13, lineHeight: 18, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  badge: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8, marginTop: 1 },
+  badgeText: { fontSize: 9, fontFamily: 'Inter_700Bold' },
+  assignmentMeta: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', gap: 4, marginTop: 7 },
+  assignmentSubject: { maxWidth: '42%', textAlign: 'right', fontSize: 10, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
+  assignmentDue: { flexShrink: 1, textAlign: 'right', fontSize: 10, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
+  assignmentMetaDot: { width: 3, height: 3, borderRadius: 2, marginHorizontal: 2 },
+  assignmentSubmission: { flexShrink: 1, fontSize: 9, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
+  assignmentProgressHeader: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 9 },
+  assignmentProgressLabel: { fontSize: 9, fontFamily: 'Inter_400Regular' },
+  percent: { fontSize: 10, fontFamily: 'Inter_700Bold' },
+  assignmentProgressTrack: { width: '100%', height: 6, borderRadius: 4, overflow: 'hidden', marginTop: 5 },
+  assignmentProgressFill: { height: '100%', borderRadius: 4 },
+  assignmentArrow: { width: 30, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   emptyState: { borderRadius: 18, borderWidth: 1, alignItems: 'center', padding: 18, marginTop: 4, position: 'relative', overflow: 'hidden', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   emptyGlow: { position: 'absolute', width: 170, height: 170, borderRadius: 85, top: -112, right: -66, opacity: 0.72 },
   emptyIcon: { width: 46, height: 46, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 9, shadowColor: '#173E8C', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
