@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
+import { BlurHashImage } from '@/components/BlurHashImage';
 import * as ImagePicker from 'expo-image-picker';
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioRecorder } from 'expo-audio';
 import { useColors } from '@/hooks/useColors';
@@ -656,7 +657,7 @@ export default function AssignmentsScreen() {
                               <View style={styles.submissionImageGrid}>
                                 {imageUrls.map((url, imageIndex) => (
                                   <Pressable key={`${submissionId}-image-${imageIndex}`} onPress={() => void Linking.openURL(url)}>
-                                    <Image source={{ uri: url }} style={styles.submissionImage} resizeMode="cover" />
+                                    <BlurHashImage uri={url} style={styles.submissionImage} />
                                   </Pressable>
                                 ))}
                               </View>

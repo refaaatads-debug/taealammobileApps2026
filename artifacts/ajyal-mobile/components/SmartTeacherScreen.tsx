@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { router } from "expo-router";
+import { BlurHashImage } from "@/components/BlurHashImage";
 import * as ImagePicker from "expo-image-picker";
 import { fetch as expoFetch } from "expo/fetch";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
@@ -642,7 +642,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
             ) : (
               <View style={[styles.imageCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <View style={[styles.imageFrame, { backgroundColor: colors.foreground }]}>
-                  <Image source={{ uri: imageUri }} style={styles.homeworkImage} resizeMode="contain" />
+                  <BlurHashImage uri={imageUri} style={styles.homeworkImage} contentFit="contain" />
                   <Pressable testID="remove-homework-image" onPress={resetHomework} style={[styles.removeImage, { backgroundColor: colors.destructive }]}>
                     <Icon name="x" size={16} color={colors.destructiveForeground} />
                   </Pressable>

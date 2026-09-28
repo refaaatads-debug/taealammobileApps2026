@@ -65,3 +65,6 @@
 - [Replit Expo Go simulator routing](expo-go-simulator-routing.md) — force Expo Go when expo-dev-client is installed and proxy native requests through the artifact port.
 - [Mobile API workflow dependency](mobile-api-workflow-dependency.md) — authenticated native startup needs the API artifact workflow running alongside Expo.
 - [GitHub connector publishing](github-connector-publishing.md) — use the connected GitHub API when the git remote lacks auth, and exclude generated builds and credential files.
+- [GitHub workflow publishing](github-workflow-publishing.md) — workflow files may need GitHub web UI creation when the connector lacks workflow-write permission.
+- [EAS build quota](eas-build-quota.md) — a generic GitHub exit 1 can mean Expo cloud Android builds are exhausted after upload succeeds.
+- [VPS API deployment](vps-api-deployment.md) — preserve the production `.env`, build through Corepack, and verify service plus public health after updates.
