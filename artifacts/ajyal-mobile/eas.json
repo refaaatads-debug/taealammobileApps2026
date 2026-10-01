@@ -7,7 +7,8 @@
       "env": {
         "EXPO_PUBLIC_API_DOMAIN": "api.ajyalalmaerifa.com",
         "EXPO_PUBLIC_DOMAIN": "api.ajyalalmaerifa.com",
-        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com"
+        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com",
+        "EXPO_PUBLIC_APNS_ENV": "production"
       }
     },
     "preview": {
@@ -19,7 +20,8 @@
       "env": {
         "EXPO_PUBLIC_API_DOMAIN": "api.ajyalalmaerifa.com",
         "EXPO_PUBLIC_DOMAIN": "api.ajyalalmaerifa.com",
-        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com"
+        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com",
+        "EXPO_PUBLIC_APNS_ENV": "production"
       }
     }
   }

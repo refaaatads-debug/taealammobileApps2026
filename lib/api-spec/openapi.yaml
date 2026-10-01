@@ -154,7 +154,7 @@ paths:
     post:
       tags: [push]
       operationId: registerPushToken
-      summary: Register the authenticated user's Expo push token
+      summary: Register the authenticated user's device push tokens
       security:
         - sessionAuth: []
       requestBody:
@@ -926,6 +926,16 @@ components:
         platform:
           type: string
           enum: [ios, android]
+        apnsVoipToken:
+          type: string
+          minLength: 64
+          maxLength: 64
+          pattern: "^[0-9a-fA-F]{64}$"
+          description: Optional iOS PushKit VoIP device token.
+        apnsVoipEnvironment:
+          type: string
+          enum: [production, sandbox]
+          description: APNs environment for the PushKit token; required with apnsVoipToken.
     PushTokenRegistrationResult:
       type: object
       required: [registered]

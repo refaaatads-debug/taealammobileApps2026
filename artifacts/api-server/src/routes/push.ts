@@ -17,7 +17,9 @@ import { db, pushTokensTable, usersTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
 import crypto from "node:crypto";
-import { ExpoPushError, INCOMING_CALL_CATEGORY, INCOMING_CALL_CHANNEL, isExpoPushToken, sendExpoPushMessage } from "../lib/expoPush";
+import { ExpoPushError, INCOMING_CALL_CATEGORY, INCOMING_CALL_CHANNEL, sendExpoPushMessage } from "../lib/expoPush";
+import { sendApnsVoipPush } from "../lib/apnsVoip";
+import { decodePushTokenBundle, mergePushTokenBundle } from "../lib/pushTokenBundle";
 import { readBearerToken, supabaseTable } from "../lib/supabaseAuth";
 import { sendUserPushNotification } from "../lib/userPush";
 
@@ -40,30 +42,56 @@ router.post("/push-tokens", async (req, res): Promise<void> => {
   if (!userId) return;
 
   const parsed = RegisterPushTokenBody.safeParse(req.body);
-  if (!parsed.success || !isExpoPushToken(parsed.data.token)) {
+  if (!parsed.success) {
     res.status(400).json({ error: "Invalid Expo push token" });
     return;
   }
-
+  let storedToken = "";
+  let invalidBundle = false;
   await db.transaction(async (tx) => {
     await tx.execute(sql`select set_config('app.user_id', ${userId}, true)`);
     await tx.execute(sql`select set_config('app.server_write', 'true', true)`);
-    await tx.delete(pushTokensTable).where(eq(pushTokensTable.token, parsed.data.token));
+    const existingTokens = await tx.select({
+      id: pushTokensTable.id,
+      userId: pushTokensTable.userId,
+      token: pushTokensTable.token,
+    }).from(pushTokensTable);
+    const existingUserToken = existingTokens.find((row) => row.userId === userId)?.token ?? null;
+    try {
+      storedToken = mergePushTokenBundle(existingUserToken, {
+        expoToken: parsed.data.token,
+        apnsVoipToken: parsed.data.apnsVoipToken,
+        apnsVoipEnvironment: parsed.data.apnsVoipEnvironment,
+      });
+    } catch {
+      invalidBundle = true;
+      return;
+    }
+    const duplicateIds = existingTokens
+      .filter((row) => row.userId !== userId && decodePushTokenBundle(row.token)?.expoToken === parsed.data.token)
+      .map((row) => row.id);
+    for (const duplicateId of duplicateIds) {
+      await tx.delete(pushTokensTable).where(eq(pushTokensTable.id, duplicateId));
+    }
     await tx.insert(pushTokensTable).values({
       id: crypto.randomUUID(),
       userId,
-      token: parsed.data.token,
+      token: storedToken,
       platform: parsed.data.platform,
     }).onConflictDoUpdate({
       target: pushTokensTable.userId,
       set: {
-        token: parsed.data.token,
+        token: storedToken,
         platform: parsed.data.platform,
         updatedAt: new Date(),
       },
     });
   });
 
+  if (invalidBundle) {
+    res.status(400).json({ error: "Invalid push token bundle" });
+    return;
+  }
   res.json(RegisterPushTokenResponse.parse({ registered: true }));
 });
 
@@ -241,6 +269,7 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
     ));
     const [pushToken] = await tx.select({
       token: pushTokensTable.token,
+      platform: pushTokensTable.platform,
     }).from(pushTokensTable).where(eq(pushTokensTable.userId, parsed.data.recipientId));
     return { caller, recipient, pushToken };
   });
@@ -268,32 +297,56 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
     res.status(202).json(SendIncomingCallResponse.parse({ callId, delivered: false }));
     return;
   }
+  const destinationToken = decodePushTokenBundle(destination.pushToken.token);
+  if (!destinationToken) {
+    req.log.warn({ reason: "invalid_recipient_push_token_bundle" }, "Incoming call push skipped");
+    res.status(202).json(SendIncomingCallResponse.parse({ callId, delivered: false }));
+    return;
+  }
 
   const callerName = [destination.caller.firstName, destination.caller.lastName]
     .filter(Boolean)
     .join(" ") || "مستخدم";
+  let deliveredVia: "apns_voip" | "expo" = "expo";
   try {
-    await sendExpoPushMessage({
-      to: destination.pushToken.token,
-      title: "مكالمة واردة",
-      body: `${callerName} يتصل بك الآن`,
-      data: {
+    const tokenBundle = destinationToken;
+    const callUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(callId)
+      ? callId
+      : crypto.randomUUID();
+    const callPayload = {
+        aps: { "content-available": 1 as const },
         type: "incoming_call",
         callId,
+        callUuid,
+        uuid: callUuid,
+        handle: userId,
         callerId: userId,
         callerName,
         callerRole: callerRole(destination.caller.role),
         roomId: parsed.data.roomId,
-      },
-      categoryId: INCOMING_CALL_CATEGORY,
-       channelId: INCOMING_CALL_CHANNEL,
-       sound: "incoming_call.wav",
-      priority: "high",
-      ttl: 60,
-    });
+      } as const;
+    if (destination.pushToken.platform === "ios" && tokenBundle.apnsVoipToken && tokenBundle.apnsVoipEnvironment) {
+      try {
+        await sendApnsVoipPush(tokenBundle.apnsVoipToken, tokenBundle.apnsVoipEnvironment, callPayload);
+        deliveredVia = "apns_voip";
+      } catch (error) {
+        req.log.warn({ errorName: error instanceof Error ? error.name : "unknown" }, "APNs VoIP push failed; falling back to Expo");
+        await sendExpoPushMessage({ to: tokenBundle.expoToken, data: callPayload, priority: "high", ttl: 60, _contentAvailable: true });
+      }
+    } else {
+      await sendExpoPushMessage({
+        to: tokenBundle.expoToken,
+        ...(destination.pushToken.platform === "android" ? {} : { title: "مكالمة واردة", body: `${callerName} يتصل بك الآن` }),
+        data: callPayload,
+        ...(destination.pushToken.platform === "android" ? {} : { categoryId: INCOMING_CALL_CATEGORY, channelId: INCOMING_CALL_CHANNEL, sound: "incoming_call.wav" }),
+        priority: "high",
+        ttl: 60,
+        _contentAvailable: destination.pushToken.platform === "ios",
+      });
+    }
   } catch (error) {
     req.log.error({
-      reason: "expo_provider_rejected",
+      reason: "push_provider_rejected",
       errorName: error instanceof Error ? error.name : "unknown",
       providerCode: error instanceof ExpoPushError ? error.providerCode ?? null : null,
     }, "Incoming call push failed");
@@ -301,7 +354,7 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
     return;
   }
 
-  req.log.info({ delivered: true }, "Incoming call push accepted by Expo");
+  req.log.info({ delivered: true, deliveredVia }, "Incoming call push accepted by provider");
   res.status(202).json(SendIncomingCallResponse.parse({ callId, delivered: true }));
 });
 
@@ -324,6 +377,7 @@ router.post("/calls/:callId/end", async (req, res): Promise<void> => {
     await tx.execute(sql`select set_config('app.server_write', 'true', true)`);
     const [pushToken] = await tx.select({
       token: pushTokensTable.token,
+      platform: pushTokensTable.platform,
     }).from(pushTokensTable).where(eq(pushTokensTable.userId, parsed.data.recipientId));
     return pushToken;
   });
@@ -332,24 +386,59 @@ router.post("/calls/:callId/end", async (req, res): Promise<void> => {
     res.status(202).json(SendCallEndedResponse.parse({ callId: params.data.callId, delivered: false }));
     return;
   }
+  const destinationToken = decodePushTokenBundle(destination.token);
+  if (!destinationToken) {
+    res.status(202).json(SendCallEndedResponse.parse({ callId: params.data.callId, delivered: false }));
+    return;
+  }
 
+  let deliveredVia: "apns_voip" | "expo" = "expo";
   try {
-    await sendExpoPushMessage({
-      to: destination.token,
-      data: {
-        type: "call_ended",
-        callId: params.data.callId,
-      },
-      priority: "high",
-      ttl: 30,
-      _contentAvailable: true,
-    });
+    if (
+      destination.platform === "ios"
+      && destinationToken.apnsVoipToken
+      && destinationToken.apnsVoipEnvironment
+    ) {
+      try {
+        await sendApnsVoipPush(destinationToken.apnsVoipToken, destinationToken.apnsVoipEnvironment, {
+          aps: { "content-available": 1 },
+          type: "call_ended",
+          callId: params.data.callId,
+          uuid: params.data.callId,
+        });
+        deliveredVia = "apns_voip";
+      } catch (error) {
+        req.log.warn({ errorName: error instanceof Error ? error.name : "unknown" }, "APNs VoIP end push failed; falling back to Expo");
+        await sendExpoPushMessage({
+          to: destinationToken.expoToken,
+          data: {
+            type: "call_ended",
+            callId: params.data.callId,
+          },
+          priority: "high",
+          ttl: 30,
+          _contentAvailable: true,
+        });
+      }
+    } else {
+      await sendExpoPushMessage({
+        to: destinationToken.expoToken,
+        data: {
+          type: "call_ended",
+          callId: params.data.callId,
+        },
+        priority: "high",
+        ttl: 30,
+        _contentAvailable: true,
+      });
+    }
   } catch (error) {
     req.log.error({ errorName: error instanceof Error ? error.name : "unknown" }, "Call ended push failed");
     res.status(202).json(SendCallEndedResponse.parse({ callId: params.data.callId, delivered: false }));
     return;
   }
 
+  req.log.info({ delivered: true, deliveredVia }, "Call ended push accepted by provider");
   res.status(202).json(SendCallEndedResponse.parse({ callId: params.data.callId, delivered: true }));
 });
 
@@ -380,10 +469,15 @@ router.post("/calls/:callId/accept", async (req, res): Promise<void> => {
     res.status(202).json(SendCallAcceptedResponse.parse({ callId: params.data.callId, delivered: false }));
     return;
   }
+  const destinationToken = decodePushTokenBundle(destination.token);
+  if (!destinationToken) {
+    res.status(202).json(SendCallAcceptedResponse.parse({ callId: params.data.callId, delivered: false }));
+    return;
+  }
 
   try {
     await sendExpoPushMessage({
-      to: destination.token,
+      to: destinationToken.expoToken,
       data: {
         type: "call_accepted",
         callId: params.data.callId,

@@ -17,11 +17,16 @@
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
     "test:availability": "node --experimental-strip-types --test lib/__tests__/teacherAvailability.test.mjs",
+    "test:profile": "node --experimental-strip-types --test lib/__tests__/profilePersistence.test.mjs lib/__tests__/studentUnreadMessages.test.mjs",
+    "test:voice": "node --experimental-strip-types --test lib/__tests__/voiceAudioUpload.test.mjs",
+    "test:profile:ui": "node scripts/test-profile-ui.mjs",
+    "test:profile:production": "node scripts/test-profile-ui.mjs --production-only",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@expo-google-fonts/inter": "^0.4.0",
+    "@expo/config-plugins": "57.0.9",
     "@expo/vector-icons": "^15.0.2",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@stardazed/streams-text-encoding": "^1.0.2",
@@ -83,6 +88,8 @@
     "expo-video": "~57.0.5",
     "react": "19.2.3",
     "react-native": "0.86.3",
+    "react-native-callkeep": "4.3.16",
+    "react-native-voip-push-notification": "3.3.3",
     "react-native-webrtc": "124.0.8"
   }
 }

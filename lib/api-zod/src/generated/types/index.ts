@@ -48,6 +48,7 @@ export * from './pushNotificationRequestRoute';
 export * from './pushTokenRegistrationResult';
 export * from './readAllNotificationsResult';
 export * from './registerPushTokenRequest';
+export * from './registerPushTokenRequestApnsVoipEnvironment';
 export * from './registerPushTokenRequestPlatform';
 export * from './role';
 export * from './session';

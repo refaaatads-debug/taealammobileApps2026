@@ -2,9 +2,15 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 import { createClient } from "@supabase/supabase-js";
+import { isProfileUiTestMode } from "./profileTestPolicy";
 
 export const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "https://ajyalalmaerifa.com";
 export const supabasePublishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+export const profileUiTestMode = isProfileUiTestMode(
+  __DEV__,
+  Platform.OS,
+  process.env.EXPO_PUBLIC_PROFILE_TEST_MODE,
+);
 
 const secureStorage = {
   getItem: async (key: string) => {
@@ -73,7 +79,7 @@ const secureStorage = {
   },
 };
 
-export const supabase = supabasePublishableKey
+export const supabase = !profileUiTestMode && supabasePublishableKey
   ? createClient(supabaseUrl, supabasePublishableKey, {
       auth: {
         storage: secureStorage,

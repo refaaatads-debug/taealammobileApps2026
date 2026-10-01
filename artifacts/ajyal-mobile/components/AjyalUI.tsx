@@ -376,6 +376,16 @@ type DashboardAction = {
   tone: 'navy' | 'teal' | 'gold';
 };
 
+type StudentBalanceSummary = {
+  remainingMinutes: number;
+  sessionsRemaining: number;
+};
+
+type StudentAssignmentSummary = {
+  title: string;
+  due: string;
+};
+
 const studentDashboardActions: DashboardAction[] = [
   { id: 'find-teacher', title: 'ابحث عن معلم', subtitle: 'معلمون مناسبون لك', icon: 'user-plus', tone: 'teal' },
   { id: 'subscriptions', title: 'الباقات والاشتراكات', subtitle: 'خطتك ورصيدك', icon: 'award', tone: 'gold' },
@@ -394,79 +404,202 @@ const teacherDashboardActions: DashboardAction[] = [
   { id: 'teacher-sessions', title: 'الجلسات والحجوزات', subtitle: 'نظرة على مواعيدك', icon: 'clock', tone: 'navy' },
 ];
 
-export function DashboardActions({ role, onAction, showSmartTeacher = true }: { role: Role; onAction: (id: string) => void; showSmartTeacher?: boolean }) {
-  const colors = useColors();
-  const { t, direction } = useAppPreferences();
+const dashboardTranslations: Record<string, string> = {
+  'ابحث عن معلم': 'Find a teacher',
+  'معلمون مناسبون لك': 'Teachers matched to you',
+  'الباقات والاشتراكات': 'Plans and subscriptions',
+  'خطتك ورصيدك': 'Your plan and balance',
+  'المدرس الذكي': 'AI tutor',
+  'مساعدة أثناء التعلم': 'Learning support',
+  'المواد التعليمية': 'Learning materials',
+  'دروسك وملفاتك': 'Your lessons and files',
+  'الجلسات والحجوزات': 'Sessions and bookings',
+  'مواعيدك القادمة': 'Your upcoming schedule',
+  'الواجبات والاختبارات': 'Assignments and quizzes',
+  'تابع إنجازك': 'Track your progress',
+  'جدول المعلّم': 'Teacher schedule',
+  'حصصك وتوفرك': 'Your sessions and availability',
+  'قائمة الطلاب': 'Students',
+  'طلابك وتقدمهم': 'Your students and their progress',
+  'مراجعة الواجبات': 'Review assignments',
+  'تسليمات تحتاج مراجعة': 'Submissions to review',
+  'مواد جلساتك': 'Your session materials',
+  'المحفظة والأرباح': 'Wallet and earnings',
+  'رصيدك وطلبات السحب': 'Balance and withdrawals',
+  'نظرة على مواعيدك': 'Your schedule at a glance',
+};
+
+export function DashboardActions({
+  role,
+  onAction,
+  showSmartTeacher = true,
+  studentBalance,
+  nextAssignment,
+}: {
+  role: Role;
+  onAction: (id: string) => void;
+  showSmartTeacher?: boolean;
+  studentBalance?: StudentBalanceSummary | null;
+  nextAssignment?: StudentAssignmentSummary | null;
+}) {
   const actions = (role === 'student' ? studentDashboardActions : teacherDashboardActions)
     .filter((action) => action.id !== 'smart-teacher' || showSmartTeacher);
-  const translations: Record<string, string> = {
-    'ابحث عن معلم': 'Find a teacher',
-    'معلمون مناسبون لك': 'Teachers matched to you',
-    'الباقات والاشتراكات': 'Plans and subscriptions',
-    'خطتك ورصيدك': 'Your plan and balance',
-    'المدرس الذكي': 'AI tutor',
-    'مساعدة أثناء التعلم': 'Learning support',
-    'المواد التعليمية': 'Learning materials',
-    'دروسك وملفاتك': 'Your lessons and files',
-    'الجلسات والحجوزات': 'Sessions and bookings',
-    'مواعيدك القادمة': 'Your upcoming schedule',
-    'الواجبات والاختبارات': 'Assignments and quizzes',
-    'تابع إنجازك': 'Track your progress',
-    'جدول المعلّم': 'Teacher schedule',
-    'حصصك وتوفرك': 'Your sessions and availability',
-    'قائمة الطلاب': 'Students',
-    'طلابك وتقدمهم': 'Your students and their progress',
-    'مراجعة الواجبات': 'Review assignments',
-    'تسليمات تحتاج مراجعة': 'Submissions to review',
-    'مواد جلساتك': 'Your session materials',
-    'المحفظة والأرباح': 'Wallet and earnings',
-    'رصيدك وطلبات السحب': 'Balance and withdrawals',
-    'نظرة على مواعيدك': 'Your schedule at a glance',
-  };
   return (
-      <View style={[
-        styles.dashboardActions,
-        role === 'student'
-          ? [styles.studentToolsSurface, { backgroundColor: colors.card, borderColor: colors.border }]
-          : [styles.teacherToolsSurface, { backgroundColor: colors.card, borderColor: colors.border }],
-      ]}>
-      <SectionHeading title={role === 'student' ? t('أدوات الطالب', 'Student tools') : t('أدوات المعلّم', 'Teacher tools')} />
-      <View style={[styles.dashboardActionGrid, role === 'student' && styles.studentToolsGrid]}>
-        {actions.map((action) => {
-          const isSubscriptionsCard = action.id === 'subscriptions';
-          const iconColor = action.tone === 'navy' ? colors.primary : action.tone === 'gold' ? colors.accentForeground : colors.teal;
-          const iconBackground = action.tone === 'navy' ? colors.navySoft : action.tone === 'gold' ? colors.goldSoft : colors.tealSoft;
-          const depthColor = action.tone === 'navy' ? colors.navySoft : action.tone === 'gold' ? colors.goldSoft : colors.tealSoft;
-          return (
-            <View key={action.id} style={[styles.dashboardActionWrap, isSubscriptionsCard && styles.dashboardSubscriptionsAction]}>
-              <View style={[styles.dashboardActionBackplate, { backgroundColor: depthColor, borderColor: colors.border }]} />
+    <DashboardToolsMosaic
+      role={role}
+      actions={actions}
+      onAction={onAction}
+      studentBalance={studentBalance}
+      nextAssignment={nextAssignment}
+    />
+  );
+}
+
+function DashboardToolsMosaic({
+  role,
+  actions,
+  onAction,
+  studentBalance,
+  nextAssignment,
+}: {
+  role: Role;
+  actions: DashboardAction[];
+  onAction: (id: string) => void;
+  studentBalance?: StudentBalanceSummary | null;
+  nextAssignment?: StudentAssignmentSummary | null;
+}) {
+  const colors = useColors();
+  const { t, direction, formatNumber } = useAppPreferences();
+  const isRTL = direction === 'rtl';
+  const featureActionId = role === 'student' ? 'smart-teacher' : 'students';
+  const wideActionId = role === 'student' ? 'assignments' : 'review';
+  const visualOrder = role === 'student'
+    ? ['smart-teacher', 'subscriptions', 'find-teacher', 'bookings', 'materials', 'assignments']
+    : ['students', 'teacher-schedule', 'wallet', 'teacher-sessions', 'teacher-materials', 'review'];
+  const orderedActions = [...actions].sort((a, b) => visualOrder.indexOf(a.id) - visualOrder.indexOf(b.id));
+
+  return (
+    <View style={[styles.dashboardActions, styles.studentToolsRoot]}>
+      <View style={[styles.studentToolsHeadingRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+        <View style={[styles.studentToolsHeading, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+          <View style={[styles.studentToolsHeadingMark, { backgroundColor: colors.gold }]} />
+          <View style={[styles.studentToolsHeadingCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+            <Text style={[styles.studentToolsKicker, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('كل ما تحتاجه', 'Everything you need')}</Text>
+            <Text style={[styles.studentToolsTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{role === 'student' ? t('أدواتك للتعلّم', 'Your learning tools') : t('أدوات المعلّم', 'Teacher tools')}</Text>
+          </View>
+        </View>
+        <View style={[styles.studentToolsCount, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.studentToolsCountText, { color: colors.mutedForeground, writingDirection: direction }]}>{formatNumber(orderedActions.length)} {t('أدوات', 'tools')}</Text>
+        </View>
+      </View>
+
+      <View style={styles.studentToolsGrid}>
+        {orderedActions.map((action, index) => {
+          const title = t(action.title, dashboardTranslations[action.title] ?? action.title);
+          const subtitle = t(action.subtitle, dashboardTranslations[action.subtitle] ?? action.subtitle);
+          if (action.id === featureActionId) {
+            return (
               <Pressable
+                key={action.id}
                 testID={`dashboard-action-${action.id}`}
                 accessibilityRole="button"
-                accessibilityLabel={t(action.title, translations[action.title] ?? action.title)}
+                accessibilityLabel={`${title}, ${subtitle}`}
                 onPress={() => onAction(action.id)}
-                style={({ pressed }) => [styles.dashboardAction, { borderColor: colors.border }, pressed && styles.cardPressed]}
+                style={({ pressed }) => [styles.studentToolFeature, pressed && styles.cardPressed]}
               >
-                <LinearGradient
-                  colors={isSubscriptionsCard ? [colors.card, colors.goldSoft] : [colors.card, depthColor]}
-                  start={{ x: 0.05, y: 0 }}
-                  end={{ x: 0.95, y: 1 }}
-                  style={styles.dashboardActionGradient}
-                >
-                  <View style={[styles.dashboardActionGlow, { backgroundColor: iconBackground }]} />
-                  <View style={[styles.dashboardActionAccent, { backgroundColor: iconColor }]} />
-                  <View style={[styles.dashboardActionIcon, { backgroundColor: iconBackground, borderColor: colors.card }]}>
-                    <Icon name={action.icon} size={20} color={iconColor} />
-                    <View style={[styles.dashboardActionIconDot, { backgroundColor: iconColor }]} />
+                <LinearGradient colors={[colors.primary, colors.primary]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.studentToolFeatureInner, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                  <View style={[styles.studentFeatureDecoration, { borderColor: colors.tint, pointerEvents: 'none' }]} />
+                  <View style={[styles.studentFeatureDecorationSmall, { borderColor: colors.tint, pointerEvents: 'none' }]} />
+                  <View style={styles.studentFeatureArtwork}>
+                    <View style={[styles.studentFeatureOrbit, styles.studentFeatureOrbitOuter, { borderColor: colors.tint }]} />
+                    <View style={[styles.studentFeatureOrbit, styles.studentFeatureOrbitInner, { borderColor: colors.tint }]} />
+                    <View style={[styles.studentFeatureIcon, { backgroundColor: colors.teal, borderColor: colors.tint }]}>
+                      <Icon name={action.icon} size={25} color={colors.primaryForeground} />
+                    </View>
+                    <Icon name="star" size={14} color={colors.gold} style={styles.studentFeatureSpark} />
                   </View>
-                  <Text numberOfLines={2} ellipsizeMode="tail" style={[styles.dashboardActionTitle, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>{t(action.title, translations[action.title] ?? action.title)}</Text>
-                  <Text style={[styles.dashboardActionSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>{t(action.subtitle, translations[action.subtitle] ?? action.subtitle)}</Text>
-                  <View style={[styles.dashboardActionArrow, { backgroundColor: colors.card }]}>
-                    <Icon name={direction === 'rtl' ? 'arrow-left' : 'arrow-right'} size={13} color={iconColor} />
+                  <View style={[styles.studentFeatureCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+                    <View style={[styles.studentFeatureLabel, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                      <View style={[styles.studentFeatureDot, { backgroundColor: colors.gold }]} />
+                      <Text style={[styles.studentFeatureLabelText, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{subtitle}</Text>
+                    </View>
+                    <Text numberOfLines={1} style={[styles.studentFeatureTitle, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{title}</Text>
+                    <View style={[styles.studentFeatureAction, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                      <Text style={[styles.studentFeatureActionText, { color: colors.primaryForeground, writingDirection: direction }]}>{role === 'student' ? t('ابدأ بسؤال', 'Ask a question') : t('استعرض طلابك', 'View your students')}</Text>
+                      <View style={[styles.studentFeatureArrow, { backgroundColor: colors.primaryForeground }]}>
+                        <Icon name={isRTL ? 'arrow-left' : 'arrow-right'} size={13} color={colors.primary} />
+                      </View>
+                    </View>
                   </View>
+                  <Text style={[styles.studentFeatureIndex, { color: colors.primaryForeground }]}>{formatNumber(index + 1)}</Text>
                 </LinearGradient>
               </Pressable>
-            </View>
+            );
+          }
+
+          const isWideAction = action.id === wideActionId;
+          const isGold = action.tone === 'gold';
+          const iconColor = isGold ? colors.gold : action.tone === 'navy' ? colors.primary : colors.teal;
+          const isMaterials = action.id === 'materials' || action.id === 'teacher-materials';
+          const isSchedule = action.id === 'bookings' || action.id === 'teacher-sessions';
+          const cardBackground = isGold ? colors.goldSoft : isMaterials ? colors.navySoft : isSchedule ? colors.accent : colors.tealSoft;
+          const arrowPosition = isRTL ? styles.studentToolArrowRtl : styles.studentToolArrowLtr;
+
+          return (
+            <Pressable
+              key={action.id}
+              testID={`dashboard-action-${action.id}`}
+              accessibilityRole="button"
+              accessibilityLabel={`${title}, ${subtitle}`}
+              onPress={() => onAction(action.id)}
+              style={({ pressed }) => [
+                styles.studentToolCard,
+                isWideAction && styles.studentToolAssignment,
+                { backgroundColor: cardBackground, borderColor: colors.border, flexDirection: isWideAction ? (isRTL ? 'row-reverse' : 'row') : 'column' },
+                pressed && styles.cardPressed,
+              ]}
+            >
+              {isWideAction ? (
+                <>
+                  <View style={[styles.studentToolIcon, styles.studentAssignmentIcon, { backgroundColor: colors.card, borderColor: colors.card }]}>
+                    <Icon name={action.icon} size={19} color={iconColor} />
+                  </View>
+                  <View style={[styles.studentAssignmentCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+                    <Text numberOfLines={1} style={[styles.studentToolTitle, styles.studentAssignmentTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{title}</Text>
+                    <Text numberOfLines={1} style={[styles.studentToolSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{subtitle}</Text>
+                    {role === 'student' && nextAssignment ? (
+                      <Text numberOfLines={1} style={[styles.studentToolDetail, { color: colors.accentForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>
+                        {nextAssignment.title} · {nextAssignment.due}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View style={[styles.studentAssignmentArrow, { backgroundColor: colors.card }]}>
+                    <Icon name={isRTL ? 'arrow-left' : 'arrow-right'} size={13} color={iconColor} />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <View style={[styles.studentToolCardTop, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                    <View style={[styles.studentToolIcon, { backgroundColor: colors.card, borderColor: colors.card }]}>
+                      <Icon name={action.icon} size={18} color={iconColor} />
+                    </View>
+                    <Text style={[styles.studentToolIndex, { color: colors.mutedForeground }]}>{formatNumber(index + 1)}</Text>
+                  </View>
+                  <View style={[styles.studentToolCardCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+                    <Text numberOfLines={2} style={[styles.studentToolTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{title}</Text>
+                    <Text numberOfLines={1} style={[styles.studentToolSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{subtitle}</Text>
+                    {role === 'student' && action.id === 'subscriptions' && studentBalance ? (
+                      <Text numberOfLines={1} style={[styles.studentToolDetail, { color: iconColor, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>
+                        {formatNumber(studentBalance.remainingMinutes)} {t('دقيقة', 'min')} · {formatNumber(studentBalance.sessionsRemaining)} {t('جلسات', 'sessions')}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View style={[styles.studentToolArrow, arrowPosition, { backgroundColor: colors.card }]}>
+                    <Icon name={isRTL ? 'arrow-left' : 'arrow-right'} size={13} color={iconColor} />
+                  </View>
+                </>
+              )}
+            </Pressable>
           );
         })}
       </View>
@@ -512,23 +645,52 @@ export const styles = StyleSheet.create({
   bannerDecorOne: { position: 'absolute', width: 215, height: 215, borderRadius: 108, opacity: 0.08, left: -99, top: -68 },
   bannerDecorTwo: { position: 'absolute', width: 120, height: 120, borderRadius: 60, opacity: 0.12, right: -45, bottom: -39 },
   bannerRule: { position: 'absolute', width: 52, height: 3, borderRadius: 2, left: 21, top: 22, opacity: 0.6 },
-  dashboardActions: { marginBottom: 10 },
-  studentToolsSurface: { borderRadius: 24, borderWidth: 1, padding: 14, marginBottom: 16, shadowColor: '#173E8C', shadowOpacity: 0.045, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 1 },
-  teacherToolsSurface: { borderRadius: 24, borderWidth: 1, padding: 14, marginBottom: 16, shadowColor: '#173E8C', shadowOpacity: 0.055, shadowRadius: 18, shadowOffset: { width: 0, height: 7 }, elevation: 2 },
-  dashboardActionGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12, marginBottom: 18 },
-  studentToolsGrid: { marginBottom: 0 },
-  dashboardActionWrap: { width: '48.5%', minHeight: 140, position: 'relative', overflow: 'visible' },
-  dashboardActionBackplate: { position: 'absolute', left: 3, right: -3, top: 5, bottom: -5, borderRadius: 23, borderWidth: 1, opacity: 0.52 },
-  dashboardAction: { width: '100%', minHeight: 140, borderRadius: 23, borderWidth: 1, overflow: 'hidden', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 4 },
-  dashboardSubscriptionsAction: { shadowColor: '#B87916', shadowOpacity: 0.08 },
-  dashboardActionGradient: { flex: 1, minHeight: 138, padding: 14, alignItems: 'flex-end', position: 'relative', overflow: 'hidden' },
-  dashboardActionGlow: { position: 'absolute', width: 132, height: 132, borderRadius: 66, top: -66, left: -50, opacity: 0.2 },
-  dashboardActionAccent: { position: 'absolute', width: 30, height: 4, borderRadius: 4, top: 13, left: 13, opacity: 0.7 },
-  dashboardActionIcon: { width: 48, height: 48, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginBottom: 9, position: 'relative', shadowColor: '#173E8C', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
-  dashboardActionIconDot: { position: 'absolute', width: 6, height: 6, borderRadius: 3, top: 6, right: 6 },
-  dashboardActionTitle: { width: '100%', flexShrink: 1, fontSize: 13.5, lineHeight: 19, minHeight: 38, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
-  dashboardActionSubtitle: { width: '100%', fontSize: 10, lineHeight: 15, minHeight: 15, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl', marginTop: 2 },
-  dashboardActionArrow: { position: 'absolute', bottom: 13, left: 13, width: 30, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+   dashboardActions: { marginBottom: 10 },
+   studentToolsRoot: { marginBottom: 20 },
+   studentToolsHeadingRow: { alignItems: 'center', justifyContent: 'space-between', marginTop: 1, marginBottom: 12, minHeight: 34 },
+   studentToolsHeading: { alignItems: 'center', gap: 9 },
+   studentToolsHeadingMark: { width: 4, height: 31, borderRadius: 3 },
+   studentToolsHeadingCopy: { gap: 1 },
+   studentToolsKicker: { fontSize: 9, lineHeight: 13, fontFamily: 'Inter_500Medium' },
+   studentToolsTitle: { fontSize: 16, lineHeight: 21, letterSpacing: -0.2, fontFamily: 'Inter_700Bold' },
+   studentToolsCount: { paddingHorizontal: 9, paddingVertical: 5, borderWidth: 1, borderRadius: 999 },
+   studentToolsCountText: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
+   studentToolsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 9 },
+   studentToolFeature: { width: '100%', minHeight: 124, borderRadius: 21, overflow: 'hidden', marginBottom: 0, elevation: 4 },
+   studentToolFeatureInner: { minHeight: 124, alignItems: 'center', justifyContent: 'space-between', overflow: 'hidden', paddingHorizontal: 15, paddingVertical: 11, position: 'relative' },
+   studentFeatureDecoration: { position: 'absolute', zIndex: 0, top: -74, left: -35, width: 194, height: 194, borderWidth: 1, borderRadius: 97, opacity: 0.18 },
+   studentFeatureDecorationSmall: { position: 'absolute', zIndex: 0, top: -51, left: -12, width: 148, height: 148, borderWidth: 1, borderRadius: 74, opacity: 0.14 },
+   studentFeatureArtwork: { width: 101, height: 102, flexShrink: 0, marginEnd: 7, position: 'relative' },
+   studentFeatureOrbit: { position: 'absolute', borderWidth: 1, borderRadius: 50, opacity: 0.3 },
+   studentFeatureOrbitOuter: { width: 98, height: 98, top: 1, left: 3 },
+   studentFeatureOrbitInner: { width: 76, height: 76, top: 12, left: 14, opacity: 0.42 },
+   studentFeatureIcon: { position: 'absolute', top: 26, left: 28, width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 16, transform: [{ rotate: '-7deg' }] },
+   studentFeatureSpark: { position: 'absolute', top: 13, left: 7 },
+   studentFeatureCopy: { flex: 1, minWidth: 0, zIndex: 2 },
+   studentFeatureLabel: { alignItems: 'center', gap: 6 },
+   studentFeatureDot: { width: 6, height: 6, borderRadius: 3 },
+   studentFeatureLabelText: { fontSize: 9, lineHeight: 13, fontFamily: 'Inter_500Medium', opacity: 0.88 },
+   studentFeatureTitle: { width: '100%', marginTop: 3, fontSize: 19, lineHeight: 26, letterSpacing: -0.3, fontFamily: 'Inter_700Bold' },
+   studentFeatureAction: { alignItems: 'center', gap: 7, marginTop: 8 },
+   studentFeatureActionText: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
+   studentFeatureArrow: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center', borderRadius: 11 },
+   studentFeatureIndex: { position: 'absolute', left: 12, bottom: 7, fontSize: 8, fontFamily: 'Inter_600SemiBold', opacity: 0.5 },
+   studentToolCard: { width: '48.5%', minHeight: 103, borderWidth: 1, borderRadius: 19, overflow: 'hidden', paddingHorizontal: 11, paddingVertical: 10, justifyContent: 'space-between', position: 'relative' },
+   studentToolCardTop: { alignItems: 'center', justifyContent: 'space-between' },
+   studentToolIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 12, elevation: 1 },
+   studentToolIndex: { fontSize: 8, lineHeight: 12, fontFamily: 'Inter_600SemiBold', opacity: 0.65 },
+   studentToolCardCopy: { marginTop: 7, minWidth: 0 },
+   studentToolTitle: { width: '100%', fontSize: 11.5, lineHeight: 16, fontFamily: 'Inter_700Bold' },
+   studentToolSubtitle: { width: '100%', marginTop: 2, fontSize: 8.5, lineHeight: 12, fontFamily: 'Inter_400Regular' },
+   studentToolDetail: { width: '100%', marginTop: 3, fontSize: 8, lineHeight: 11, fontFamily: 'Inter_600SemiBold' },
+   studentToolArrow: { position: 'absolute', bottom: 9, width: 21, height: 21, alignItems: 'center', justifyContent: 'center', borderRadius: 11 },
+   studentToolArrowRtl: { left: 9 },
+   studentToolArrowLtr: { right: 9 },
+   studentToolAssignment: { width: '100%', minHeight: 76, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 10, paddingHorizontal: 12, paddingVertical: 10 },
+   studentAssignmentIcon: { width: 38, height: 38, borderRadius: 13 },
+   studentAssignmentCopy: { flex: 1, minWidth: 0 },
+   studentAssignmentArrow: { width: 21, height: 21, alignItems: 'center', justifyContent: 'center', borderRadius: 11 },
+   studentAssignmentTitle: { fontSize: 12, lineHeight: 17 },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, marginTop: 1 },
   sectionTitleWrap: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 7 },
   sectionMark: { width: 4, height: 16, borderRadius: 3 },
