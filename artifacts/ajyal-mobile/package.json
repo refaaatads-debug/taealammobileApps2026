@@ -17,6 +17,7 @@
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
     "test:availability": "node --experimental-strip-types --test lib/__tests__/teacherAvailability.test.mjs",
+    "test:plugins": "node --test plugins/__tests__/*.test.cjs",
     "test:profile": "node --experimental-strip-types --test lib/__tests__/profilePersistence.test.mjs lib/__tests__/studentUnreadMessages.test.mjs",
     "test:voice": "node --experimental-strip-types --test lib/__tests__/voiceAudioUpload.test.mjs",
     "test:profile:ui": "node scripts/test-profile-ui.mjs",

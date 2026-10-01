@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  withAppBuildGradle,
   withAndroidManifest,
   withDangerousMod,
 } = require("@expo/config-plugins");
@@ -8,6 +9,54 @@ const {
 const INCOMING_CALL_ACTIVITY = ".IncomingCallActivity";
 const INCOMING_CALL_SERVICE = ".IncomingCallMessagingService";
 const INCOMING_CALL_THEME = "@style/Theme.App.IncomingCall";
+
+function getFirebaseMessagingVersion(projectRoot) {
+  const notificationsGradle = path.join(
+    projectRoot,
+    "node_modules",
+    "expo-notifications",
+    "android",
+    "build.gradle",
+  );
+  const contents = fs.readFileSync(notificationsGradle, "utf8");
+  const versions = [
+    ...new Set(
+      [...contents.matchAll(/['"]com\.google\.firebase:firebase-messaging:([^'"]+)['"]/g)]
+        .map((match) => match[1]),
+    ),
+  ];
+  if (versions.length !== 1) {
+    throw new Error(
+      `withIncomingCallNative expected one Firebase Messaging version in expo-notifications, found ${versions.join(", ") || "none"}`,
+    );
+  }
+  return versions[0];
+}
+
+function withFirebaseMessagingDependency(config) {
+  // Expo Notifications keeps this dependency private; the app needs the same artifact
+  // on its compile classpath to resolve ExpoFirebaseMessagingService's Firebase superclass.
+  return withAppBuildGradle(config, (modConfig) => {
+    const version = getFirebaseMessagingVersion(modConfig.modRequest.projectRoot);
+    const dependencyPattern =
+      /^[ \t]*(?:implementation|api|compileOnly|runtimeOnly)[ \t]*(?:\([ \t]*)?['"]com\.google\.firebase:firebase-messaging(?::[^'"]*)?['"][ \t]*\)?[ \t]*(?:\/\/.*)?$/;
+    const lines = modConfig.modResults.contents.split(/\r?\n/);
+    const normalizedLines = lines.filter((line) => !dependencyPattern.test(line));
+    const dependenciesIndex = normalizedLines.findIndex((line) =>
+      /^[ \t]*dependencies[ \t]*\{[ \t]*$/.test(line),
+    );
+    if (dependenciesIndex === -1) {
+      throw new Error("withIncomingCallNative could not find the app Gradle dependencies block");
+    }
+    normalizedLines.splice(
+      dependenciesIndex + 1,
+      0,
+      `    implementation("com.google.firebase:firebase-messaging:${version}")`,
+    );
+    modConfig.modResults.contents = normalizedLines.join("\n");
+    return modConfig;
+  });
+}
 
 function ensurePermission(manifest, name) {
   const permissions = manifest["uses-permission"] ?? [];
@@ -150,5 +199,7 @@ function withIncomingCallSources(config) {
 }
 
 module.exports = function withIncomingCallNative(config) {
-  return withIncomingCallSources(withIncomingCallManifest(config));
+  return withIncomingCallSources(
+    withIncomingCallManifest(withFirebaseMessagingDependency(config)),
+  );
 };
