@@ -107,15 +107,22 @@ export const LogoutMobileSessionResponse = zod.object({
 
 
 /**
- * @summary Register the authenticated user's Expo push token
+ * @summary Register the authenticated user's device push tokens
  */
 export const registerPushTokenBodyTokenMax = 512;
 
+export const registerPushTokenBodyApnsVoipTokenMin = 64;
+export const registerPushTokenBodyApnsVoipTokenMax = 64;
+
+
+export const registerPushTokenBodyApnsVoipTokenRegExp = new RegExp('^[0-9a-fA-F]{64}$');
 
 
 export const RegisterPushTokenBody = zod.object({
   "token": zod.string().min(1).max(registerPushTokenBodyTokenMax),
-  "platform": zod.enum(['ios', 'android'])
+  "platform": zod.enum(['ios', 'android']),
+  "apnsVoipToken": zod.string().min(registerPushTokenBodyApnsVoipTokenMin).max(registerPushTokenBodyApnsVoipTokenMax).regex(registerPushTokenBodyApnsVoipTokenRegExp).optional().describe('Optional iOS PushKit VoIP device token.'),
+  "apnsVoipEnvironment": zod.enum(['production', 'sandbox']).optional().describe('APNs environment for the PushKit token; required with apnsVoipToken.')
 })
 
 export const RegisterPushTokenResponse = zod.object({

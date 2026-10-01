@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import * as Speech from 'expo-speech';
+import * as ExpoLinking from 'expo-linking';
 import * as TaskManager from 'expo-task-manager';
 import type * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
@@ -85,7 +86,6 @@ type NotificationsModule = typeof import('expo-notifications');
 
 let notificationsModule: NotificationsModule | null = null;
 let notificationsLoadPromise: Promise<NotificationsModule | null> | null = null;
-let backgroundTaskDefined = false;
 let appPermissionsPromise: Promise<void> | null = null;
 
 async function getNotificationsModule(): Promise<NotificationsModule | null> {
@@ -107,26 +107,39 @@ async function getNotificationsModule(): Promise<NotificationsModule | null> {
   return notificationsLoadPromise;
 }
 
-async function configureNotificationsModule(notifications: NotificationsModule): Promise<void> {
-  if (!backgroundTaskDefined) {
-    try {
-      TaskManager.defineTask<Notifications.NotificationTaskPayload>(
-        BACKGROUND_CALL_NOTIFICATION_TASK,
-        async ({ data, error }) => {
-          if (error) return notifications.BackgroundNotificationTaskResult.Failed;
-          const payload = backgroundNotificationData(data);
-          if (isEndedPayload(payload)) {
-            await dismissPresentedCallNotifications(asString(payload.callId)).catch(() => undefined);
-          }
-          return notifications.BackgroundNotificationTaskResult.NoData;
-        },
-      );
-      backgroundTaskDefined = true;
-    } catch {
-      // Fast refresh can evaluate the task definition more than once.
-    }
+async function endNativeCall(callId: string): Promise<void> {
+  if (Platform.OS !== 'ios' || !callId) return;
+  try {
+    const callKeep = (await import('react-native-callkeep')).default;
+    callKeep.endCall(callId);
+  } catch {
+    // Native CallKit is unavailable in Expo Go and web previews.
   }
+}
 
+if (Platform.OS !== 'web' && !isExpoGo) {
+  try {
+    TaskManager.defineTask<Notifications.NotificationTaskPayload>(
+      BACKGROUND_CALL_NOTIFICATION_TASK,
+      async ({ data, error }) => {
+        const notifications = await getNotificationsModule();
+        if (!notifications) return;
+        if (error) return notifications.BackgroundNotificationTaskResult.Failed;
+        const payload = backgroundNotificationData(data);
+        if (isEndedPayload(payload)) {
+          const callId = asString(payload.callId);
+          await dismissPresentedCallNotifications(callId ?? '').catch(() => undefined);
+          if (callId) await endNativeCall(callId);
+        }
+        return notifications.BackgroundNotificationTaskResult.NoData;
+      },
+    );
+  } catch {
+    // Fast refresh can evaluate the task definition more than once.
+  }
+}
+
+async function configureNotificationsModule(notifications: NotificationsModule): Promise<void> {
   notifications.setNotificationHandler({
     handleNotification: async (notification) => {
       const data = notification.request.content.data ?? {};
@@ -245,6 +258,7 @@ function remoteIncomingCall(row: RemoteCallRow, userId: string): { call: Incomin
     call: {
       id,
       callerId,
+      calleeId,
       callerName,
       callerRole: asString(row.caller_role) ?? 'معلم',
       roomId: asString(row.booking_id) ?? asString(row.room_id),
@@ -473,14 +487,22 @@ async function getDevicePushToken(notifications: NotificationsModule): Promise<s
 async function registerDevicePushToken(
   notifications: NotificationsModule,
   token?: string,
+  apnsVoipToken?: string,
 ): Promise<string | null> {
   const resolvedToken = token ?? await getDevicePushToken(notifications);
   if (!resolvedToken) return null;
   const platform = Platform.OS === 'ios' ? 'ios' : 'android';
+  const configuredVoipEnvironment = Constants.expoConfig?.extra?.apnsVoipEnvironment;
   try {
     await registerPushTokenOnServer({
       token: resolvedToken,
       platform,
+      ...(platform === 'ios' && apnsVoipToken
+        ? {
+            apnsVoipToken,
+            apnsVoipEnvironment: configuredVoipEnvironment === 'sandbox' ? 'sandbox' : 'production',
+          }
+        : {}),
     });
     console.info('[push] token_registration_succeeded', {
       platform,
@@ -541,6 +563,11 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
   const notificationIdsByCall = useRef(new Map<string, Set<string>>());
   const registeredPushUserId = useRef<string | null>(null);
   const registeredPushToken = useRef<string | null>(null);
+  const registeredVoipToken = useRef<string | null>(null);
+  const currentVoipToken = useRef<string | null>(null);
+  const nativeCallIds = useRef(new Set<string>());
+  const handledNativeActions = useRef(new Set<string>());
+  const pushRegistrationQueue = useRef<Promise<void>>(Promise.resolve());
   const incomingCallPlayer = useAudioPlayer(INCOMING_CALL_SOUND);
   const appNotificationPlayer = useAudioPlayer(APP_NOTIFICATION_SOUND);
   const [foregroundNotification, setForegroundNotification] = useState<{
@@ -607,6 +634,10 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       }
       return;
     }
+    if (Platform.OS === 'ios' && nativeCallIds.current.has(ringingCall.id)) {
+      incomingCallPlayer.pause();
+      return;
+    }
 
     incomingCallPlayer.loop = true;
     incomingCallPlayer.volume = 1;
@@ -642,6 +673,10 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
 
     if (isEndedPayload(data)) {
       const endedCallId = asString(data.callId);
+      if (endedCallId) {
+        nativeCallIds.current.delete(endedCallId);
+        void endNativeCall(endedCallId);
+      }
       if (callRef.current && (!endedCallId || endedCallId === callRef.current.id)) {
         setCall((current) => current ? { ...current, status: 'ended' } : null);
       }
@@ -656,6 +691,31 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
     }
     return null;
   }, []);
+
+  const registerCurrentPushTokens = useCallback(async (
+    notifications: NotificationsModule,
+    expoToken: string,
+  ): Promise<void> => {
+    const register = async () => {
+      const voipToken = Platform.OS === 'ios' ? currentVoipToken.current : null;
+      if (
+        registeredPushUserId.current === user?.id
+        && registeredPushToken.current === expoToken
+        && registeredVoipToken.current === voipToken
+      ) return;
+      const registeredToken = await registerDevicePushToken(
+        notifications,
+        expoToken,
+        voipToken ?? undefined,
+      );
+      registeredPushUserId.current = user?.id ?? null;
+      registeredPushToken.current = registeredToken;
+      registeredVoipToken.current = voipToken;
+    };
+    const operation = pushRegistrationQueue.current.then(register, register);
+    pushRegistrationQueue.current = operation.then(() => undefined, () => undefined);
+    await operation;
+  }, [user?.id]);
 
   const notifyCallEnded = useCallback(async (currentCall: IncomingCall | null): Promise<void> => {
     const recipientId = currentCall?.calleeId ?? currentCall?.callerId;
@@ -766,12 +826,9 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
         const currentToken = await getDevicePushToken(notifications).catch(() => null);
         if (
           currentToken
-          && (registeredPushUserId.current !== user?.id || registeredPushToken.current !== currentToken)
         ) {
           try {
-            const registeredToken = await registerDevicePushToken(notifications, currentToken);
-            registeredPushUserId.current = user?.id ?? null;
-            registeredPushToken.current = registeredToken;
+            await registerCurrentPushTokens(notifications, currentToken);
           } catch {
             // Push registration is retryable and must never block the app.
           }
@@ -821,12 +878,13 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       responseSubscription?.remove();
       if (foregroundNotificationTimer.current) clearTimeout(foregroundNotificationTimer.current);
     };
-  }, [applyCallPayload, dismissCallNotifications, handleNotificationResponse, isAuthenticated, presentForegroundNotification, rememberNotification, user?.id]);
+  }, [applyCallPayload, dismissCallNotifications, handleNotificationResponse, isAuthenticated, presentForegroundNotification, registerCurrentPushTokens, rememberNotification, user?.id]);
 
   useEffect(() => {
     if (!isAuthenticated) {
       registeredPushUserId.current = null;
       registeredPushToken.current = null;
+      registeredVoipToken.current = null;
       setNotificationPermission(null);
     }
   }, [isAuthenticated]);
@@ -1020,9 +1078,214 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       if (error) throw new Error(error.message);
     }
     await notifyCallEnded(current).catch(() => undefined);
+    await endNativeCall(current.id);
     void dismissCallNotifications(current.id);
     setCall({ ...current, status: 'ended' });
   }, [dismissCallNotifications, notifyCallEnded]);
+
+  const resolveNativeCall = useCallback(async (callId: string): Promise<IncomingCall | null> => {
+    if (!callId || !supabase || !user?.id) return null;
+    const cached = callRef.current;
+    if (cached?.id === callId && cached.calleeId === user.id) return cached;
+    const { data, error } = await supabase
+      .from('internal_calls')
+      .select('*')
+      .eq('id', callId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const remote = remoteIncomingCall(data as RemoteCallRow, user.id);
+    return remote?.call.calleeId === user.id ? remote.call : null;
+  }, [user?.id]);
+
+  const handleNativeCallAction = useCallback(async (
+    action: 'accept' | 'decline' | 'end',
+    callId: string,
+    details?: { callerName?: string; callerRole?: string; roomId?: string },
+  ): Promise<void> => {
+    const actionKey = `${action}:${callId}`;
+    if (!callId || handledNativeActions.current.has(actionKey)) return;
+    handledNativeActions.current.add(actionKey);
+    try {
+      const resolvedCall = await resolveNativeCall(callId);
+      if (!resolvedCall) {
+        await endNativeCall(callId);
+        return;
+      }
+      const current = {
+        ...resolvedCall,
+        callerName: details?.callerName ?? resolvedCall.callerName,
+        callerRole: details?.callerRole ?? resolvedCall.callerRole,
+        roomId: details?.roomId ?? resolvedCall.roomId,
+      };
+      if (current.status === 'ended' || current.status === 'declined' || current.status === 'busy') {
+        setCall({ ...current, status: current.status });
+        await endNativeCall(callId);
+        void dismissCallNotifications(callId);
+        return;
+      }
+      setCall(current);
+      if (action === 'accept') {
+        if (current.status === 'ringing') await respondToCall(current, true);
+        setCall({ ...current, status: 'active' });
+        void dismissCallNotifications(callId);
+        return;
+      }
+      if (current.status === 'ringing') {
+        await respondToCall(current, false);
+        setCall({ ...current, status: 'declined' });
+      } else if (current.status === 'active' || action === 'end') {
+        if (supabase && !current.id.startsWith('test-')) {
+          const { error } = await supabase.rpc('end_internal_call', {
+            p_call_id: current.id,
+            p_reason: 'participant_ended',
+          });
+          if (error) throw new Error(error.message);
+        }
+        await notifyCallEnded(current).catch(() => undefined);
+        setCall({ ...current, status: 'ended' });
+      }
+      void dismissCallNotifications(callId);
+    } catch (error) {
+      handledNativeActions.current.delete(actionKey);
+      console.warn('[call] native_call_action_failed', {
+        action,
+        errorName: error instanceof Error ? error.name : 'unknown',
+      });
+      if (action === 'accept') {
+        setCall((current) => current?.id === callId ? { ...current, status: 'ended' } : current);
+        await endNativeCall(callId);
+      }
+    }
+  }, [dismissCallNotifications, notifyCallEnded, resolveNativeCall, respondToCall]);
+
+  const handleNativeCallActionUrl = useCallback(async (url: string): Promise<void> => {
+    if (Platform.OS !== 'android') return;
+    try {
+      const parsed = ExpoLinking.parse(url);
+      if (parsed.scheme !== 'ajyalalmaerifa' || parsed.hostname !== 'call-action') return;
+      const queryValue = (key: string): string | undefined => {
+        const value = parsed.queryParams?.[key];
+        return typeof value === 'string' ? value : Array.isArray(value) ? value[0] : undefined;
+      };
+      const actionValue = queryValue('action');
+      if (actionValue !== 'accept' && actionValue !== 'decline') return;
+      const callId = queryValue('callId');
+      if (!callId) return;
+      await handleNativeCallAction(actionValue, callId);
+    } catch (error) {
+      console.warn('[call] native_call_action_link_failed', {
+        errorName: error instanceof Error ? error.name : 'unknown',
+      });
+    }
+  }, [handleNativeCallAction, resolveNativeCall]);
+
+  useEffect(() => {
+    if (!isAuthenticated || Platform.OS === 'web' || isExpoGo) return undefined;
+    let mounted = true;
+    const linkSubscription = Platform.OS === 'android'
+      ? Linking.addEventListener('url', ({ url }) => { void handleNativeCallActionUrl(url); })
+      : null;
+    if (Platform.OS === 'android') {
+      void Linking.getInitialURL()
+        .then((url) => { if (mounted && url) return handleNativeCallActionUrl(url); })
+        .catch(() => undefined);
+    }
+
+    let removeCallKeepListeners: (() => void) | null = null;
+    let removeVoipListeners: (() => void) | null = null;
+    if (Platform.OS === 'ios') {
+      void (async () => {
+        const [callKeepModule, voipModule] = await Promise.all([
+          import('react-native-callkeep'),
+          import('react-native-voip-push-notification'),
+        ]);
+        if (!mounted) return;
+        const CallKeep = callKeepModule.default;
+        const VoipPushNotification = voipModule.default;
+        const callKeepSubscriptions = [
+          CallKeep.addEventListener('answerCall', ({ callUUID }) => {
+            void handleNativeCallAction('accept', callUUID);
+          }),
+          CallKeep.addEventListener('endCall', ({ callUUID }) => {
+            void handleNativeCallAction('end', callUUID);
+          }),
+          CallKeep.addEventListener('didLoadWithEvents', (events) => {
+            events.forEach((event) => {
+              if (event.name === 'RNCallKeepPerformAnswerCallAction') {
+                void handleNativeCallAction('accept', event.data.callUUID);
+              } else if (event.name === 'RNCallKeepPerformEndCallAction') {
+                void handleNativeCallAction('end', event.data.callUUID);
+              }
+            });
+          }),
+        ];
+        removeCallKeepListeners = () => callKeepSubscriptions.forEach((subscription) => subscription.remove());
+
+        const syncVoipToken = async (token: string) => {
+          if (!mounted || !token) return;
+          currentVoipToken.current = token;
+          const notifications = await getNotificationsModule();
+          if (!notifications) return;
+          const expoToken = await getDevicePushToken(notifications).catch(() => null);
+          if (!expoToken) return;
+          try {
+            await registerCurrentPushTokens(notifications, expoToken);
+          } catch {
+            // Registration will be retried on the next PushKit token refresh or app activation.
+          }
+        };
+        const handleVoipNotification = (payload: object) => {
+          const data = payload as Record<string, unknown>;
+          const callId = asString(data.callId);
+          if (callId) nativeCallIds.current.add(callId);
+          applyCallPayload(data);
+        };
+        VoipPushNotification.addEventListener('register', syncVoipToken);
+        VoipPushNotification.addEventListener('notification', handleVoipNotification);
+        VoipPushNotification.addEventListener('didLoadWithEvents', (events) => {
+          events.forEach((event) => {
+            if (event.name === 'RNVoipPushRemoteNotificationsRegisteredEvent') {
+              void syncVoipToken(event.data);
+            } else if (event.name === 'RNVoipPushRemoteNotificationReceivedEvent') {
+              handleVoipNotification(event.data);
+            }
+          });
+        });
+        removeVoipListeners = () => {
+          VoipPushNotification.removeEventListener('register');
+          VoipPushNotification.removeEventListener('notification');
+          VoipPushNotification.removeEventListener('didLoadWithEvents');
+        };
+        try {
+          const initialEvents = await CallKeep.getInitialEvents();
+          if (mounted) {
+            initialEvents?.forEach((event) => {
+              if (event.name === 'RNCallKeepPerformAnswerCallAction') {
+                void handleNativeCallAction('accept', event.data.callUUID);
+              } else if (event.name === 'RNCallKeepPerformEndCallAction') {
+                void handleNativeCallAction('end', event.data.callUUID);
+              }
+            });
+            CallKeep.clearInitialEvents();
+          }
+        } catch {
+          // No cached CallKit events is the normal case.
+        }
+        VoipPushNotification.registerVoipToken();
+      })().catch((error) => {
+        console.warn('[call] native_call_setup_failed', {
+          errorName: error instanceof Error ? error.name : 'unknown',
+        });
+      });
+    }
+
+    return () => {
+      mounted = false;
+      linkSubscription?.remove();
+      removeCallKeepListeners?.();
+      removeVoipListeners?.();
+    };
+  }, [applyCallPayload, handleNativeCallAction, handleNativeCallActionUrl, isAuthenticated, registerCurrentPushTokens, user?.id]);
 
   const clearCall = useCallback(() => {
     setCall(null);

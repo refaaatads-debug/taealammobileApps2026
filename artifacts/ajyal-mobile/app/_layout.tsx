@@ -15,7 +15,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { AjyalProvider, useAjyal } from '@/hooks/useAjyal';
 import { setAuthTokenGetter, setBaseUrl } from '@workspace/api-client-react';
 import { AuthProvider, getAuthToken, useAuth } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
+import { profileUiTestMode, supabase } from '@/lib/supabase';
 import { useColors } from '@/hooks/useColors';
 import { InternalCallProvider } from '@/contexts/InternalCallContext';
 import { IncomingCallOverlay } from '@/components/IncomingCallOverlay';
@@ -52,7 +52,9 @@ const appFontsReady = loadAsync(APP_FONT_MAP)
     console.warn('[fonts] Could not preload app fonts:', error);
     return false;
   });
-const apiDomain = process.env.EXPO_PUBLIC_DOMAIN;
+// The API is hosted outside Replit. EXPO_PUBLIC_DOMAIN remains the Expo
+// preview/packager domain, so it must not be used as the mobile API origin.
+const apiDomain = process.env.EXPO_PUBLIC_API_DOMAIN;
 if (apiDomain) setBaseUrl(`https://${apiDomain}`);
 setAuthTokenGetter(getAuthToken);
 
@@ -64,6 +66,7 @@ const PUBLIC_PATHS = new Set([
   '/reset-password',
   '/payment-success',
 ]);
+if (profileUiTestMode) PUBLIC_PATHS.add('/profile-test');
 const ONBOARDING_COMPLETED_KEY = 'ajyal.onboarding.completed.v1';
 const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
   '/profile',

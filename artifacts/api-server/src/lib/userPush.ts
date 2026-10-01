@@ -1,6 +1,13 @@
 import { db, pushTokensTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
-import { DEFAULT_NOTIFICATION_CHANNEL, ExpoPushError, isExpoPushToken, sendExpoPushMessage, type ExpoPushMessage } from "./expoPush";
+import {
+  ExpoPushError,
+  isExpoPushToken,
+  notificationPresentation,
+  sendExpoPushMessage,
+  type ExpoPushMessage,
+} from "./expoPush";
+import { decodePushTokenBundle } from "./pushTokenBundle";
 
 export type UserPushPayload = Pick<ExpoPushMessage, "title" | "body" | "data"> & Partial<Pick<ExpoPushMessage, "sound" | "priority" | "ttl" | "channelId">>;
 
@@ -62,19 +69,21 @@ export async function sendUserPushNotification(userId: string, payload: UserPush
       console.warn("[push] regular_notification_skipped", { reason: "missing_token" });
       return false;
     }
-    if (!isExpoPushToken(destination.token)) {
+    const tokenBundle = decodePushTokenBundle(destination.token);
+    if (!tokenBundle || !isExpoPushToken(tokenBundle.expoToken)) {
       console.warn("[push] regular_notification_skipped", { reason: "invalid_token_shape" });
       return false;
     }
+    const presentation = notificationPresentation(payload.data?.type);
     await sendExpoPushMessage({
-      to: destination.token,
+      to: tokenBundle.expoToken,
       title: payload.title,
       body: payload.body,
       data: payload.data,
-      sound: payload.sound ?? "default",
+      sound: payload.sound ?? presentation.sound,
       priority: payload.priority ?? "high",
       ttl: payload.ttl ?? 3600,
-      channelId: payload.channelId ?? DEFAULT_NOTIFICATION_CHANNEL,
+      channelId: payload.channelId ?? presentation.channelId,
     });
     return true;
   } catch (error) {

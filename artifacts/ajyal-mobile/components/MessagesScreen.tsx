@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Linking,
   Modal,
   Platform,
@@ -14,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { BlurHashImage } from "@/components/BlurHashImage";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import {
@@ -426,7 +426,7 @@ function MessageAttachment({ message, outgoing }: { message: Row; outgoing: bool
   if (fileType.startsWith("image/")) {
     return (
       <Pressable onPress={() => void openChatFile(url, fileName)} style={styles.imageAttachment}>
-        <Image source={{ uri: resolvedUrl }} style={styles.attachmentImage} resizeMode="cover" />
+        <BlurHashImage uri={resolvedUrl} style={styles.attachmentImage} />
         <Text style={[styles.attachmentName, { color: outgoing ? colors.tint : colors.mutedForeground }]} numberOfLines={1}>{fileName}</Text>
       </Pressable>
     );

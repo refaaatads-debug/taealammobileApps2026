@@ -1,33 +1,33 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
+  Platform,
 } from "react-native";
 import { router } from "expo-router";
+import { BlurHashImage } from "@/components/BlurHashImage";
 import * as ImagePicker from "expo-image-picker";
 import { fetch as expoFetch } from "expo/fetch";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import {
-  RecordingPresets,
-  requestRecordingPermissionsAsync,
-  setAudioModeAsync,
-  useAudioPlayer,
-  useAudioRecorder,
-} from "expo-audio";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase, supabasePublishableKey, supabaseUrl } from "@/lib/supabase";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useAiTutorAccess } from "@/hooks/useAiTutorAccess";
+import {
+  useContinuousVoiceConversation,
+  type VoiceQuestionContext,
+  type VoiceQuestionHandler,
+} from "@/hooks/useContinuousVoiceConversation";
 import { EmptyState, Header, Icon, Screen } from "@/components/AjyalUI";
+import { audioUploadDescriptor, createWebAudioUpload } from "@/lib/voiceAudioUpload";
 
 type Tab = "text" | "voice";
 type Message = { role: "user" | "assistant"; content: string; audio?: string | null };
@@ -108,21 +108,6 @@ async function edgeFunctionErrorMessage(
   return errorMessage(result.error, fallback);
 }
 
-function audioUploadDescriptor(uri: string) {
-  const extension = uri.match(/\.([a-z0-9]+)(?:\?|$)/i)?.[1]?.toLowerCase() || "m4a";
-  const mimeType = extension === "webm"
-    ? "audio/webm"
-    : extension === "3gp"
-      ? "audio/3gpp"
-      : extension === "wav"
-        ? "audio/wav"
-        : "audio/mp4";
-  return {
-    name: `ai-tutor-question.${extension}`,
-    type: mimeType,
-  };
-}
-
 export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | "homework" } = {}) {
   const colors = useColors();
   const { user } = useAuth();
@@ -133,14 +118,17 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   // Keep this gate shared so the UI cannot accidentally expose a second policy.
   const requiresAiTutorPlan = true;
   const { loading: accessLoading, hasAccess: hasAiTutorAccess, error: accessError, retry: retryAccess } = useAiTutorAccess(requiresAiTutorPlan);
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const player = useAudioPlayer(null);
+  const voiceQuestionHandlerRef = useRef<VoiceQuestionHandler>(async () => null);
+  const voiceErrorHandlerRef = useRef<(error: unknown) => void>(() => {});
+  const voiceConversation = useContinuousVoiceConversation({
+    onQuestion: (uri, context) => voiceQuestionHandlerRef.current(uri, context),
+    onError: (voiceError) => voiceErrorHandlerRef.current(voiceError),
+  });
 
   const [tab, setTab] = useState<Tab>("text");
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [recording, setRecording] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [aiEnabled, setAiEnabled] = useState(true);
@@ -214,14 +202,11 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   };
 
   const playAudio = (base64: string | null | undefined) => {
-    if (!base64) return;
-    void setAudioModeAsync({ playsInSilentMode: true });
-    player.replace(`data:audio/mpeg;base64,${base64}`);
-    player.play();
+    voiceConversation.playAudio(base64);
   };
 
-  const askTeacher = async (text: string, audioInput = false) => {
-    if (!supabase || role !== "student" || !hasAiTutorAccess || !text.trim() || sending || !aiEnabled) return;
+  const askTeacher = async (text: string, audioInput = false): Promise<string | null> => {
+    if (!supabase || role !== "student" || !hasAiTutorAccess || !text.trim() || sending || !aiEnabled) return null;
     const content = text.trim();
     const nextMessages = [...messages, { role: "user" as const, content }];
     setMessages(nextMessages);
@@ -239,23 +224,33 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
       if (result.error || typeof response?.text !== "string" || !response.text.trim()) {
         throw new Error(await edgeFunctionErrorMessage(result, "تعذر الحصول على رد المدرس المساعد"));
       }
+      const assistantAudio = typeof response.audio === "string" ? response.audio : null;
       const completedMessages = [
         ...nextMessages,
-        { role: "assistant" as const, content: response.text, audio: typeof response.audio === "string" ? response.audio : null },
+        { role: "assistant" as const, content: response.text, audio: assistantAudio },
       ];
       setMessages(completedMessages);
-      playAudio(typeof response.audio === "string" ? response.audio : null);
-      const savedId = await saveConversation(completedMessages, conversationId);
-      if (savedId && savedId !== conversationId) setConversationId(savedId);
+      if (!audioInput) playAudio(assistantAudio);
+      try {
+        const savedId = await saveConversation(completedMessages, conversationId);
+        if (savedId && savedId !== conversationId) setConversationId(savedId);
+      } catch (saveError) {
+        setError(errorMessage(saveError, "وصل الرد، لكن تعذر حفظ المحادثة."));
+      }
+      return assistantAudio;
     } catch (sendError) {
       setError(errorMessage(sendError, audioInput ? "تعذر معالجة السؤال الصوتي." : "تعذر الحصول على رد المدرس المساعد."));
+      return null;
     } finally {
       setSending(false);
     }
   };
 
-  const transcribeAndAsk = async (uri: string) => {
-    if (!supabase || role !== "student" || !hasAiTutorAccess) return;
+  const transcribeAndAsk = async (
+    uri: string,
+    context: VoiceQuestionContext,
+  ): Promise<string | null> => {
+    if (!supabase || role !== "student" || !hasAiTutorAccess) return null;
     setError(null);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
@@ -265,11 +260,16 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
       }
 
       const formData = new FormData();
-      const descriptor = audioUploadDescriptor(uri);
-      // React Native's multipart adapter understands the URI descriptor.
-      // Using expo-file-system File here breaks on the current native runtime
-      // before the request is sent (`validatePath is not a function`).
-      formData.append("audio", { uri, ...descriptor } as unknown as Blob);
+      if (Platform.OS === "web") {
+        const webAudio = await createWebAudioUpload(uri);
+        formData.append("audio", webAudio.blob, webAudio.name);
+      } else {
+        const descriptor = audioUploadDescriptor(uri);
+        // React Native's multipart adapter understands the URI descriptor.
+        // Using expo-file-system File here breaks on the current native runtime
+        // before the request is sent (`validatePath is not a function`).
+        formData.append("audio", { uri, ...descriptor } as unknown as Blob);
+      }
 
       // Do not set Content-Type manually: expo/fetch adds the multipart boundary.
       // Passing { uri, name, type } to functions.invoke loses the file on native.
@@ -289,6 +289,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
       } catch {
         // Preserve the raw server response below when it is not JSON.
       }
+      if (!context.isCurrent()) return null;
       if (!response.ok || typeof data?.text !== "string" || !data.text.trim()) {
         const serverMessage = typeof data?.error === "string"
           ? data.error
@@ -304,40 +305,31 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
               : "تعذر فهم التسجيل الصوتي.",
         );
       }
-      await askTeacher(data.text, true);
+      if (!context.isCurrent()) return null;
+      return await askTeacher(data.text, true);
     } catch (recordError) {
       setError(errorMessage(recordError, "تعذر معالجة السؤال الصوتي."));
+      return null;
     }
   };
 
-  const toggleRecording = async () => {
-    if (role !== "student" || !hasAiTutorAccess) return;
-    if (recording) {
-      try {
-        await recorder.stop();
-        setRecording(false);
-        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
-        if (recorder.uri) await transcribeAndAsk(recorder.uri);
-      } catch (recordError) {
-        setRecording(false);
-        setError(errorMessage(recordError, "تعذر حفظ التسجيل الصوتي."));
-      }
-      return;
-    }
-    if (sending || !aiEnabled) return;
+  voiceQuestionHandlerRef.current = transcribeAndAsk;
+  voiceErrorHandlerRef.current = (voiceError) => {
+    setError(errorMessage(voiceError, "تعذر تشغيل المحادثة الصوتية."));
+  };
+
+  const startVoiceConversation = async () => {
+    if (role !== "student" || !hasAiTutorAccess || !aiEnabled) return;
+    setError(null);
+    await voiceConversation.start();
+  };
+
+  const endVoiceConversation = async () => {
     try {
-      const permission = await requestRecordingPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert("إذن الميكروفون مطلوب", "اسمح للتطبيق باستخدام الميكروفون لطرح سؤالك صوتياً.");
-        return;
-      }
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-      await recorder.prepareToRecordAsync();
-      recorder.record();
-      setError(null);
-      setRecording(true);
-    } catch (recordError) {
-      setError(errorMessage(recordError, "تعذر بدء التسجيل الصوتي."));
+      await voiceConversation.end();
+    } finally {
+      if (router.canGoBack()) router.back();
+      else router.replace("/(tabs)");
     }
   };
 
@@ -498,6 +490,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
             <Pressable
               testID="ai-tab-voice"
               onPress={() => setTab("voice")}
+              disabled={voiceConversation.isActive || voiceConversation.phase === "preparing"}
               style={[styles.tab, tab === "voice" && { backgroundColor: colors.card }]}
             >
               <Icon name="mic" size={15} color={tab === "voice" ? colors.primary : colors.mutedForeground} />
@@ -506,6 +499,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
             <Pressable
               testID="ai-tab-text"
               onPress={() => setTab("text")}
+              disabled={voiceConversation.isActive || voiceConversation.phase === "preparing"}
               style={[styles.tab, tab === "text" && { backgroundColor: colors.card }]}
             >
               <Icon name="message-circle" size={15} color={tab === "text" ? colors.primary : colors.mutedForeground} />
@@ -596,23 +590,57 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
             </KeyboardAvoidingView>
           ) : (
             <View style={[styles.voicePanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <View style={[styles.voiceOrb, { backgroundColor: recording ? colors.teal : colors.muted }]}>
-                {recording ? <View style={[styles.recordingDot, { backgroundColor: colors.destructive }]} /> : <Icon name="mic" size={43} color={colors.mutedForeground} />}
+              <View style={[styles.voiceOrb, { backgroundColor: voiceConversation.phase === "listening" ? colors.teal : voiceConversation.isActive ? colors.navySoft : colors.muted }]}>
+                {voiceConversation.phase === "listening"
+                  ? <View style={[styles.recordingDot, { backgroundColor: colors.destructive }]} />
+                  : <Icon name={voiceConversation.phase === "speaking" ? "volume-2" : "mic"} size={43} color={colors.mutedForeground} />}
               </View>
               <Text style={[styles.voiceTitle, { color: colors.foreground }]}>
-                {recording ? "أنا أستمع إليك…" : sending ? "جاري تجهيز الإجابة…" : "محادثة صوتية بالعربية"}
+                {voiceConversation.isActive
+                  ? voiceConversation.phase === "speaking"
+                    ? "المدرس الذكي يتحدث إليك…"
+                    : voiceConversation.phase === "listening"
+                      ? "أنا أستمع إليك…"
+                      : sending
+                        ? "جارٍ تجهيز الإجابة…"
+                        : voiceConversation.phase === "transcribing"
+                          ? "جارٍ فهم سؤالك…"
+                          : "جارٍ تجهيز الميكروفون…"
+                  : "محادثة صوتية بالعربية"}
               </Text>
               <Text style={[styles.voiceBody, { color: colors.mutedForeground }]}>
-                {recording ? "تحدث بوضوح ثم اضغط لإرسال سؤالك." : "اضغط على الميكروفون وتحدث مع مدرسك الذكي بصوتك."}
+                {voiceConversation.isActive
+                  ? voiceConversation.phase === "speaking"
+                    ? "استمع إلى الإجابة، ثم سأعود للاستماع تلقائياً."
+                    : voiceConversation.phase === "listening"
+                      ? "تحدث بشكل طبيعي، وسأرسل سؤالك تلقائياً بعد وقفة قصيرة."
+                      : sending
+                        ? "وصل سؤالك، والمدرس الذكي يجهز الإجابة."
+                        : voiceConversation.phase === "transcribing"
+                          ? "جارٍ تحويل كلامك إلى سؤال."
+                          : "يتم تشغيل الميكروفون للمحادثة."
+                  : "اضغط على الميكروفون وتحدث مع مدرسك الذكي بصوتك."}
               </Text>
               <Pressable
                 testID="toggle-ai-recording"
-                onPress={() => void toggleRecording()}
-                disabled={sending && !recording}
-                style={[styles.voiceButton, { backgroundColor: recording ? colors.destructive : colors.primary }]}
+                onPress={() => voiceConversation.isActive
+                  ? void endVoiceConversation()
+                  : void startVoiceConversation()}
+                disabled={!voiceConversation.isActive && (
+                  voiceConversation.phase === "preparing" || sending || !aiEnabled
+                )}
+                style={[styles.voiceButton, { backgroundColor: voiceConversation.isActive ? colors.destructive : colors.primary }]}
               >
-                {sending && !recording ? <ActivityIndicator color={colors.primaryForeground} /> : <Icon name={recording ? "mic-off" : "mic"} size={18} color={colors.primaryForeground} />}
-                <Text style={[styles.voiceButtonText, { color: colors.primaryForeground }]}>{recording ? "إنهاء وإرسال السؤال" : "ابدأ المحادثة بالعربية"}</Text>
+                {!voiceConversation.isActive && voiceConversation.phase === "preparing"
+                  ? <ActivityIndicator color={colors.primaryForeground} />
+                  : <Icon name={voiceConversation.isActive ? "square" : "mic"} size={18} color={colors.primaryForeground} />}
+                <Text style={[styles.voiceButtonText, { color: colors.primaryForeground }]}>
+                  {voiceConversation.isActive
+                    ? "إنهاء المحادثة"
+                    : voiceConversation.phase === "preparing"
+                      ? "جارٍ تشغيل الميكروفون..."
+                      : "ابدأ المحادثة بالعربية"}
+                </Text>
               </Pressable>
               <Text style={[styles.voiceHint, { color: colors.mutedForeground }]}>جرّب: «اشرح لي هذه المسألة» أو «لخّص لي هذا الدرس»</Text>
             </View>
@@ -642,7 +670,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
             ) : (
               <View style={[styles.imageCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <View style={[styles.imageFrame, { backgroundColor: colors.foreground }]}>
-                  <Image source={{ uri: imageUri }} style={styles.homeworkImage} resizeMode="contain" />
+                  <BlurHashImage uri={imageUri} style={styles.homeworkImage} contentFit="contain" />
                   <Pressable testID="remove-homework-image" onPress={resetHomework} style={[styles.removeImage, { backgroundColor: colors.destructive }]}>
                     <Icon name="x" size={16} color={colors.destructiveForeground} />
                   </Pressable>
