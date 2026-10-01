@@ -30,7 +30,7 @@ class IncomingCallMessagingService : ExpoFirebaseMessagingService() {
   private fun isAppInForeground(): Boolean {
     val manager = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
     return manager.runningAppProcesses?.any { process ->
-      process.processName == packageName
+      process.processName == applicationContext.getPackageName()
         && process.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
     } == true
   }
@@ -71,7 +71,7 @@ class IncomingCallMessagingService : ExpoFirebaseMessagingService() {
   private fun closeIncomingCall(callId: String) {
     if (callId.isBlank()) return
     getSystemService(NotificationManager::class.java).cancel(notificationId(callId))
-    sendBroadcast(Intent(IncomingCallActivity.ACTION_CLOSE).setPackage(packageName).putExtra("callId", callId))
+    sendBroadcast(Intent(IncomingCallActivity.ACTION_CLOSE).setPackage(applicationContext.getPackageName()).putExtra("callId", callId))
   }
 
   private fun notificationId(callId: String): Int =
@@ -79,7 +79,7 @@ class IncomingCallMessagingService : ExpoFirebaseMessagingService() {
 
   private fun ensureChannel(manager: NotificationManager) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val sound = Uri.parse("android.resource://$packageName/${R.raw.incoming_call}")
+    val sound = Uri.parse("android.resource://${applicationContext.getPackageName()}/${R.raw.incoming_call}")
     val attributes = AudioAttributes.Builder()
       .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
       .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
