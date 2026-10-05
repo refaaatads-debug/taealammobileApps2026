@@ -7,9 +7,41 @@ import {
   mergePushTokenBundle,
 } from "../pushTokenBundle.ts";
 import { __testing, sendApnsVoipPush } from "../apnsVoip.ts";
+import { buildChatPushNotification } from "../pushOutbox.ts";
 
 const expoToken = "ExpoPushToken[unit-test-token]";
 const voipToken = "ab".repeat(32);
+
+test("chat push content is generic and tied to one persisted message event", () => {
+  const notification = buildChatPushNotification("chat-message:message-1", {
+    messageId: "message-1",
+    bookingId: "booking-1",
+    recipientId: "recipient-1",
+    kind: "voice",
+  });
+
+  assert.deepEqual(notification, {
+    recipientId: "recipient-1",
+    notification: {
+      title: "رسالة جديدة",
+      body: "لديك رسالة صوتية جديدة.",
+      data: {
+        type: "chat_message",
+        bookingId: "booking-1",
+        messageId: "message-1",
+        eventId: "chat-message:message-1",
+        route: "/messages",
+      },
+    },
+  });
+  assert.equal(
+    buildChatPushNotification("missing-message-id", {
+      bookingId: "booking-1",
+      recipientId: "recipient-1",
+    }),
+    null,
+  );
+});
 
 test("push token bundles round-trip Expo and APNs metadata", () => {
   const encoded = encodePushTokenBundle({
@@ -120,6 +152,18 @@ test("APNs VoIP delivery uses the VoIP topic and injected transport", async () =
     );
     assert.equal(captured[2].type, "call_ended");
     assert.equal(captured[2].uuid, "call-id");
+    await sendApnsVoipPush(
+      voipToken,
+      "sandbox",
+      {
+        aps: { "content-available": 1 },
+        type: "call_accepted",
+        callId: "call-id",
+        uuid: "call-id",
+      },
+      async (...args) => { captured = args; },
+    );
+    assert.equal(captured[2].type, "call_accepted");
   } finally {
     for (const [key, value] of [
       ["APNS_VOIP_KEY_ID", previous.keyId],

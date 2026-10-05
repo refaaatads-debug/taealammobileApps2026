@@ -20,6 +20,12 @@ type ApnsVoipPayload =
       type: "call_ended";
       callId: string;
       uuid: string;
+    }
+  | {
+      aps: { "content-available": 1 };
+      type: "call_accepted";
+      callId: string;
+      uuid: string;
     };
 
 type ApnsTransport = (

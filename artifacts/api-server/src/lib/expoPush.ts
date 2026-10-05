@@ -113,6 +113,7 @@ async function checkExpoPushReceipt(ticketId: string): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ ids: [ticketId] }),
+      signal: AbortSignal.timeout(8_000),
     });
     const result = await response.json() as ExpoReceiptResponse;
     const receipt = result.data?.[ticketId];
@@ -137,6 +138,7 @@ export async function sendExpoPushMessage(message: ExpoPushMessage): Promise<voi
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(message),
+    signal: AbortSignal.timeout(8_000),
   });
 
   let result: ExpoPushResponse | null = null;
