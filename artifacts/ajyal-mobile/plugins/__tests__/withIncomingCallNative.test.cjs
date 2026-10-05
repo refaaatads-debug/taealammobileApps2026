@@ -5,6 +5,12 @@ const { test } = require("node:test");
 
 const withIncomingCallNative = require("../withIncomingCallNative");
 const projectRoot = path.resolve(__dirname, "../..");
+const nativeServiceTemplatePath = path.join(
+  projectRoot,
+  "plugins",
+  "templates",
+  "IncomingCallMessagingService.kt",
+);
 const notificationsGradlePath = path.join(
   projectRoot,
   "node_modules",
@@ -28,6 +34,12 @@ assert.equal(
 
 const expectedVersion = declaredVersions[0];
 const dependencyCoordinate = "com.google.firebase:firebase-messaging";
+
+test("incoming-call services forward messages to Expo Notifications", () => {
+  const source = fs.readFileSync(nativeServiceTemplatePath, "utf8");
+  assert.match(source, /class IncomingCallMessagingService : ExpoFirebaseMessagingService\(\)/);
+  assert.match(source, /super\.onMessageReceived\(message\)/);
+});
 
 async function applyPlugin(contents) {
   const config = withIncomingCallNative({ name: "ajyal-test", mods: {} });

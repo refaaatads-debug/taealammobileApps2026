@@ -13,15 +13,16 @@ import {
   SendIncomingCallResponse,
   UnregisterPushTokenResponse,
 } from "@workspace/api-zod";
-import { db, pushTokensTable, usersTable } from "@workspace/db";
-import { and, eq, sql } from "drizzle-orm";
+import { db, pushTokensTable } from "@workspace/db";
+import { eq, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
 import crypto from "node:crypto";
 import { ExpoPushError, INCOMING_CALL_CATEGORY, INCOMING_CALL_CHANNEL, sendExpoPushMessage } from "../lib/expoPush";
 import { sendApnsVoipPush } from "../lib/apnsVoip";
 import { decodePushTokenBundle, mergePushTokenBundle } from "../lib/pushTokenBundle";
-import { readBearerToken, supabaseTable } from "../lib/supabaseAuth";
+import { getSupabaseRoles, readBearerToken, supabaseTable } from "../lib/supabaseAuth";
 import { sendUserPushNotification } from "../lib/userPush";
+import { hasPushEligibleRole, incomingCallRowMatches } from "../lib/pushIdentity";
 
 const router: IRouter = Router();
 
@@ -44,6 +45,27 @@ router.post("/push-tokens", async (req, res): Promise<void> => {
   const parsed = RegisterPushTokenBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid Expo push token" });
+    return;
+  }
+  const supabaseToken = readBearerToken(req.get("authorization") ?? undefined);
+  if (!supabaseToken) {
+    res.status(401).json({ error: "A Supabase bearer token is required for push registration" });
+    return;
+  }
+
+  let pushUserReady = false;
+  try {
+    pushUserReady = hasPushEligibleRole(await getSupabaseRoles(supabaseToken, userId));
+  } catch (error) {
+    req.log.warn({
+      reason: "push_user_role_verification_failed",
+      errorName: error instanceof Error ? error.name : "unknown",
+    }, "Push token registration could not verify the Supabase user role");
+    res.status(503).json({ error: "Could not verify the account for push registration" });
+    return;
+  }
+  if (!pushUserReady) {
+    res.status(403).json({ error: "A verified student or teacher role is required for push registration" });
     return;
   }
   let storedToken = "";
@@ -253,46 +275,64 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
     return;
   }
 
-  const callId = parsed.data.callId ?? crypto.randomUUID();
-  const destination = await db.transaction(async (tx) => {
-    await tx.execute(sql`select set_config('app.server_write', 'true', true)`);
-    const [caller] = await tx.select({
-      id: usersTable.id,
-      firstName: usersTable.firstName,
-      lastName: usersTable.lastName,
-      role: usersTable.role,
-    }).from(usersTable).where(eq(usersTable.id, userId));
-    const [recipient] = await tx.select({
-      id: usersTable.id,
-    }).from(usersTable).where(and(
-      eq(usersTable.id, parsed.data.recipientId),
-    ));
-    const [pushToken] = await tx.select({
-      token: pushTokensTable.token,
-      platform: pushTokensTable.platform,
-    }).from(pushTokensTable).where(eq(pushTokensTable.userId, parsed.data.recipientId));
-    return { caller, recipient, pushToken };
-  });
+  const callId = typeof parsed.data.callId === "string" ? parsed.data.callId.trim() : "";
+  if (!callId) {
+    res.status(400).json({ error: "A valid call ID is required" });
+    return;
+  }
+  if (parsed.data.recipientId.trim() === userId.trim()) {
+    res.status(400).json({ error: "The call recipient must be another user" });
+    return;
+  }
+  const supabaseToken = readBearerToken(req.get("authorization") ?? undefined);
+  if (!supabaseToken) {
+    res.status(401).json({ error: "A Supabase bearer token is required to verify the call" });
+    return;
+  }
 
-  if (!destination.caller || !destination.recipient) {
-    // The Supabase call row and Realtime channel are authoritative. The API
-    // server may not yet have a local mirror of every Supabase user.
+  let callRows: Record<string, unknown>[];
+  try {
+    callRows = await supabaseTable<Record<string, unknown>>(supabaseToken, "internal_calls", {
+      id: `eq.${callId}`,
+      select: "*",
+      limit: "1",
+    });
+  } catch (error) {
     req.log.warn({
-      reason: "missing_local_caller_or_recipient",
-      hasCaller: Boolean(destination.caller),
-      hasRecipient: Boolean(destination.recipient),
-    }, "Incoming call push skipped");
+      reason: "incoming_call_row_verification_failed",
+      errorName: error instanceof Error ? error.name : "unknown",
+    }, "Incoming call push skipped because the call could not be verified");
     res.status(202).json(SendIncomingCallResponse.parse({ callId, delivered: false }));
     return;
   }
-  if (destination.recipient.id === userId) {
-    res.status(404).json({ error: "Call recipient not found" });
+  if (!incomingCallRowMatches(callRows[0], callId, userId, parsed.data.recipientId)) {
+    req.log.warn({ reason: "incoming_call_participants_mismatch" }, "Incoming call push rejected");
+    res.status(403).json({ error: "The call does not match the authenticated caller and recipient" });
     return;
   }
+
+  const callerRolesPromise = getSupabaseRoles(supabaseToken, userId).catch(
+    (error): Awaited<ReturnType<typeof getSupabaseRoles>> => {
+      req.log.warn({
+        reason: "incoming_call_caller_role_lookup_failed",
+        errorName: error instanceof Error ? error.name : "unknown",
+      }, "Incoming call push will use a generic caller role label");
+      return [];
+    },
+  );
+  const [destination, callerRoles] = await Promise.all([
+    db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.server_write', 'true', true)`);
+      const [pushToken] = await tx.select({
+        token: pushTokensTable.token,
+        platform: pushTokensTable.platform,
+      }).from(pushTokensTable).where(eq(pushTokensTable.userId, parsed.data.recipientId));
+      return { pushToken };
+    }),
+    callerRolesPromise,
+  ]);
+
   if (!destination.pushToken) {
-    // Push is only a delivery optimization. The internal_calls row and
-    // Supabase Realtime are the authoritative call transport for foreground
-    // web/native clients, so a missing token must not fail the call.
     req.log.warn({ reason: "missing_recipient_push_token" }, "Incoming call push skipped");
     res.status(202).json(SendIncomingCallResponse.parse({ callId, delivered: false }));
     return;
@@ -304,9 +344,24 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
     return;
   }
 
-  const callerName = [destination.caller.firstName, destination.caller.lastName]
+  const callerName = [req.user?.firstName, req.user?.lastName]
     .filter(Boolean)
     .join(" ") || "مستخدم";
+  const callerRoleValue = callerRoles.includes("teacher")
+    ? "teacher"
+    : callerRoles.includes("student")
+      ? "student"
+      : null;
+  const callerRoleLabel = callerRoleValue ? callerRole(callerRoleValue) : "مستخدم";
+  const callerName = [req.user?.firstName, req.user?.lastName]
+    .filter(Boolean)
+    .join(" ") || "مستخدم";
+  const callerRoleValue = callerRoles.includes("teacher")
+    ? "teacher"
+    : callerRoles.includes("student")
+      ? "student"
+      : null;
+  const callerRoleLabel = callerRoleValue ? callerRole(callerRoleValue) : "مستخدم";
   let deliveredVia: "apns_voip" | "expo" = "expo";
   try {
     const tokenBundle = destinationToken;
@@ -322,7 +377,7 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
         handle: userId,
         callerId: userId,
         callerName,
-        callerRole: callerRole(destination.caller.role),
+        callerRole: callerRoleLabel,
         roomId: parsed.data.roomId,
       } as const;
     if (destination.pushToken.platform === "ios" && tokenBundle.apnsVoipToken && tokenBundle.apnsVoipEnvironment) {
