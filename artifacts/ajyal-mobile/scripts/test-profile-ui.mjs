@@ -532,7 +532,7 @@ async function testStudentProfile(baseUrl) {
   );
 }
 
-async function testTeacherCertificate(baseUrl, filePath) {
+async function testTeacherCertificate(baseUrl, imagePath) {
   console.log("Testing teacher account fields and certificate actions...");
   await navigate(`${baseUrl}/profile-test?role=teacher`);
   await fillTestId("profile-full-name", "معلم واجهة الاختبار");
@@ -568,12 +568,12 @@ async function testTeacherCertificate(baseUrl, filePath) {
   }, cdp.sessionId);
   assert.ok(fileInputNodeId, "The certificate picker did not create a file input");
   await cdp.call("DOM.setFileInputFiles", {
-    files: [filePath],
+    files: [imagePath],
     nodeId: fileInputNodeId,
   }, cdp.sessionId);
   await waitFor(
     "selected certificate name",
-    "document.querySelector('[data-testid=\"pick-certificate\"]')?.innerText.includes('certificate-ui-test.pdf')",
+    "document.querySelector('[data-testid=\"pick-certificate\"]')?.innerText.includes('certificate-ui-test.png')",
   );
   await failNextProfileStoreWrite(
     "teacher",
@@ -586,13 +586,21 @@ async function testTeacherCertificate(baseUrl, filePath) {
   );
   assert.equal(await readField("certificate-name"), "شهادة واجهة الاختبار");
   assert.ok(
-    await evaluateInPage("document.querySelector('[data-testid=\"pick-certificate\"]')?.innerText.includes('certificate-ui-test.pdf')"),
+    await evaluateInPage("document.querySelector('[data-testid=\"pick-certificate\"]')?.innerText.includes('certificate-ui-test.png')"),
     "The selected certificate file was lost after a failed upload",
   );
   await clickTestId("retry-certificate-upload");
-  const openControl = await waitFor(
-    "uploaded certificate controls",
-    "document.querySelector('[data-testid^=\"open-certificate-\"]')?.getAttribute('data-testid')",
+  const viewControl = await waitFor(
+    "visible certificate view action",
+    "document.querySelector('[data-testid^=\"view-certificate-\"]')?.getAttribute('data-testid')",
+  );
+  assert.ok(
+    await evaluateInPage(`document.querySelector('[data-testid="${viewControl}"]')?.textContent?.includes('عرض')`),
+    "The certificate row did not show its Arabic View action",
+  );
+  assert.ok(
+    await evaluateInPage(`document.querySelector('[data-testid="${viewControl}"]')?.getAttribute('aria-label')?.includes('شهادة واجهة الاختبار')`),
+    "The certificate View action is missing its accessible label",
   );
   await waitFor("isolated certificate upload", `(() => {
     const value = JSON.parse(localStorage.getItem(${JSON.stringify(profileStoreKey("teacher"))}) || "null");
@@ -600,15 +608,60 @@ async function testTeacherCertificate(baseUrl, filePath) {
   })()`);
   stored = await readStoredProfile("teacher");
   assert.equal(stored.tables.teacher_certificates[0].name, "شهادة واجهة الاختبار");
-  assert.equal(stored.tables.teacher_certificates[0].file_name, "certificate-ui-test.pdf");
+  assert.equal(stored.tables.teacher_certificates[0].file_name, "certificate-ui-test.png");
 
-  await evaluateInPage("window.__profileTestOpenedUrls = []; window.open = (url) => { window.__profileTestOpenedUrls.push(url); return null; }");
-  await clickTestId(openControl);
-  const openedUrl = await waitFor(
-    "opening the isolated signed certificate URL",
-    "window.__profileTestOpenedUrls[0]",
+  await evaluateInPage(`window.__profileTestExternalOpenCount = 0;
+    window.open = () => { window.__profileTestExternalOpenCount += 1; return null; };`);
+  await clickTestId(viewControl);
+  await waitFor(
+    "certificate image shown inside the app",
+    `Boolean(document.querySelector('[data-testid="certificate-image-preview"]'))`,
   );
-  assert.match(openedUrl, /^https:\/\/isolated-storage\.test\//);
+  assert.equal(await evaluateInPage("window.__profileTestExternalOpenCount"), 0, "The certificate viewer opened an external window");
+  await clickTestId("close-certificate-viewer");
+  await waitFor(
+    "closing the in-app certificate viewer",
+    `!document.querySelector('[data-testid="certificate-viewer-content"]')`,
+  );
+
+  const certificateId = viewControl.replace("view-certificate-", "");
+  await evaluateInPage(`(() => {
+    const key = ${JSON.stringify(profileStoreKey("teacher"))};
+    const value = JSON.parse(localStorage.getItem(key) || "null");
+    value.files = [];
+    localStorage.setItem(key, JSON.stringify(value));
+  })()`);
+  await navigate(`${baseUrl}/profile-test?role=teacher`);
+  await clickTestId(viewControl);
+  await waitFor(
+    "missing certificate object recovery action",
+    `document.querySelector('[data-testid="restore-certificate-${certificateId}"]')?.textContent.includes('اختيار الصورة الأصلية')`,
+  );
+  await clickTestId(`restore-certificate-${certificateId}`);
+  await waitFor("replacement image picker", "Boolean(document.querySelector('input[type=\"file\"]'))");
+  const { root: restoreRoot } = await cdp.call("DOM.getDocument", {}, cdp.sessionId);
+  const { nodeId: restoreInputNodeId } = await cdp.call("DOM.querySelector", {
+    nodeId: restoreRoot.nodeId,
+    selector: 'input[type="file"]',
+  }, cdp.sessionId);
+  assert.ok(restoreInputNodeId, "The restore action did not create an image file input");
+  await cdp.call("DOM.setFileInputFiles", {
+    files: [imagePath],
+    nodeId: restoreInputNodeId,
+  }, cdp.sessionId);
+  await waitFor(
+    "restored certificate image shown inside the app",
+    `Boolean(document.querySelector('[data-testid="certificate-image-preview"]'))`,
+  );
+  stored = await readStoredProfile("teacher");
+  assert.equal(stored.tables.teacher_certificates.length, 1, "Restoring a missing image must not create a duplicate certificate row");
+  assert.equal(stored.files.length, 1, "The original certificate storage path was not restored");
+  assert.equal(stored.files[0][0], stored.tables.teacher_certificates[0].file_url);
+  await clickTestId("close-certificate-viewer");
+  await waitFor(
+    "closing the restored certificate viewer",
+    `!document.querySelector('[data-testid="certificate-viewer-content"]')`,
+  );
 
   const deleteControl = await evaluateInPage(
     "document.querySelector('[data-testid^=\"delete-certificate-\"]')?.getAttribute('data-testid')",
@@ -617,7 +670,7 @@ async function testTeacherCertificate(baseUrl, filePath) {
   await clickTestId(deleteControl);
   await waitFor(
     "certificate removal from the page",
-    "!document.querySelector('[data-testid^=\"open-certificate-\"]')",
+    "!document.querySelector('[data-testid^=\"view-certificate-\"]')",
   );
   stored = await readStoredProfile("teacher");
   assert.deepEqual(stored.tables.teacher_certificates, []);
@@ -700,8 +753,8 @@ async function main() {
   await once(server, "listening");
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${address.port}`;
-  const pdfPath = path.join(tempRoot, "certificate-ui-test.pdf");
-  fs.writeFileSync(pdfPath, "%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n");
+  const imagePath = path.join(tempRoot, "certificate-ui-test.png");
+  fs.writeFileSync(imagePath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
   if (productionOnly) {
     buildDir = path.join(tempRoot, "web-production");
     runWebExport({
@@ -730,7 +783,7 @@ async function main() {
   }
 
   await testStudentProfile(baseUrl);
-  await testTeacherCertificate(baseUrl, pdfPath);
+  await testTeacherCertificate(baseUrl, imagePath);
   assert.deepEqual(productionSupabaseWrites, [], "The UI test attempted a write to production Supabase");
 
   buildDir = path.join(tempRoot, "web-production");

@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,7 +11,7 @@ import {
   View,
   Platform,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { BlurHashImage } from "@/components/BlurHashImage";
 import * as ImagePicker from "expo-image-picker";
 import { fetch as expoFetch } from "expo/fetch";
@@ -23,11 +24,15 @@ import { useAjyal } from "@/hooks/useAjyal";
 import { useAiTutorAccess } from "@/hooks/useAiTutorAccess";
 import {
   useContinuousVoiceConversation,
+  type VoiceQuestionAnswer,
   type VoiceQuestionContext,
   type VoiceQuestionHandler,
 } from "@/hooks/useContinuousVoiceConversation";
 import { EmptyState, Header, Icon, Screen } from "@/components/AjyalUI";
 import { audioUploadDescriptor, createWebAudioUpload } from "@/lib/voiceAudioUpload";
+import { leaveTutorAfterVoiceCleanup } from "@/lib/tutorBackNavigation";
+import { shouldUseAiSpeechFallback } from "@/lib/aiAnswerAudio";
+import { speakAiAnswer } from "@/lib/speakAiAnswer";
 
 type Tab = "text" | "voice";
 type Message = { role: "user" | "assistant"; content: string; audio?: string | null };
@@ -124,6 +129,34 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
     onQuestion: (uri, context) => voiceQuestionHandlerRef.current(uri, context),
     onError: (voiceError) => voiceErrorHandlerRef.current(voiceError),
   });
+  const leavingTutorRef = useRef(false);
+  const exitInProgressRef = useRef(false);
+
+  const handleTutorBack = useCallback(async () => {
+    if (exitInProgressRef.current) return;
+    exitInProgressRef.current = true;
+    leavingTutorRef.current = true;
+    try {
+      await leaveTutorAfterVoiceCleanup({
+        stopVoice: voiceConversation.end,
+        canGoBack: () => router.canGoBack(),
+        goBack: () => router.back(),
+        replaceDashboard: () => router.replace("/(tabs)"),
+      });
+    } catch (error) {
+      exitInProgressRef.current = false;
+      leavingTutorRef.current = false;
+      console.warn("[ai-tutor] Could not leave the tutor screen cleanly:", error);
+    }
+  }, [voiceConversation.end]);
+
+  useFocusEffect(useCallback(() => {
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      void handleTutorBack();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [handleTutorBack]));
 
   const [tab, setTab] = useState<Tab>("text");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -201,12 +234,39 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
     return data?.id ? String(data.id) : null;
   };
 
-  const playAudio = (base64: string | null | undefined) => {
-    voiceConversation.playAudio(base64);
+  const playAudio = (audio: string | null | undefined) => {
+    return voiceConversation.playAudio(audio);
   };
 
-  const askTeacher = async (text: string, audioInput = false): Promise<string | null> => {
-    if (!supabase || role !== "student" || !hasAiTutorAccess || !text.trim() || sending || !aiEnabled) return null;
+  const replayAssistantAnswer = async (message: Message) => {
+    if (shouldUseAiSpeechFallback(message.audio)) {
+      try {
+        await voiceConversation.stopAnswerPlayback();
+        await speakAiAnswer(message.content);
+      } catch (speechError) {
+        setError(errorMessage(speechError, "تعذر تشغيل الإجابة الصوتية."));
+      }
+      return;
+    }
+
+    try {
+      const played = await voiceConversation.playAudio(message.audio, message.content);
+      if (played) return;
+    } catch {
+      // The text remains available for the device's speech fallback.
+    }
+
+    if (shouldUseAiSpeechFallback(message.audio, true)) {
+      try {
+        await speakAiAnswer(message.content);
+      } catch (speechError) {
+        setError(errorMessage(speechError, "تعذر تشغيل الإجابة الصوتية."));
+      }
+    }
+  };
+
+  const askTeacher = async (text: string, audioInput = false): Promise<VoiceQuestionAnswer | null> => {
+    if (leavingTutorRef.current || !supabase || role !== "student" || !hasAiTutorAccess || !text.trim() || sending || !aiEnabled) return null;
     const content = text.trim();
     const nextMessages = [...messages, { role: "user" as const, content }];
     setMessages(nextMessages);
@@ -220,6 +280,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
           speak: true,
         },
       });
+      if (leavingTutorRef.current) return null;
       const response = result.data as { text?: unknown; audio?: unknown; error?: unknown } | null;
       if (result.error || typeof response?.text !== "string" || !response.text.trim()) {
         throw new Error(await edgeFunctionErrorMessage(result, "تعذر الحصول على رد المدرس المساعد"));
@@ -230,27 +291,29 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
         { role: "assistant" as const, content: response.text, audio: assistantAudio },
       ];
       setMessages(completedMessages);
-      if (!audioInput) playAudio(assistantAudio);
+      if (!audioInput && assistantAudio) void playAudio(assistantAudio).catch(() => {});
       try {
         const savedId = await saveConversation(completedMessages, conversationId);
         if (savedId && savedId !== conversationId) setConversationId(savedId);
       } catch (saveError) {
         setError(errorMessage(saveError, "وصل الرد، لكن تعذر حفظ المحادثة."));
       }
-      return assistantAudio;
+      return { text: response.text, audio: assistantAudio };
     } catch (sendError) {
-      setError(errorMessage(sendError, audioInput ? "تعذر معالجة السؤال الصوتي." : "تعذر الحصول على رد المدرس المساعد."));
+      if (!leavingTutorRef.current) {
+        setError(errorMessage(sendError, audioInput ? "تعذر معالجة السؤال الصوتي." : "تعذر الحصول على رد المدرس المساعد."));
+      }
       return null;
     } finally {
-      setSending(false);
+      if (!leavingTutorRef.current) setSending(false);
     }
   };
 
   const transcribeAndAsk = async (
     uri: string,
     context: VoiceQuestionContext,
-  ): Promise<string | null> => {
-    if (!supabase || role !== "student" || !hasAiTutorAccess) return null;
+  ): Promise<VoiceQuestionAnswer | null> => {
+    if (leavingTutorRef.current || !supabase || role !== "student" || !hasAiTutorAccess) return null;
     setError(null);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
@@ -308,7 +371,9 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
       if (!context.isCurrent()) return null;
       return await askTeacher(data.text, true);
     } catch (recordError) {
-      setError(errorMessage(recordError, "تعذر معالجة السؤال الصوتي."));
+      if (context.isCurrent() && !leavingTutorRef.current) {
+        setError(errorMessage(recordError, "تعذر معالجة السؤال الصوتي."));
+      }
       return null;
     }
   };
@@ -319,18 +384,13 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   };
 
   const startVoiceConversation = async () => {
-    if (role !== "student" || !hasAiTutorAccess || !aiEnabled) return;
+    if (leavingTutorRef.current || role !== "student" || !hasAiTutorAccess || !aiEnabled) return;
     setError(null);
     await voiceConversation.start();
   };
 
   const endVoiceConversation = async () => {
-    try {
-      await voiceConversation.end();
-    } finally {
-      if (router.canGoBack()) router.back();
-      else router.replace("/(tabs)");
-    }
+    await handleTutorBack();
   };
 
   const readImage = async (asset: ImagePicker.ImagePickerAsset | undefined) => {
@@ -420,7 +480,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   if (!roleResolved || accessLoading) {
     return (
       <Screen>
-        <Header onBack={() => router.back()} eyebrow="خدمة المنصة التعليمية" title="مساعد التعلّم الذكي" avatarText={avatarText} onAvatar={() => router.push("/profile")} />
+        <Header onBack={handleTutorBack} eyebrow="خدمة المنصة التعليمية" title="مساعد التعلّم الذكي" avatarText={avatarText} onAvatar={() => router.push("/profile")} />
         <View style={styles.accessState}>
           <ActivityIndicator color={colors.teal} />
           <Text style={[styles.accessStateText, { color: colors.mutedForeground }]}>جارٍ التحقق من أهلية الباقة…</Text>
@@ -432,7 +492,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   if (role !== "student") {
     return (
       <Screen>
-        <Header onBack={() => router.back()} eyebrow="خدمة المنصة التعليمية" title="مساعد التعلّم الذكي" avatarText={avatarText} onAvatar={() => router.push("/profile")} />
+        <Header onBack={handleTutorBack} eyebrow="خدمة المنصة التعليمية" title="مساعد التعلّم الذكي" avatarText={avatarText} onAvatar={() => router.push("/profile")} />
         <EmptyState icon="lock" title="المساعد متاح للطلاب فقط" body="لا تظهر أدوات مساعد التعلم في حساب المعلم." />
       </Screen>
     );
@@ -441,7 +501,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   if (requiresAiTutorPlan && accessError) {
     return (
       <Screen>
-        <Header onBack={() => router.back()} eyebrow="خدمة المنصة التعليمية" title="مساعد التعلّم الذكي" avatarText={avatarText} onAvatar={() => router.push("/profile")} />
+        <Header onBack={handleTutorBack} eyebrow="خدمة المنصة التعليمية" title="مساعد التعلّم الذكي" avatarText={avatarText} onAvatar={() => router.push("/profile")} />
         <EmptyState icon="alert-circle" title="تعذر التحقق من الباقة" body={accessError} action="إعادة المحاولة" onAction={retryAccess} />
       </Screen>
     );
@@ -450,7 +510,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   if (requiresAiTutorPlan && !hasAiTutorAccess) {
     return (
       <Screen>
-        <Header onBack={() => router.back()} eyebrow="خدمة المنصة التعليمية" title="مساعد التعلّم الذكي" avatarText={avatarText} onAvatar={() => router.push("/profile")} />
+        <Header onBack={handleTutorBack} eyebrow="خدمة المنصة التعليمية" title="مساعد التعلّم الذكي" avatarText={avatarText} onAvatar={() => router.push("/profile")} />
         <EmptyState icon="award" title="المساعد غير مشمول في باقتك" body="يتوفر مساعد التعلم الصوتي للطالب المشترك في باقة تتضمن ميزة المدرس الذكي وبها رصيد فعال." action="عرض الباقات" onAction={() => router.push("/subscriptions")} />
       </Screen>
     );
@@ -462,7 +522,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
       contentStyle={isTextChat ? [styles.textScreenContent, { paddingBottom: Math.max(insets.bottom, 8) }] : undefined}
     >
       <Header
-        onBack={() => router.back()}
+        onBack={handleTutorBack}
         eyebrow={isHomeworkMode ? "أداة عملية للتعلّم" : "مساعدة فورية أثناء التعلم"}
         title={isHomeworkMode ? "مساعد الواجبات البصري" : "مساعد التعلّم الذكي"}
         avatarText={avatarText}
@@ -548,10 +608,17 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
                       {message.role === "user" ? "أنت" : "المدرس المساعد AI"}
                     </Text>
                     <Text style={[styles.messageText, { color: message.role === "user" ? colors.primaryForeground : colors.foreground }]}>{message.content}</Text>
-                    {message.role === "assistant" && message.audio ? (
-                      <Pressable testID={`play-ai-audio-${index}`} onPress={() => playAudio(message.audio)} style={styles.audioButton}>
+                    {message.role === "assistant" ? (
+                      <Pressable
+                        testID={`play-ai-audio-${index}`}
+                        accessibilityRole="button"
+                        accessibilityLabel="استمع إلى رد المدرس المساعد"
+                        accessibilityHint="يشغّل الصوت المتاح أو يقرأ نص الإجابة بصوت الجهاز"
+                        onPress={() => void replayAssistantAnswer(message)}
+                        style={styles.audioButton}
+                      >
                         <Icon name="volume-2" size={14} color={colors.teal} />
-                        <Text style={[styles.audioButtonText, { color: colors.teal }]}>تشغيل الصوت</Text>
+                        <Text style={[styles.audioButtonText, { color: colors.teal }]}>استمع إلى الإجابة</Text>
                       </Pressable>
                     ) : null}
                   </View>

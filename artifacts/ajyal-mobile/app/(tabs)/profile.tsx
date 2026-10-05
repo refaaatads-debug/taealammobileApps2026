@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Header, Icon, Screen } from "@/components/AjyalUI";
 import { useColors } from "@/hooks/useColors";
 import { useAjyal } from "@/hooks/useAjyal";
@@ -12,6 +13,7 @@ import {
   deleteTeacherCertificate,
   getCertificateOpenUrl,
   loadProfileData,
+  restoreMissingTeacherCertificateFile,
   saveProfileData,
   uploadTeacherCertificate,
   type ProfileDataClient,
@@ -21,6 +23,13 @@ import {
 type Row = Record<string, unknown>;
 type Subject = { id: string; name: string };
 type Attachment = { name: string; uri: string; mimeType?: string | null };
+type CertificateViewerState = {
+  id: string;
+  name: string;
+  fileName: string;
+  kind: "image" | "pdf" | "unsupported";
+  url: string | null;
+};
 type ProfileTestHarness = {
   session: {
     user: { id: string; email: string };
@@ -38,21 +47,15 @@ const STAGE_TRANSLATIONS: Record<string, string> = {
   "تحصيلي": "Tahseeli",
 };
 
-function message(error: unknown, fallback: string): string {
-  return error && typeof error === "object" && "message" in error && typeof error.message === "string" ? error.message : fallback;
+function certificateContentKind(fileName: string): CertificateViewerState["kind"] {
+  const normalized = fileName.split(/[?#]/, 1)[0].toLowerCase();
+  if (/\.pdf$/i.test(normalized)) return "pdf";
+  if (/\.(png|jpe?g|webp|gif)$/i.test(normalized)) return "image";
+  return "unsupported";
 }
 
-async function openCertificateAttachment(
-  client: ProfileDataClient | null,
-  value: string,
-  fileName: string,
-) {
-  try {
-    const url = await getCertificateOpenUrl(client, value);
-    await Linking.openURL(url);
-  } catch (error) {
-    Alert.alert("تعذر فتح الشهادة", message(error, `تعذر فتح ${fileName}.`));
-  }
+function message(error: unknown, fallback: string): string {
+  return error && typeof error === "object" && "message" in error && typeof error.message === "string" ? error.message : fallback;
 }
 
 function InlineRetryNotice({
@@ -106,6 +109,7 @@ function InlineRetryNotice({
 
 export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTestHarness } = {}) {
   const colors = useColors();
+  const insets = useSafeAreaInsets();
   const { t, direction } = useAppPreferences();
   const isRTL = direction === "rtl";
   const auth = useAuth();
@@ -155,6 +159,10 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   const [certificateFile, setCertificateFile] = useState<Attachment | null>(null);
   const [certificateUploadTimestamp, setCertificateUploadTimestamp] = useState<number | null>(null);
   const [certificateUploadError, setCertificateUploadError] = useState<string | null>(null);
+  const [certificateOpenError, setCertificateOpenError] = useState<{ id: string; message: string; canRestore?: boolean } | null>(null);
+  const [openingCertificateId, setOpeningCertificateId] = useState<string | null>(null);
+  const [restoringCertificateId, setRestoringCertificateId] = useState<string | null>(null);
+  const [certificateViewer, setCertificateViewer] = useState<CertificateViewerState | null>(null);
   const [certificateDeleteError, setCertificateDeleteError] = useState<{ id: string; message: string } | null>(null);
   const [deletingCertificateId, setDeletingCertificateId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -194,9 +202,8 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
       setSubjects(data.subjects);
       setCertificates(data.certificates);
       setDataLoaded(true);
-    } catch (error) {
+    } catch {
       setLoadError(true);
-      Alert.alert(t("تعذر تحميل بيانات الحساب", "Could not load account details"), message(error, t("حاول مرة أخرى.", "Please try again.")));
     } finally {
       setLoading(false);
     }
@@ -327,6 +334,66 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
     }
   };
 
+  const restoreCertificate = async (id: string, fileUrl: string, fileName: string, displayName: string) => {
+    if (!profileClient || !user || restoringCertificateId) return;
+    setRestoringCertificateId(id);
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+        type: ["image/jpeg", "image/png", "image/webp"],
+      });
+      if (picked.canceled || !picked.assets[0]) return;
+
+      const asset = picked.assets[0];
+      const bytes = await (await fetch(asset.uri)).arrayBuffer();
+      await restoreMissingTeacherCertificateFile(
+        profileClient as unknown as ProfileDataClient,
+        user.id,
+        fileUrl,
+        asset.name,
+        asset.mimeType,
+        bytes,
+      );
+      const url = await getCertificateOpenUrl(profileClient as unknown as ProfileDataClient, fileUrl);
+      setCertificateOpenError(null);
+      setCertificateViewer({ id, name: displayName, fileName, kind: "image", url });
+    } catch (error) {
+      setCertificateOpenError({
+        id,
+        message: message(error, t("تعذرت استعادة ملف الشهادة. اختر صورة JPG أو PNG أو WebP لا يتجاوز حجمها 10 ميغابايت.", "Could not restore the certificate. Choose a JPG, PNG, or WebP image up to 10 MB.")),
+        canRestore: true,
+      });
+    } finally {
+      setRestoringCertificateId(null);
+    }
+  };
+
+  const openCertificate = async (id: string, fileUrl: string, fileName: string, displayName: string) => {
+    if (openingCertificateId) return;
+    setCertificateOpenError(null);
+    setOpeningCertificateId(id);
+    try {
+      const kind = certificateContentKind(fileName || fileUrl);
+      const url = kind === "image"
+        ? await getCertificateOpenUrl(profileClient as unknown as ProfileDataClient | null, fileUrl)
+        : null;
+      setCertificateViewer({ id, name: displayName, fileName, kind, url });
+    } catch (error) {
+      const detail = message(error, t("تعذر فتح الشهادة. أعد المحاولة.", "Could not open the certificate. Please try again."));
+      const canRestore = /object not found|file not found|no such object/i.test(detail);
+      setCertificateOpenError({
+        id,
+        message: canRestore
+          ? t("ملف الشهادة غير موجود في التخزين. اختر الصورة الأصلية لإعادتها إلى السجل.", "The certificate image is missing from storage. Choose the original image to restore it.")
+          : detail,
+        canRestore,
+      });
+    } finally {
+      setOpeningCertificateId(null);
+    }
+  };
+
   const handleLogout = async () => {
     if (loggingOut) return;
     setLoggingOut(true);
@@ -335,6 +402,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   };
 
   return (
+    <>
     <Screen>
        <Header avatarText={profile?.displayName?.slice(0, 1)} eyebrow={t("مساحتك الشخصية", "Your personal space")} title={t("حسابي", "Profile")} onBell={() => router.push("/notifications")} />
         <View style={[styles.hero, { backgroundColor: colors.primary, flexDirection: isRTL ? "row" : "row-reverse", shadowColor: colors.primary }]}>
@@ -425,11 +493,52 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
                {certificates.map((certificate) => {
                  const id = String(certificate.id);
                  const fileUrl = typeof certificate.file_url === "string" && certificate.file_url ? certificate.file_url : undefined;
+                  const displayName = String(certificate.name ?? t("شهادة", "Certificate"));
                  return <View key={id}>
-                   <View style={[styles.certificate, { borderColor: colors.border }]}>
-                     <Pressable testID={`delete-certificate-${id}`} disabled={deletingCertificateId !== null} onPress={() => void deleteCertificate(id, fileUrl)}>{deletingCertificateId === id ? <ActivityIndicator color={colors.destructive} /> : <Icon name="trash-2" size={17} color={colors.destructive} />}</Pressable>
-                     <Pressable testID={`open-certificate-${id}`} style={[styles.certificateCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]} onPress={() => typeof certificate.file_url === "string" && void openCertificateAttachment(profileClient as unknown as ProfileDataClient | null, certificate.file_url, typeof certificate.file_name === "string" ? certificate.file_name : t("الشهادة", "certificate"))}><Text style={[styles.certificateName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{String(certificate.name ?? t("شهادة", "Certificate"))}</Text><Text style={[styles.note, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{String(certificate.file_name ?? "")}</Text></Pressable>
+                    <View style={[styles.certificate, { borderColor: colors.border, flexDirection: isRTL ? "row-reverse" : "row" }]}>
+                      <View style={[styles.certificateCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
+                        <Text style={[styles.certificateName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{displayName}</Text>
+                        <Text style={[styles.note, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{String(certificate.file_name ?? "")}</Text>
+                      </View>
+                      {fileUrl ? (
+                        <Pressable
+                          testID={`view-certificate-${id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={t(`عرض الشهادة ${displayName}`, `View certificate ${displayName}`)}
+                          disabled={openingCertificateId !== null || restoringCertificateId !== null || deletingCertificateId !== null}
+                          onPress={() => void openCertificate(id, fileUrl, String(certificate.file_name ?? fileUrl), displayName)}
+                          style={[styles.certificateView, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}
+                        >
+                          {openingCertificateId === id
+                            ? <ActivityIndicator size="small" color={colors.teal} />
+                            : <Icon name="eye" size={15} color={colors.teal} />}
+                          <Text style={[styles.certificateViewText, { color: colors.teal, writingDirection: direction }]}>{openingCertificateId === id ? t("جارٍ الفتح…", "Opening…") : t("عرض", "View")}</Text>
+                        </Pressable>
+                      ) : null}
+                      <Pressable
+                        testID={`delete-certificate-${id}`}
+                        accessibilityRole="button"
+                        accessibilityLabel={t(`حذف الشهادة ${displayName}`, `Delete certificate ${displayName}`)}
+                        hitSlop={8}
+                        disabled={deletingCertificateId !== null || restoringCertificateId === id}
+                        onPress={() => void deleteCertificate(id, fileUrl)}
+                      >
+                        {deletingCertificateId === id ? <ActivityIndicator color={colors.destructive} /> : <Icon name="trash-2" size={17} color={colors.destructive} />}
+                      </Pressable>
                    </View>
+                     {certificateOpenError?.id === id ? (
+                       <InlineRetryNotice
+                         testID={`certificate-open-error-${id}`}
+                         retryTestID={certificateOpenError.canRestore ? `restore-certificate-${id}` : `retry-open-certificate-${id}`}
+                         message={certificateOpenError.message}
+                         retryLabel={certificateOpenError.canRestore ? t("اختيار الصورة الأصلية", "Choose original image") : t("إعادة المحاولة", "Retry")}
+                         direction={direction}
+                         disabled={openingCertificateId !== null || restoringCertificateId !== null || deletingCertificateId !== null}
+                         onRetry={() => fileUrl && (certificateOpenError.canRestore
+                           ? void restoreCertificate(id, fileUrl, String(certificate.file_name ?? fileUrl), displayName)
+                           : void openCertificate(id, fileUrl, String(certificate.file_name ?? fileUrl), displayName))}
+                       />
+                     ) : null}
                    {certificateDeleteError?.id === id ? <InlineRetryNotice testID={`certificate-delete-error-${id}`} retryTestID={`retry-delete-certificate-${id}`} message={certificateDeleteError.message} retryLabel={t("إعادة المحاولة", "Retry")} direction={direction} disabled={deletingCertificateId !== null} onRetry={() => void deleteCertificate(id, fileUrl)} /> : null}
                  </View>;
                })}
@@ -464,6 +573,73 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
         </>
       )}
     </Screen>
+    <Modal
+      visible={certificateViewer !== null}
+      animationType="fade"
+      presentationStyle="fullScreen"
+      onRequestClose={() => setCertificateViewer(null)}
+      testID="certificate-viewer"
+    >
+      <View
+        testID="certificate-viewer-content"
+        style={[
+          styles.viewerRoot,
+          {
+            backgroundColor: colors.background,
+            paddingTop: Math.max(insets.top, 12) + 8,
+            paddingBottom: Math.max(insets.bottom, 12),
+          },
+        ]}
+      >
+        <View style={[styles.viewerHeader, { borderBottomColor: colors.border, flexDirection: isRTL ? "row" : "row-reverse" }]}>
+          <Pressable
+            testID="close-certificate-viewer"
+            accessibilityRole="button"
+            accessibilityLabel={t("إغلاق عارض الشهادة", "Close certificate viewer")}
+            onPress={() => setCertificateViewer(null)}
+            hitSlop={8}
+            style={styles.viewerClose}
+          >
+            <Icon name="x" size={21} color={colors.foreground} />
+          </Pressable>
+          <View style={[styles.viewerHeading, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
+            <Text numberOfLines={1} style={[styles.viewerTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+              {certificateViewer?.name}
+            </Text>
+            <Text numberOfLines={1} style={[styles.viewerFileName, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+              {certificateViewer?.fileName}
+            </Text>
+          </View>
+        </View>
+        {certificateViewer?.kind === "image" && certificateViewer.url ? (
+          <Image
+            testID="certificate-image-preview"
+            accessibilityLabel={certificateViewer.name}
+            source={{ uri: certificateViewer.url }}
+            resizeMode="contain"
+            style={styles.viewerImage}
+          />
+        ) : (
+          <View
+            testID={certificateViewer?.kind === "pdf" ? "certificate-viewer-pdf-notice" : "certificate-viewer-unsupported-notice"}
+            style={styles.viewerNotice}
+          >
+            <View style={[styles.viewerNoticeIcon, { backgroundColor: colors.navySoft }]}>
+              <Icon name={certificateViewer?.kind === "pdf" ? "file-text" : "alert-circle"} size={30} color={colors.primary} />
+            </View>
+            <Text style={[styles.viewerNoticeTitle, { color: colors.foreground, writingDirection: direction }]}>
+              {certificateViewer?.kind === "pdf" ? "يلزم قارئ PDF داخلي" : "المعاينة غير متاحة لهذا الملف"}
+            </Text>
+            <Text style={[styles.viewerNoticeBody, { color: colors.mutedForeground, writingDirection: direction }]}>
+              {certificateViewer?.kind === "pdf"
+                ? "سيبقى الملف داخل التطبيق. يلزم إضافة قارئ PDF لعرضه هنا."
+                : "لا نفتح الشهادة في متصفح أو تطبيق خارجي."}
+            </Text>
+          </View>
+        )}
+      </View>
+    </Modal>
+    </>
   );
 }
 
@@ -616,9 +792,22 @@ const styles = StyleSheet.create({
   errorMessage: { flex: 1, fontSize: 10, lineHeight: 16, fontFamily: "Inter_500Medium" },
   errorRetry: { minHeight: 34, borderRadius: 9, alignItems: "center", justifyContent: "center", paddingHorizontal: 10 },
   errorRetryText: { fontSize: 9, fontFamily: "Inter_700Bold" },
-  certificate: { minHeight: 59, borderTopWidth: 1, flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12, paddingTop: 12 },
-  certificateCopy: { flex: 1, alignItems: "flex-end" },
+  certificate: { minHeight: 59, borderTopWidth: 1, alignItems: "center", gap: 10, marginTop: 12, paddingTop: 12 },
+  certificateCopy: { flex: 1, minWidth: 0, alignItems: "flex-end" },
   certificateName: { fontSize: 11, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
+  certificateView: { minHeight: 38, borderWidth: 1, borderRadius: 11, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  certificateViewText: { fontSize: 10, fontFamily: "Inter_700Bold" },
+  viewerRoot: { flex: 1, paddingHorizontal: 14 },
+  viewerHeader: { minHeight: 58, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 12, paddingBottom: 10 },
+  viewerClose: { width: 42, height: 42, alignItems: "center", justifyContent: "center" },
+  viewerHeading: { flex: 1, minWidth: 0 },
+  viewerTitle: { width: "100%", fontSize: 15, fontFamily: "Inter_700Bold" },
+  viewerFileName: { width: "100%", fontSize: 10, fontFamily: "Inter_400Regular", marginTop: 3 },
+  viewerImage: { flex: 1, width: "100%", marginVertical: 12 },
+  viewerNotice: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 22 },
+  viewerNoticeIcon: { width: 62, height: 62, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 16 },
+  viewerNoticeTitle: { fontSize: 18, fontFamily: "Inter_700Bold", textAlign: "center" },
+  viewerNoticeBody: { maxWidth: 320, fontSize: 13, lineHeight: 20, fontFamily: "Inter_400Regular", textAlign: "center", marginTop: 8 },
   toggle: { minHeight: 57, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   toggleText: { flex: 1, textAlign: "right", fontSize: 11, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
   toggleIcon: { width: 35, height: 35, borderRadius: 12, alignItems: "center", justifyContent: "center" },

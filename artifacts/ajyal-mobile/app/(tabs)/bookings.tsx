@@ -165,14 +165,13 @@ export default function BookingsScreen() {
     () => visibleSessions.filter((session) => localDayKey(new Date(session.scheduledAt)) === todayKey && session.status === 'upcoming'),
     [todayKey, visibleSessions],
   );
-  const bookingChannelSequence = useRef(0);
   const pendingRequestCount = role === 'teacher' ? incomingRequestRows.length : displayedRequests.filter(({ request }) => request.status === 'open').length;
   const activeSessionCount = visibleSessions.filter((session) => session.status === 'upcoming' || session.sessionStatus === 'in_progress').length;
 
   useEffect(() => {
     const client = supabase;
     if (!client || !profile?.id) return undefined;
-    const topic = `mobile-bookings-${role}-${profile.id}-${bookingChannelSequence.current += 1}`;
+    const topic = `mobile-bookings-${role}-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let channel: ReturnType<typeof client.channel> | null = null;
     try {
       channel = client
@@ -219,7 +218,7 @@ export default function BookingsScreen() {
         console.warn('[bookings] Could not remove realtime channel:', error);
       });
     };
-  }, [bookingChannelSequence, historyQuery.refetch, role, profile?.id, requestQuery.refetch, sessionsQuery.refetch]);
+  }, [historyQuery.refetch, role, profile?.id, requestQuery.refetch, sessionsQuery.refetch]);
 
   const openSession = (id: string) => {
     const session = scheduleSessions.find((item) => item.id === id);

@@ -549,6 +549,7 @@ function RootLayoutNav() {
         <Stack.Screen name="teacher-withdrawals" options={{ headerShown: false }} />
         <Stack.Screen name="call-wallet" options={{ headerShown: false }} />
         <Stack.Screen name="chat" options={{ headerShown: false }} />
+        <Stack.Screen name="help-center" options={{ headerShown: false }} />
         <Stack.Screen name="support" options={{ headerShown: false }} />
         <Stack.Screen name="rating" options={{ headerShown: false }} />
         <Stack.Screen name="booking" options={{ headerShown: false }} />

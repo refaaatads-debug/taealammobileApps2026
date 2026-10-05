@@ -19,7 +19,9 @@
     "test:availability": "node --experimental-strip-types --test lib/__tests__/teacherAvailability.test.mjs",
     "test:plugins": "node --test plugins/__tests__/*.test.cjs",
     "test:profile": "node --experimental-strip-types --test lib/__tests__/profilePersistence.test.mjs lib/__tests__/studentUnreadMessages.test.mjs",
-    "test:voice": "node --experimental-strip-types --test lib/__tests__/voiceAudioUpload.test.mjs",
+    "test:voice": "node --experimental-strip-types --test lib/__tests__/voiceAudioUpload.test.mjs lib/__tests__/recorderUnmount.test.mjs lib/__tests__/tutorBackNavigation.test.mjs lib/__tests__/aiAnswerAudio.test.mjs",
+    "test:calls": "node --experimental-strip-types --test lib/__tests__/internalCallDirection.test.mjs",
+    "test:auth-storage": "node --experimental-strip-types --test lib/__tests__/chunkedSecureStorage.test.mjs",
     "test:profile:ui": "node scripts/test-profile-ui.mjs",
     "test:profile:production": "node scripts/test-profile-ui.mjs --production-only",
     "typecheck": "tsc -p tsconfig.json --noEmit"

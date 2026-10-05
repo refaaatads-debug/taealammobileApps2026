@@ -94,6 +94,14 @@ export async function loadProfileData(
   userId: string,
   role: ProfileRole,
 ): Promise<ProfileData> {
+  return withTransientNetworkRetry(() => loadProfileDataOnce(client, userId, role));
+}
+
+async function loadProfileDataOnce(
+  client: ProfileDataClient,
+  userId: string,
+  role: ProfileRole,
+): Promise<ProfileData> {
   const baseResult = await client
     .from("profiles")
     .select("full_name,phone,teaching_stage,notify_before_session,notify_after_session,notify_subscription_expiry")
@@ -311,10 +319,91 @@ export async function getCertificateOpenUrl(
   if (!path) return fileUrl;
   if (!client) throw new Error("Certificate storage is unavailable.");
 
-  const result = await client.storage.from("support-files").createSignedUrl(path, 60 * 60);
+  const result = await createSignedCertificateUrl(client, path);
   throwIfError(result, "Could not prepare a secure certificate link.");
   if (!result.data?.signedUrl) throw new Error("Could not prepare a secure certificate link.");
   return result.data.signedUrl;
+}
+
+export async function restoreMissingTeacherCertificateFile(
+  client: ProfileDataClient,
+  userId: string,
+  fileUrl: string,
+  fileName: string,
+  mimeType: string | null | undefined,
+  bytes: ArrayBuffer,
+): Promise<void> {
+  if (!fileName) throw new Error("Choose the certificate image again.");
+  if (bytes.byteLength > MAX_CERTIFICATE_BYTES) {
+    throw new Error("The certificate file must be 10 MB or smaller.");
+  }
+
+  const extension = fileName.split(".").pop()?.toLowerCase() ?? "";
+  const imageTypes: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+  };
+  const inferredMimeType = imageTypes[extension];
+  if (!inferredMimeType || (mimeType && !CERTIFICATE_MIME_TYPES.has(mimeType)) || (mimeType && !mimeType.startsWith("image/"))) {
+    throw new Error("Choose a JPG, PNG, or WebP certificate image.");
+  }
+
+  const path = getCertificateStoragePath(fileUrl);
+  const segments = path?.split("/") ?? [];
+  if (
+    !path
+    || segments.length < 3
+    || segments[0] !== "certificates"
+    || segments[1] !== userId
+    || segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    throw new Error("This certificate cannot be restored to its saved storage path.");
+  }
+
+  const result = await client.storage
+    .from("support-files")
+    .upload(path, bytes, { contentType: mimeType ?? inferredMimeType, upsert: true });
+  throwIfError(result, "Could not restore the certificate file.");
+}
+
+function isTransientNetworkError(error: unknown, seen = new Set<object>()): boolean {
+  if (typeof error === "string") {
+    return /fetch failed|network request failed|stream.?reset|stream was reset|refused[\s_]+stream|econnreset|timed? ?out|timeout/i.test(error);
+  }
+  if (!error || typeof error !== "object" || seen.has(error)) return false;
+  seen.add(error);
+
+  const value = error as { message?: unknown; name?: unknown; cause?: unknown };
+  const message = [value.name, value.message].filter((part) => typeof part === "string").join(" ");
+  return /fetch failed|network request failed|stream.?reset|stream was reset|refused[\s_]+stream|econnreset|timed? ?out|timeout/i.test(message)
+    || isTransientNetworkError(value.cause, seen);
+}
+
+async function withTransientNetworkRetry<T>(operation: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === 2 || !isTransientNetworkError(error)) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+async function createSignedCertificateUrl(
+  client: ProfileDataClient,
+  path: string,
+) {
+  return withTransientNetworkRetry(async () => {
+    const result = await client.storage.from("support-files").createSignedUrl(path, 60 * 60);
+    if (result.error) throw result.error;
+    return result;
+  });
 }
 
 export async function deleteTeacherCertificate(

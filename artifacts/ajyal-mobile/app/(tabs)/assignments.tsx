@@ -13,6 +13,7 @@ import type { Assignment } from '@workspace/api-client-react';
 import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { useQueryClient } from '@tanstack/react-query';
+import { extractEdgeFunctionError } from '@/lib/edgeFunctionError';
 
 type SubmissionRow = Record<string, unknown>;
 type TeacherReviewStatus = 'submitted' | 'ai_graded' | 'reviewed' | 'mixed';
@@ -318,7 +319,20 @@ export default function AssignmentsScreen() {
       setGradingSubmissionId(id);
       Alert.alert(t('تم التصحيح المبدئي', 'AI review complete'), t('راجِع الدرجة والملاحظات ثم اعتمدها للطالب.', 'Review the score and feedback, then approve it for the student.'));
     } catch (error) {
-      Alert.alert(t('تعذر التصحيح بالذكاء الصناعي', 'AI grading failed'), error instanceof Error ? error.message : t('حاول مرة أخرى.', 'Please try again.'));
+      const functionError = await extractEdgeFunctionError(error);
+      const status = functionError.status;
+      if (status !== null) {
+        console.warn('[grade-assignment] Edge Function request failed', { httpStatus: status });
+      }
+      const errorMessage = status !== null
+        ? [
+          t(`لم يُكمل خادم التصحيح الطلب (HTTP ${status}). أعد المحاولة لاحقاً.`, `The grading service returned HTTP ${status}. Try again later.`),
+          functionError.message,
+        ].filter(Boolean).join('\n')
+        : error instanceof Error
+          ? error.message
+          : t('حاول مرة أخرى.', 'Please try again.');
+      Alert.alert(t('تعذر التصحيح بالذكاء الصناعي', 'AI grading failed'), errorMessage);
     } finally {
       setAiGradingSubmissionId(null);
     }

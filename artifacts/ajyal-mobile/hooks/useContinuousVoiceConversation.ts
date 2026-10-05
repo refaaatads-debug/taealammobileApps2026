@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { stopRecorderOnUnmount } from "@/lib/recorderUnmount";
 import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
@@ -8,6 +9,9 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
+import * as Speech from "expo-speech";
+import { normalizeAiAnswerAudio } from "@/lib/aiAnswerAudio";
+import { speakAiAnswer } from "@/lib/speakAiAnswer";
 
 export type ContinuousVoicePhase =
   | "idle"
@@ -20,10 +24,15 @@ export type VoiceQuestionContext = {
   isCurrent: () => boolean;
 };
 
+export type VoiceQuestionAnswer = {
+  text: string;
+  audio: string | null;
+};
+
 export type VoiceQuestionHandler = (
   uri: string,
   context: VoiceQuestionContext,
-) => Promise<string | null>;
+) => Promise<VoiceQuestionAnswer | null>;
 
 type UseContinuousVoiceConversationOptions = {
   onQuestion: VoiceQuestionHandler;
@@ -63,8 +72,12 @@ export function useContinuousVoiceConversation({
   const speechStartedAtRef = useRef<number | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPlaybackSessionRef = useRef<number | null>(null);
+  const pendingAnswerTextRef = useRef("");
   const playbackStartedRef = useRef(false);
   const playbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingReplayTextRef = useRef<string | null>(null);
+  const replayStartedRef = useRef(false);
+  const replayWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isCurrentSession = useCallback(
     (sessionId: number) => activeRef.current && sessionIdRef.current === sessionId,
@@ -82,12 +95,49 @@ export function useContinuousVoiceConversation({
     playbackWatchdogRef.current = null;
   }, []);
 
-  const playAudio = useCallback((base64: string | null | undefined) => {
-    if (!base64) return;
-    void setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
-    player.replace(`data:audio/mpeg;base64,${base64}`);
-    player.play();
+  const stopAnswerPlayback = useCallback(async () => {
+    pendingReplayTextRef.current = null;
+    replayStartedRef.current = false;
+    if (replayWatchdogRef.current) clearTimeout(replayWatchdogRef.current);
+    replayWatchdogRef.current = null;
+    try {
+      player.pause();
+    } catch {
+      // The player may already be released during navigation.
+    }
+    await Speech.stop().catch(() => {});
   }, [player]);
+
+  const playAudio = useCallback(async (
+    audio: string | null | undefined,
+    fallbackText?: string,
+  ): Promise<boolean> => {
+    await stopAnswerPlayback();
+    const source = normalizeAiAnswerAudio(audio);
+    if (!source) return false;
+    pendingReplayTextRef.current = fallbackText?.trim() || null;
+
+    try {
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      player.replace(source);
+      player.play();
+      if (pendingReplayTextRef.current) {
+        const replayText = pendingReplayTextRef.current;
+        replayWatchdogRef.current = setTimeout(() => {
+          if (pendingReplayTextRef.current !== replayText || replayStartedRef.current) return;
+          pendingReplayTextRef.current = null;
+          replayWatchdogRef.current = null;
+          void speakAiAnswer(replayText).catch((error) => onErrorRef.current(error));
+        }, PLAYER_START_TIMEOUT_MS);
+      }
+      return true;
+    } catch (error) {
+      pendingReplayTextRef.current = null;
+      if (replayWatchdogRef.current) clearTimeout(replayWatchdogRef.current);
+      replayWatchdogRef.current = null;
+      throw error;
+    }
+  }, [player, stopAnswerPlayback]);
 
   const startListening = useCallback(async (sessionId: number) => {
     if (!isCurrentSession(sessionId)) return;
@@ -114,11 +164,23 @@ export function useContinuousVoiceConversation({
     }
   }, [clearSpeechDetection, isCurrentSession, startListening]);
 
+  const speakThenResume = useCallback(async (sessionId: number, text: string) => {
+    if (!isCurrentSession(sessionId)) return;
+    setPhase("speaking");
+    try {
+      await speakAiAnswer(text);
+    } catch (error) {
+      if (isCurrentSession(sessionId)) onErrorRef.current(error);
+    }
+    if (isCurrentSession(sessionId)) await resumeListening(sessionId);
+  }, [isCurrentSession, resumeListening]);
+
   const submitUtterance = useCallback(async (sessionId: number) => {
     if (!isCurrentSession(sessionId) || processingTurnRef.current) return;
     processingTurnRef.current = true;
     clearSpeechDetection();
     setPhase("transcribing");
+    let answerText = "";
 
     try {
       if (recorder.isRecording) await recorder.stop();
@@ -129,22 +191,30 @@ export function useContinuousVoiceConversation({
       const uri = recorder.uri;
       if (!uri) throw new Error("لم يتم حفظ التسجيل الصوتي. حاول مرة أخرى.");
 
-      const replyAudio = await onQuestionRef.current(uri, {
+      const reply = await onQuestionRef.current(uri, {
         isCurrent: () => isCurrentSession(sessionId),
       });
       if (!isCurrentSession(sessionId)) return;
 
-      if (!replyAudio) {
+      answerText = reply?.text.trim() ?? "";
+      if (!reply || !answerText) {
         await resumeListening(sessionId);
+        return;
+      }
+
+      const audioSource = normalizeAiAnswerAudio(reply.audio);
+      if (!audioSource) {
+        await speakThenResume(sessionId, answerText);
         return;
       }
 
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
       if (!isCurrentSession(sessionId)) return;
       pendingPlaybackSessionRef.current = sessionId;
+      pendingAnswerTextRef.current = answerText;
       playbackStartedRef.current = false;
       setPhase("speaking");
-      player.replace(`data:audio/mpeg;base64,${replyAudio}`);
+      player.replace(audioSource);
       player.play();
 
       clearPlaybackWatchdog();
@@ -155,14 +225,24 @@ export function useContinuousVoiceConversation({
           && isCurrentSession(sessionId)
         ) {
           pendingPlaybackSessionRef.current = null;
-          onErrorRef.current(new Error("تعذر تشغيل الرد الصوتي. سأعود للاستماع."));
-          void resumeListening(sessionId);
+          const fallbackText = pendingAnswerTextRef.current;
+          pendingAnswerTextRef.current = "";
+          void speakThenResume(sessionId, fallbackText);
         }
       }, PLAYER_START_TIMEOUT_MS);
     } catch (error) {
       if (isCurrentSession(sessionId)) {
-        onErrorRef.current(error);
-        await resumeListening(sessionId);
+        const fallbackText = pendingAnswerTextRef.current || answerText;
+        pendingPlaybackSessionRef.current = null;
+        pendingAnswerTextRef.current = "";
+        playbackStartedRef.current = false;
+        clearPlaybackWatchdog();
+        if (fallbackText) {
+          await speakThenResume(sessionId, fallbackText);
+        } else {
+          onErrorRef.current(error);
+          await resumeListening(sessionId);
+        }
       }
     } finally {
       processingTurnRef.current = false;
@@ -174,6 +254,7 @@ export function useContinuousVoiceConversation({
     player,
     recorder,
     resumeListening,
+    speakThenResume,
   ]);
 
   const start = useCallback(async () => {
@@ -182,6 +263,7 @@ export function useContinuousVoiceConversation({
     setPhase("preparing");
 
     try {
+      await stopAnswerPlayback();
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
         throw new Error("اسمح للتطبيق باستخدام الميكروفون لبدء المحادثة الصوتية.");
@@ -201,7 +283,7 @@ export function useContinuousVoiceConversation({
     } finally {
       startLockRef.current = false;
     }
-  }, [clearSpeechDetection, startListening]);
+  }, [clearSpeechDetection, startListening, stopAnswerPlayback]);
 
   const end = useCallback(async () => {
     activeRef.current = false;
@@ -211,7 +293,13 @@ export function useContinuousVoiceConversation({
     clearSpeechDetection();
     clearPlaybackWatchdog();
     pendingPlaybackSessionRef.current = null;
+    pendingAnswerTextRef.current = "";
     playbackStartedRef.current = false;
+
+    if (replayWatchdogRef.current) clearTimeout(replayWatchdogRef.current);
+    replayWatchdogRef.current = null;
+    pendingReplayTextRef.current = null;
+    replayStartedRef.current = false;
 
     try {
       player.pause();
@@ -226,6 +314,7 @@ export function useContinuousVoiceConversation({
         onErrorRef.current(error);
       }
     }
+    await Speech.stop().catch(() => {});
     try {
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
     } catch (error) {
@@ -276,6 +365,26 @@ export function useContinuousVoiceConversation({
   ]);
 
   useEffect(() => {
+    if (pendingReplayTextRef.current) {
+      if (playerStatus.playing) {
+        replayStartedRef.current = true;
+        if (replayWatchdogRef.current) clearTimeout(replayWatchdogRef.current);
+        replayWatchdogRef.current = null;
+      } else if (playerStatus.error) {
+        const fallbackText = pendingReplayTextRef.current;
+        pendingReplayTextRef.current = null;
+        replayStartedRef.current = false;
+        if (replayWatchdogRef.current) clearTimeout(replayWatchdogRef.current);
+        replayWatchdogRef.current = null;
+        void speakAiAnswer(fallbackText).catch((error) => onErrorRef.current(error));
+      } else if (playerStatus.didJustFinish && replayStartedRef.current) {
+        pendingReplayTextRef.current = null;
+        replayStartedRef.current = false;
+        if (replayWatchdogRef.current) clearTimeout(replayWatchdogRef.current);
+        replayWatchdogRef.current = null;
+      }
+    }
+
     const sessionId = pendingPlaybackSessionRef.current;
     if (sessionId === null) return;
     if (!isCurrentSession(sessionId)) {
@@ -291,11 +400,21 @@ export function useContinuousVoiceConversation({
       return;
     }
 
-    if (playerStatus.error || (playerStatus.didJustFinish && playbackStartedRef.current)) {
+    if (playerStatus.error) {
       pendingPlaybackSessionRef.current = null;
+      const fallbackText = pendingAnswerTextRef.current;
+      pendingAnswerTextRef.current = "";
       playbackStartedRef.current = false;
       clearPlaybackWatchdog();
-      if (playerStatus.error) onErrorRef.current(new Error(playerStatus.error));
+      void speakThenResume(sessionId, fallbackText);
+      return;
+    }
+
+    if (playerStatus.didJustFinish && playbackStartedRef.current) {
+      pendingPlaybackSessionRef.current = null;
+      pendingAnswerTextRef.current = "";
+      playbackStartedRef.current = false;
+      clearPlaybackWatchdog();
       void resumeListening(sessionId);
     }
   }, [
@@ -305,6 +424,7 @@ export function useContinuousVoiceConversation({
     playerStatus.error,
     playerStatus.playing,
     resumeListening,
+    speakThenResume,
   ]);
 
   useEffect(() => () => {
@@ -312,17 +432,19 @@ export function useContinuousVoiceConversation({
     sessionIdRef.current += 1;
     clearSpeechDetection();
     clearPlaybackWatchdog();
+    if (replayWatchdogRef.current) clearTimeout(replayWatchdogRef.current);
     pendingPlaybackSessionRef.current = null;
+    pendingAnswerTextRef.current = "";
+    pendingReplayTextRef.current = null;
     try {
       player.pause();
     } catch {
       // The player may already be released during navigation.
     }
-    if (recorder.isRecording && !processingTurnRef.current) {
-      void recorder.stop().catch(() => {});
-    }
+    void Speech.stop().catch(() => {});
+    stopRecorderOnUnmount(recorder, processingTurnRef.current);
     void setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
   }, [clearPlaybackWatchdog, clearSpeechDetection, player, recorder]);
 
-  return { isActive, phase, start, end, playAudio };
+  return { isActive, phase, start, end, playAudio, stopAnswerPlayback };
 }

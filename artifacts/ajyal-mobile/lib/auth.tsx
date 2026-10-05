@@ -5,6 +5,7 @@ import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { unregisterPushToken } from "@workspace/api-client-react";
 import { supabase, supabaseConfigError } from "./supabase";
+import { createInitialAuthBootstrapGate } from "./authBootstrap";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -44,7 +45,6 @@ const AuthContext = createContext<AuthContextValue>({
 
 const AUTH_REQUEST_TIMEOUT_MS = 12_000;
 const OAUTH_BROWSER_TIMEOUT_MS = 120_000;
-const INITIAL_AUTH_GRACE_MS = 500;
 
 function withTimeout<T>(promise: PromiseLike<T>, message: string, timeoutMs = AUTH_REQUEST_TIMEOUT_MS): Promise<T> {
   return Promise.race([
@@ -107,26 +107,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     let mounted = true;
     const initialSessionVersion = authStateVersion.current;
-    const initialAuthEventReceived = { current: false };
-    let initialAuthFallback: ReturnType<typeof setTimeout> | null = null;
-    const finishSignedOutFallback = () => {
-      if (!mounted || initialAuthEventReceived.current || initialAuthFallback) return;
-      initialAuthFallback = setTimeout(() => {
-        initialAuthFallback = null;
-        if (!mounted || initialAuthEventReceived.current) return;
-        setUser(null);
-        setIsLoading(false);
-      }, INITIAL_AUTH_GRACE_MS);
-    };
+    const initialAuthBootstrap = createInitialAuthBootstrapGate((initialUser) => {
+      if (!mounted) return;
+      setUser(initialUser);
+      setIsLoading(false);
+    });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
       authStateVersion.current += 1;
       if (_event === "INITIAL_SESSION") {
-        initialAuthEventReceived.current = true;
-        if (initialAuthFallback) {
-          clearTimeout(initialAuthFallback);
-          initialAuthFallback = null;
-        }
+        initialAuthBootstrap.resolveFromInitialEvent(
+          session?.user ? mapUser(session.user) : null,
+        );
       }
       if (_event === "PASSWORD_RECOVERY") setIsPasswordRecovery(true);
       if (_event === "SIGNED_OUT") setIsPasswordRecovery(false);
@@ -141,24 +133,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(({ data }) => {
         const stale = authStateVersion.current !== initialSessionVersion;
         if (!mounted || stale) return;
-        if (data.session?.user) {
-          setUser(mapUser(data.session.user));
-          setIsLoading(false);
-        } else {
-          // Supabase can resolve storage just before emitting INITIAL_SESSION.
-          // Keep the auth gate closed briefly so a restored session never
-          // flashes the login form before that event arrives.
-          finishSignedOutFallback();
-        }
+        initialAuthBootstrap.resolveFromSessionQuery(
+          data.session?.user ? mapUser(data.session.user) : null,
+          stale,
+        );
       })
       .catch((error) => {
         if (!mounted) return;
         console.warn("[auth] Initial session could not be loaded:", error instanceof Error ? error.message : error);
-        finishSignedOutFallback();
+        // A failed/empty session query is not proof of sign-out. Keep waiting
+        // for INITIAL_SESSION; the root bootstrap timeout presents recovery.
       })
     return () => {
       mounted = false;
-      if (initialAuthFallback) clearTimeout(initialAuthFallback);
       listener.subscription.unsubscribe();
     };
   }, []);

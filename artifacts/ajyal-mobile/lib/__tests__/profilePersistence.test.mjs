@@ -4,6 +4,7 @@ import {
   deleteTeacherCertificate,
   getCertificateOpenUrl,
   loadProfileData,
+  restoreMissingTeacherCertificateFile,
   saveProfileData,
   uploadTeacherCertificate,
 } from "../profilePersistence.ts";
@@ -101,6 +102,41 @@ test("isolated teacher session saves and reloads professional, availability, ban
   );
 });
 
+test("profile loading retries a transient Supabase HTTP/2 stream reset", async () => {
+  let attempts = 0;
+  const client = {
+    from(table) {
+      assert.equal(table, "profiles");
+      return {
+        select() { return this; },
+        eq() { return this; },
+        async single() {
+          attempts += 1;
+          if (attempts === 1) {
+            throw new Error("fetch failed: okhttp3 StreamResetException: stream was reset: CANCEL");
+          }
+          return {
+            data: {
+              full_name: "طالبة استعيدت بياناتها",
+              phone: "0500000000",
+              teaching_stage: "الثانوية",
+              notify_before_session: true,
+              notify_after_session: true,
+              notify_subscription_expiry: false,
+            },
+            error: null,
+          };
+        },
+      };
+    },
+  };
+
+  const data = await loadProfileData(client, "student-test", "student");
+  assert.equal(attempts, 2);
+  assert.equal(data.fullName, "طالبة استعيدت بياناتها");
+  assert.equal(data.studentStage, "الثانوية");
+});
+
 test("certificate upload, secure open, reload, and deletion use isolated storage and rows", async () => {
   const session = createProfileTestSession("teacher");
   const files = new Map();
@@ -145,6 +181,94 @@ test("certificate upload, secure open, reload, and deletion use isolated storage
   assert.equal(files.size, 0);
   const afterDelete = await loadProfileData(client, session.user.id, session.role);
   assert.deepEqual(afterDelete.certificates, []);
+});
+
+test("a missing certificate image can be restored only to its existing owner-scoped path", async () => {
+  const session = createProfileTestSession("teacher");
+  const path = `certificates/${session.user.id}/123.png`;
+  const fileUrl = `https://storage-isolated.test/storage/v1/object/sign/support-files/${path}?token=expired`;
+  const tables = emptyTeacherTables(session);
+  tables.teacher_certificates.push({
+    id: "certificate-to-restore",
+    teacher_id: session.user.id,
+    name: "شهادة اختبار",
+    file_name: "certificate.png",
+    file_url: fileUrl,
+  });
+  const files = new Map();
+  const client = new IsolatedProfileClient(tables, files);
+
+  await assert.rejects(getCertificateOpenUrl(client, fileUrl), /File not found in isolated storage/);
+  await restoreMissingTeacherCertificateFile(
+    client,
+    session.user.id,
+    fileUrl,
+    "certificate.png",
+    "image/png",
+    new TextEncoder().encode("isolated image bytes").buffer,
+  );
+
+  assert.equal(files.has(path), true);
+  assert.match(await getCertificateOpenUrl(client, fileUrl), /^https:\/\/isolated-storage\.test\//);
+  await assert.rejects(
+    restoreMissingTeacherCertificateFile(
+      client,
+      "another-teacher",
+      fileUrl,
+      "certificate.png",
+      "image/png",
+      new TextEncoder().encode("isolated image bytes").buffer,
+    ),
+    /cannot be restored to its saved storage path/i,
+  );
+  assert.equal(files.size, 1);
+});
+
+test("certificate opening retries a transient HTTP/2 storage reset", async () => {
+  let attempts = 0;
+  const client = {
+    storage: {
+      from: () => ({
+        createSignedUrl: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            return {
+              data: null,
+              error: new Error("fetch failed: okhttp3 StreamResetException: stream was reset: REFUSED_STREAM"),
+            };
+          }
+          return {
+            data: { signedUrl: "https://isolated-storage.test/signed/certificate.pdf" },
+            error: null,
+          };
+        },
+      }),
+    },
+  };
+
+  const url = await getCertificateOpenUrl(client, "certificates/teacher-1/certificate.pdf");
+  assert.equal(attempts, 2);
+  assert.match(url, /signed\/certificate\.pdf$/);
+});
+
+test("certificate opening does not retry a permissions error", async () => {
+  let attempts = 0;
+  const client = {
+    storage: {
+      from: () => ({
+        createSignedUrl: async () => {
+          attempts += 1;
+          return { data: null, error: new Error("Object not found or access denied") };
+        },
+      }),
+    },
+  };
+
+  await assert.rejects(
+    getCertificateOpenUrl(client, "certificates/teacher-1/missing.pdf"),
+    /Object not found or access denied/,
+  );
+  assert.equal(attempts, 1);
 });
 
 test("failed teacher data loads reject instead of returning blank fields that could overwrite saved details", async () => {
