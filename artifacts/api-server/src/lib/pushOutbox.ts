@@ -110,15 +110,16 @@ export function buildChatPushNotification(
 
   const kind = payload.kind === "voice" || payload.kind === "file" ? payload.kind : "text";
   const body = kind === "voice"
-    ? "لديك رسالة صوتية جديدة."
+    ? "لديك رسالة صوتية جديدة في المحادثة."
     : kind === "file"
       ? "لديك مرفق جديد في المحادثة."
-      : "لديك رسالة جديدة في المحادثة.";
+      : "لديك رسالة نصية جديدة في المحادثة.";
+  const senderName = asNonEmptyString(payload.senderName);
 
   return {
     recipientId,
     notification: {
-      title: "رسالة جديدة",
+      title: senderName ? `رسالة من ${senderName}` : "رسالة جديدة في المحادثة",
       body,
       data: {
         type: "chat_message",
@@ -243,15 +244,19 @@ async function isCallStillValid(
   return call.caller_id === recipientId || call.callee_id === recipientId;
 }
 
-async function currentCallerName(callerId: string): Promise<string> {
-  const result = await db.execute(sql`
-    SELECT full_name
-    FROM public.profiles
-    WHERE user_id::text = ${callerId}
-    LIMIT 1
-  `);
-  const [profile] = rowsFrom<{ full_name?: string | null }>(result);
-  return asNonEmptyString(profile?.full_name) ?? "مستخدم أجيال المعرفة";
+async function currentProfileName(userId: string, fallback: string): Promise<string> {
+  try {
+    const result = await db.execute(sql`
+      SELECT full_name
+      FROM public.profiles
+      WHERE user_id::text = ${userId}
+      LIMIT 1
+    `);
+    const [profile] = rowsFrom<{ full_name?: string | null }>(result);
+    return asNonEmptyString(profile?.full_name)?.slice(0, 64) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 async function deliverCurrentEvent(event: PushOutboxEvent): Promise<boolean | "skip"> {
@@ -260,7 +265,9 @@ async function deliverCurrentEvent(event: PushOutboxEvent): Promise<boolean | "s
 
   if (event.event_type === "chat_message") {
     if (!await isMessageStillValid(payload)) return "skip";
-    return dispatchPushOutboxEvent(event);
+    const senderId = asNonEmptyString(payload.senderId);
+    if (senderId) payload.senderName = await currentProfileName(senderId, "مستخدم");
+    return dispatchPushOutboxEvent({ ...event, payload });
   }
 
   const eventType = event.event_type as CallPushEventType;
@@ -268,7 +275,7 @@ async function deliverCurrentEvent(event: PushOutboxEvent): Promise<boolean | "s
   if (eventType === "incoming_call") {
     const callerId = asNonEmptyString(payload.callerId);
     if (!callerId) return "skip";
-    payload.callerName = await currentCallerName(callerId);
+    payload.callerName = await currentProfileName(callerId, "مستخدم أجيال المعرفة");
     payload.callerRole = "معلم";
   }
   return dispatchPushOutboxEvent({ ...event, payload });

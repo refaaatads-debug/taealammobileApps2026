@@ -7,24 +7,26 @@ import {
   mergePushTokenBundle,
 } from "../pushTokenBundle.ts";
 import { __testing, sendApnsVoipPush } from "../apnsVoip.ts";
+import { sendExpoPushMessage } from "../expoPush.ts";
 import { buildChatPushNotification } from "../pushOutbox.ts";
 
 const expoToken = "ExpoPushToken[unit-test-token]";
 const voipToken = "ab".repeat(32);
 
-test("chat push content is generic and tied to one persisted message event", () => {
+test("chat push identifies the sender and message kind without exposing message content", () => {
   const notification = buildChatPushNotification("chat-message:message-1", {
     messageId: "message-1",
     bookingId: "booking-1",
     recipientId: "recipient-1",
+    senderName: "أحمد",
     kind: "voice",
   });
 
   assert.deepEqual(notification, {
     recipientId: "recipient-1",
     notification: {
-      title: "رسالة جديدة",
-      body: "لديك رسالة صوتية جديدة.",
+      title: "رسالة من أحمد",
+      body: "لديك رسالة صوتية جديدة في المحادثة.",
       data: {
         type: "chat_message",
         bookingId: "booking-1",
@@ -35,12 +37,61 @@ test("chat push content is generic and tied to one persisted message event", () 
     },
   });
   assert.equal(
+    buildChatPushNotification("chat-message:text-1", {
+      messageId: "text-1",
+      bookingId: "booking-1",
+      recipientId: "recipient-1",
+      senderName: "أحمد",
+      kind: "text",
+    })?.notification.body,
+    "لديك رسالة نصية جديدة في المحادثة.",
+  );
+  assert.equal(
+    buildChatPushNotification("chat-message:file-1", {
+      messageId: "file-1",
+      bookingId: "booking-1",
+      recipientId: "recipient-1",
+      senderName: "أحمد",
+      kind: "file",
+    })?.notification.body,
+    "لديك مرفق جديد في المحادثة.",
+  );
+  assert.equal(
     buildChatPushNotification("missing-message-id", {
       bookingId: "booking-1",
       recipientId: "recipient-1",
     }),
     null,
   );
+});
+
+test("Expo push delivery accepts both single-ticket and ticket-array response shapes", async () => {
+  const originalFetch = globalThis.fetch;
+  const message = {
+    to: expoToken,
+    data: { type: "chat_message" },
+    priority: "high",
+    ttl: 60,
+  };
+
+  try {
+    for (const data of [{ status: "ok" }, [{ status: "ok" }]]) {
+      let requestBody;
+      globalThis.fetch = async (_url, init) => {
+        requestBody = JSON.parse(String(init.body));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data }),
+        };
+      };
+
+      await sendExpoPushMessage(message);
+      assert.deepEqual(requestBody, [message]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("push token bundles round-trip Expo and APNs metadata", () => {

@@ -70,13 +70,15 @@ export type ExpoPushMessage = {
   _contentAvailable?: boolean;
 };
 
+type ExpoPushTicket = {
+  id?: string;
+  status?: string;
+  message?: string;
+  details?: { error?: string };
+};
+
 type ExpoPushResponse = {
-  data?: Array<{
-    id?: string;
-    status?: string;
-    message?: string;
-    details?: { error?: string };
-  }>;
+  data?: ExpoPushTicket | ExpoPushTicket[];
 };
 
 type ExpoReceiptResponse = {
@@ -137,7 +139,7 @@ export async function sendExpoPushMessage(message: ExpoPushMessage): Promise<voi
   const response = await fetch("https://exp.host/--/api/v2/push/send", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(message),
+    body: JSON.stringify([message]),
     signal: AbortSignal.timeout(8_000),
   });
 
@@ -148,7 +150,8 @@ export async function sendExpoPushMessage(message: ExpoPushMessage): Promise<voi
     // The status below still gives callers a useful provider failure.
   }
 
-  const ticket = result?.data?.[0];
+  const ticketData = result?.data;
+  const ticket = Array.isArray(ticketData) ? ticketData[0] : ticketData;
   const providerCode = ticket?.details?.error;
   console.info("[push] expo_ticket", {
     ticketId: ticket?.id ?? null,

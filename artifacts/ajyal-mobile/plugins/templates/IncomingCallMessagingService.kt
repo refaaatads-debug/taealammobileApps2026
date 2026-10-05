@@ -8,6 +8,8 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.RemoteMessage
 import expo.modules.notifications.service.ExpoFirebaseMessagingService
@@ -16,6 +18,7 @@ class IncomingCallMessagingService : ExpoFirebaseMessagingService() {
   companion object {
     private const val CHANNEL_ID = "incoming-call-native-v3"
     private const val NOTIFICATION_BASE_ID = 7300
+    private const val TAG = "IncomingCallService"
   }
 
   override fun onMessageReceived(message: RemoteMessage) {
@@ -53,7 +56,7 @@ class IncomingCallMessagingService : ExpoFirebaseMessagingService() {
       activityIntent,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
-    val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+    val builder = NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(android.R.drawable.ic_menu_call)
       .setContentTitle("مكالمة واردة")
       .setContentText("${data["callerName"] ?: "مستخدم"} يتصل بك الآن")
@@ -64,8 +67,30 @@ class IncomingCallMessagingService : ExpoFirebaseMessagingService() {
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
       .setContentIntent(pendingIntent)
       .setFullScreenIntent(pendingIntent, true)
-      .build()
-    notificationManager.notify(notificationId(callId), notification)
+
+    if (
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+      && !notificationManager.canUseFullScreenIntent()
+    ) {
+      Log.w(TAG, "Full-screen intent access is disabled; showing a settings action on the call notification")
+      val settingsIntent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+        data = Uri.parse("package:${applicationContext.packageName}")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      val settingsPendingIntent = PendingIntent.getActivity(
+        this,
+        callId.hashCode() + 1,
+        settingsIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+      builder.addAction(
+        android.R.drawable.ic_menu_manage,
+        "السماح بواجهة المكالمة الكاملة",
+        settingsPendingIntent,
+      )
+    }
+
+    notificationManager.notify(notificationId(callId), builder.build())
   }
 
   private fun closeIncomingCall(callId: String) {
