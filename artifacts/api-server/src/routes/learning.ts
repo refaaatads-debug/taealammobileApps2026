@@ -848,7 +848,8 @@ router.post("/booking-requests", async (req, res): Promise<void> => {
   }
   try {
     const notificationTitle = "طلب حجز جلسة جديد";
-    const notificationBody = `يرغب طالب في حجز جلسة ${remoteString(profile, "full_name", "display_name") ?? ""} لمادة ${input.subject}.`;
+    const studentName = remoteString(profile, "full_name", "display_name") ?? "طالب";
+    const notificationBody = `طلب جديد من ${studentName} لحصة ${input.subject} يوم ${formatDate(input.startsAt)} الساعة ${formatTime(input.startsAt)}.`;
     if (notificationTeacherIds.length) {
       await supabaseTable<RemoteRow>(supabaseToken, "notifications", {}, {
         method: "POST",

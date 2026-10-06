@@ -12,12 +12,13 @@ const RETRY_DELAYS_SECONDS = [2, 5, 15, 30, 60, 180, 300, 600];
 
 const OUTBOX_EVENT_TYPES = new Set<PushOutboxEventType>([
   "chat_message",
+  "session_reminder",
   "incoming_call",
   "call_accepted",
   "call_ended",
 ]);
 
-export type PushOutboxEventType = "chat_message" | CallPushEventType;
+export type PushOutboxEventType = "chat_message" | "session_reminder" | CallPushEventType;
 
 export type PushOutboxEvent = {
   id: string;
@@ -31,6 +32,8 @@ export type ChatPushNotification = {
   recipientId: string;
   notification: UserPushPayload;
 };
+
+const MAX_MESSAGE_PREVIEW_LENGTH = 160;
 
 export type PushDeliveryHandlers = {
   sendMessage: (recipientId: string, notification: UserPushPayload) => Promise<boolean>;
@@ -65,6 +68,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function messagePreview(value: unknown): string | null {
+  const normalized = asNonEmptyString(value)
+    ?.replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ");
+  if (!normalized) return null;
+  const characters = [...normalized];
+  if (characters.length <= MAX_MESSAGE_PREVIEW_LENGTH) return normalized;
+  return `${characters.slice(0, MAX_MESSAGE_PREVIEW_LENGTH - 1).join("").trimEnd()}…`;
 }
 
 function parseTimestamp(value: unknown): number | null {
@@ -113,7 +126,7 @@ export function buildChatPushNotification(
     ? "لديك رسالة صوتية جديدة في المحادثة."
     : kind === "file"
       ? "لديك مرفق جديد في المحادثة."
-      : "لديك رسالة نصية جديدة في المحادثة.";
+      : messagePreview(payload.messageText) ?? "لديك رسالة نصية جديدة في المحادثة.";
   const senderName = asNonEmptyString(payload.senderName);
 
   return {
@@ -127,6 +140,46 @@ export function buildChatPushNotification(
         messageId,
         eventId: eventKey,
         route: "/messages",
+      },
+    },
+  };
+}
+
+export function buildSessionReminderNotification(
+  eventKey: string,
+  payload: Record<string, unknown>,
+): ChatPushNotification | null {
+  const recipientId = asNonEmptyString(payload.recipientId);
+  const bookingId = asNonEmptyString(payload.bookingId);
+  const recipientRole = payload.recipientRole;
+  const subjectName = asNonEmptyString(payload.subjectName);
+  const scheduledAt = asNonEmptyString(payload.scheduledAt);
+  if (
+    !recipientId
+    || !bookingId
+    || (recipientRole !== "student" && recipientRole !== "teacher")
+    || !scheduledAt
+  ) return null;
+
+  const scheduledAtMs = Date.parse(scheduledAt);
+  if (!Number.isFinite(scheduledAtMs)) return null;
+  const time = new Intl.DateTimeFormat("ar-SA", {
+    timeZone: "Asia/Riyadh",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(scheduledAtMs);
+  const subject = subjectName?.slice(0, 80) ?? "الحصة";
+
+  return {
+    recipientId,
+    notification: {
+      title: "تذكير بموعد الحصة",
+      body: `موعد حصتك في مادة ${subject} الساعة ${time}.`,
+      data: {
+        type: "session_reminder",
+        bookingId,
+        eventId: eventKey,
+        route: "/bookings",
       },
     },
   };
@@ -146,6 +199,12 @@ export async function dispatchPushOutboxEvent(
     const message = buildChatPushNotification(event.event_key, payload);
     if (!message) return "skip";
     return handlers.sendMessage(message.recipientId, message.notification);
+  }
+
+  if (event.event_type === "session_reminder") {
+    const reminder = buildSessionReminderNotification(event.event_key, payload);
+    if (!reminder) return "skip";
+    return handlers.sendMessage(reminder.recipientId, reminder.notification);
   }
 
   const callId = asNonEmptyString(payload.callId);
@@ -173,6 +232,10 @@ async function hasOutboxTable(): Promise<boolean> {
   return outboxTableAvailable;
 }
 
+export async function isPushOutboxAvailable(): Promise<boolean> {
+  return hasOutboxTable();
+}
+
 export async function enqueuePushOutboxEvent(
   eventKey: string,
   eventType: PushOutboxEventType,
@@ -187,24 +250,35 @@ export async function enqueuePushOutboxEvent(
   return true;
 }
 
-async function isMessageStillValid(payload: Record<string, unknown>): Promise<boolean> {
+async function currentChatMessage(
+  payload: Record<string, unknown>,
+): Promise<{ kind: "text" | "voice" | "file"; content?: string } | null> {
   const messageId = asNonEmptyString(payload.messageId);
   const bookingId = asNonEmptyString(payload.bookingId);
   const senderId = asNonEmptyString(payload.senderId);
-  if (!messageId || !bookingId || !senderId) return false;
+  if (!messageId || !bookingId || !senderId) return null;
 
   const result = await db.execute(sql`
-    SELECT EXISTS (
-      SELECT 1
-      FROM public.chat_messages
-      WHERE id::text = ${messageId}
-        AND booking_id::text = ${bookingId}
-        AND sender_id::text = ${senderId}
-        AND is_filtered IS NOT TRUE
-    ) AS present
+    SELECT content, file_type
+    FROM public.chat_messages
+    WHERE id::text = ${messageId}
+      AND booking_id::text = ${bookingId}
+      AND sender_id::text = ${senderId}
+      AND is_filtered IS NOT TRUE
+    LIMIT 1
   `);
-  const [row] = rowsFrom<{ present?: boolean }>(result);
-  return row?.present === true;
+  const [row] = rowsFrom<{ content?: string | null; file_type?: string | null }>(result);
+  if (!row) return null;
+
+  const fileType = asNonEmptyString(row.file_type)?.toLowerCase();
+  const kind = !fileType
+    ? "text"
+    : fileType === "voice" || fileType.startsWith("audio/")
+      ? "voice"
+      : "file";
+  return kind === "text"
+    ? { kind, content: asNonEmptyString(row.content) ?? undefined }
+    : { kind };
 }
 
 async function isCallStillValid(
@@ -244,6 +318,55 @@ async function isCallStillValid(
   return call.caller_id === recipientId || call.callee_id === recipientId;
 }
 
+async function currentSessionReminder(
+  payload: Record<string, unknown>,
+): Promise<{ recipientRole: "student" | "teacher"; subjectName: string; scheduledAt: string } | null> {
+  const bookingId = asNonEmptyString(payload.bookingId);
+  const recipientId = asNonEmptyString(payload.recipientId);
+  const scheduledAt = asNonEmptyString(payload.scheduledAt);
+  if (!bookingId || !recipientId || !scheduledAt || !Number.isFinite(Date.parse(scheduledAt))) return null;
+
+  const result = await db.execute(sql`
+    SELECT
+      b.student_id::text AS student_id,
+      b.teacher_id::text AS teacher_id,
+      b.scheduled_at::text AS scheduled_at,
+      COALESCE(s.name, '') AS subject_name
+    FROM public.bookings AS b
+    LEFT JOIN public.subjects AS s ON s.id = b.subject_id
+    WHERE b.id::text = ${bookingId}
+      AND b.status = 'confirmed'
+      AND b.scheduled_at > now()
+      AND date_trunc('milliseconds', b.scheduled_at)
+        = date_trunc('milliseconds', ${scheduledAt}::timestamptz)
+    LIMIT 1
+  `);
+  const [booking] = rowsFrom<{
+    student_id?: string;
+    teacher_id?: string;
+    scheduled_at?: string;
+    subject_name?: string | null;
+  }>(result);
+  if (!booking?.scheduled_at) return null;
+
+  const recipientRole = booking.student_id === recipientId
+    ? "student"
+    : booking.teacher_id === recipientId
+      ? "teacher"
+      : null;
+  if (
+    !recipientRole
+    || recipientRole !== payload.recipientRole
+    || !Number.isFinite(Date.parse(booking.scheduled_at))
+  ) return null;
+
+  return {
+    recipientRole,
+    subjectName: asNonEmptyString(booking.subject_name) ?? "الحصة",
+    scheduledAt: booking.scheduled_at,
+  };
+}
+
 async function currentProfileName(userId: string, fallback: string): Promise<string> {
   try {
     const result = await db.execute(sql`
@@ -264,9 +387,25 @@ async function deliverCurrentEvent(event: PushOutboxEvent): Promise<boolean | "s
   if (!payload || !OUTBOX_EVENT_TYPES.has(event.event_type as PushOutboxEventType)) return "skip";
 
   if (event.event_type === "chat_message") {
-    if (!await isMessageStillValid(payload)) return "skip";
+    const message = await currentChatMessage(payload);
+    if (!message) return "skip";
+    payload.kind = message.kind;
+    if (message.kind === "text" && message.content) {
+      payload.messageText = message.content;
+    } else {
+      delete payload.messageText;
+    }
     const senderId = asNonEmptyString(payload.senderId);
     if (senderId) payload.senderName = await currentProfileName(senderId, "مستخدم");
+    return dispatchPushOutboxEvent({ ...event, payload });
+  }
+
+  if (event.event_type === "session_reminder") {
+    const reminder = await currentSessionReminder(payload);
+    if (!reminder) return "skip";
+    payload.recipientRole = reminder.recipientRole;
+    payload.subjectName = reminder.subjectName;
+    payload.scheduledAt = reminder.scheduledAt;
     return dispatchPushOutboxEvent({ ...event, payload });
   }
 

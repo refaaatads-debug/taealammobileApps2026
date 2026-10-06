@@ -6,6 +6,7 @@ import {
   encodePushTokenBundle,
   mergePushTokenBundle,
 } from "../pushTokenBundle.ts";
+import { pushDedupeKey } from "../pushDedupe.ts";
 import { __testing, sendApnsVoipPush } from "../apnsVoip.ts";
 import { sendExpoPushMessage } from "../expoPush.ts";
 import { buildChatPushNotification } from "../pushOutbox.ts";
@@ -13,13 +14,37 @@ import { buildChatPushNotification } from "../pushOutbox.ts";
 const expoToken = "ExpoPushToken[unit-test-token]";
 const voipToken = "ab".repeat(32);
 
-test("chat push identifies the sender and message kind without exposing message content", () => {
+test("message notifications dedupe by message, not by the whole booking", () => {
+  const firstMessage = pushDedupeKey("recipient", {
+    type: "chat_message",
+    bookingId: "booking-1",
+    messageId: "message-1",
+  });
+  const secondMessage = pushDedupeKey("recipient", {
+    type: "chat_message",
+    bookingId: "booking-1",
+    messageId: "message-2",
+  });
+
+  assert.notEqual(firstMessage, secondMessage);
+  assert.equal(
+    pushDedupeKey("recipient", {
+      type: "chat_message",
+      bookingId: "booking-1",
+      messageId: "message-1",
+    }),
+    firstMessage,
+  );
+});
+
+test("chat push identifies the sender and includes text content in the notification", () => {
   const notification = buildChatPushNotification("chat-message:message-1", {
     messageId: "message-1",
     bookingId: "booking-1",
     recipientId: "recipient-1",
     senderName: "أحمد",
     kind: "voice",
+    messageText: "لن يظهر هذا النص ضمن إشعار الرسالة الصوتية",
   });
 
   assert.deepEqual(notification, {
@@ -36,16 +61,15 @@ test("chat push identifies the sender and message kind without exposing message 
       },
     },
   });
-  assert.equal(
-    buildChatPushNotification("chat-message:text-1", {
-      messageId: "text-1",
-      bookingId: "booking-1",
-      recipientId: "recipient-1",
-      senderName: "أحمد",
-      kind: "text",
-    })?.notification.body,
-    "لديك رسالة نصية جديدة في المحادثة.",
-  );
+  const textNotification = buildChatPushNotification("chat-message:text-1", {
+    messageId: "text-1",
+    bookingId: "booking-1",
+    recipientId: "recipient-1",
+    senderName: "أحمد",
+    kind: "text",
+    messageText: "هل يناسبك موعد الحصة يوم غد؟",
+  });
+  assert.equal(textNotification?.notification.body, "هل يناسبك موعد الحصة يوم غد؟");
   assert.equal(
     buildChatPushNotification("chat-message:file-1", {
       messageId: "file-1",
@@ -53,8 +77,19 @@ test("chat push identifies the sender and message kind without exposing message 
       recipientId: "recipient-1",
       senderName: "أحمد",
       kind: "file",
+      messageText: "لن يظهر محتوى المرفق في الإشعار",
     })?.notification.body,
     "لديك مرفق جديد في المحادثة.",
+  );
+  assert.equal(
+    buildChatPushNotification("chat-message:long-text", {
+      messageId: "long-text",
+      bookingId: "booking-1",
+      recipientId: "recipient-1",
+      kind: "text",
+      messageText: "أ".repeat(200),
+    })?.notification.body.length,
+    160,
   );
   assert.equal(
     buildChatPushNotification("missing-message-id", {

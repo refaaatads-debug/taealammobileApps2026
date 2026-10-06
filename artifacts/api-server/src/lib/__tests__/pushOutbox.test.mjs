@@ -54,6 +54,37 @@ test("outbox dispatch routes one chat event through its stable message identity"
   assert.equal(captured.notification.body, "لديك مرفق جديد في المحادثة.");
 });
 
+test("session reminder events go to both roles with booking details", async () => {
+  let captured = null;
+  const result = await dispatchPushOutboxEvent({
+    event_key: "session-reminder:booking-1:student-1:1791306000000",
+    event_type: "session_reminder",
+    payload: {
+      bookingId: "booking-1",
+      recipientId: "student-1",
+      recipientRole: "student",
+      subjectName: "الرياضيات",
+      scheduledAt: "2026-10-06T10:00:00.000Z",
+    },
+  }, {
+    sendMessage: async (recipientId, notification) => {
+      captured = { recipientId, notification };
+      return true;
+    },
+    sendCall: async () => {
+      throw new Error("session reminders must not use the call sender");
+    },
+  });
+
+  assert.equal(result, true);
+  assert.equal(captured.recipientId, "student-1");
+  assert.equal(captured.notification.data.type, "session_reminder");
+  assert.equal(captured.notification.data.bookingId, "booking-1");
+  assert.equal(captured.notification.data.route, "/bookings");
+  assert.match(captured.notification.body, /الرياضيات/);
+  assert.match(captured.notification.body, /الساعة/);
+});
+
 test("malformed outbox events are skipped without attempting provider delivery", async () => {
   let calls = 0;
   const result = await dispatchPushOutboxEvent({
