@@ -41,6 +41,16 @@ test("incoming-call services forward messages to Expo Notifications", () => {
   assert.match(source, /super\.onMessageReceived\(message\)/);
 });
 
+test("locked or sleeping devices still receive the native incoming-call notification", () => {
+  const source = fs.readFileSync(nativeServiceTemplatePath, "utf8");
+  assert.match(source, /getSystemService\(Context\.POWER_SERVICE\) as PowerManager/);
+  assert.match(source, /getSystemService\(Context\.KEYGUARD_SERVICE\) as KeyguardManager/);
+  assert.match(
+    source,
+    /if \(!powerManager\.isInteractive \|\| keyguardManager\.isKeyguardLocked\) return false/,
+  );
+});
+
 async function applyPlugin(contents) {
   const config = withIncomingCallNative({ name: "ajyal-test", mods: {} });
   const appBuildGradleMod = config.mods.android.appBuildGradle;
