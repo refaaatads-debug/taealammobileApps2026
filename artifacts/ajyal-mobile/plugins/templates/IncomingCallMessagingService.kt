@@ -80,7 +80,7 @@ class IncomingCallMessagingService : ExpoFirebaseMessagingService() {
     ) {
       Log.w(TAG, "Full-screen intent access is disabled; showing a settings action on the call notification")
       val settingsIntent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
-        data = Uri.parse("package:${applicationContext.packageName}")
+        setData(Uri.parse("package:${applicationContext.packageName}"))
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       }
       val settingsPendingIntent = PendingIntent.getActivity(
