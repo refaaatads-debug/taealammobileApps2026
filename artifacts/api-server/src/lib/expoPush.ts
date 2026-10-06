@@ -62,6 +62,7 @@ export type ExpoPushMessage = {
   title?: string;
   body?: string;
   data: Record<string, unknown>;
+  richContent?: { image: string };
   sound?: string;
   priority: "high";
   ttl: number;

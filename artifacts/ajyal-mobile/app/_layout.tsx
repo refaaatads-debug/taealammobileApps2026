@@ -80,7 +80,7 @@ const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
 
 function RootLayoutNav() {
   const colors = useColors();
-  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, user } = useAuth();
+  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, retrySessionRestore, user } = useAuth();
   const { profile, role, roleResolved, profileError, retryProfile, logout: logoutAjyal, isLoading: profileLoading } = useAjyal();
   const { t } = useAppPreferences();
   const pathname = usePathname();
@@ -288,10 +288,18 @@ function RootLayoutNav() {
       <AccessStateScreen
         title={authLoading ? t("تعذر استعادة الجلسة", "Couldn't restore your session") : t("تعذر تحميل ملف الحساب", "Couldn't load your account")}
         body={authLoading
-          ? t("استغرق الاتصال بمنصة أجيال المعرفة وقتاً أطول من المتوقع. يمكنك العودة لتسجيل الدخول والمحاولة مرة أخرى.", "Connecting to Ajyal Knowledge is taking longer than expected. Return to sign in and try again.")
+          ? t("استغرقت استعادة الجلسة وقتاً أطول من المتوقع. أعد المحاولة؛ لن يتم تسجيل الخروج تلقائياً.", "Restoring your session is taking longer than expected. Retry; you won't be signed out automatically.")
           : t("تم تسجيل الدخول، لكن لم تصل بيانات الملف والصلاحيات من المنصة. تحقق من الاتصال ثم أعد المحاولة.", "You are signed in, but your profile and permissions did not arrive. Check your connection and try again.")}
-        actionLabel={authLoading ? t("العودة لتسجيل الدخول", "Return to sign in") : t("إعادة المحاولة", "Try again")}
-        onAction={() => void (authLoading ? logoutAjyal() : retryProfile())}
+        actionLabel={t("إعادة المحاولة", "Try again")}
+        onAction={() => {
+          if (authLoading) {
+            void retrySessionRestore().catch((error) => {
+              console.warn("[auth] Session restore retry failed:", error instanceof Error ? error.message : error);
+            });
+            return;
+          }
+          void retryProfile();
+        }}
         colors={colors}
       />
     );

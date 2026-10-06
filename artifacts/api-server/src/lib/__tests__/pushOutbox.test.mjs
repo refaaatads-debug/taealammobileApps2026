@@ -95,6 +95,7 @@ test("platform notification rows become background push alerts with stable ident
     title: "إشعار من الإدارة",
     body: "تم تحديث سياسة المنصة.",
     type: "admin_announcement",
+    image_url: "https://cdn.example.com/notices/platform-update.jpg",
   });
 
   assert.deepEqual(built, {
@@ -102,10 +103,12 @@ test("platform notification rows become background push alerts with stable ident
     notification: {
       title: "إشعار من الإدارة",
       body: "تم تحديث سياسة المنصة.",
+      richContent: { image: "https://cdn.example.com/notices/platform-update.jpg" },
       data: {
         type: "admin_announcement",
         notificationId: "notification-1",
         eventId: eventKey,
+        imageUrl: "https://cdn.example.com/notices/platform-update.jpg",
       },
     },
   });

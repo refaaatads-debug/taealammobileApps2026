@@ -162,6 +162,8 @@ export interface PushNotificationRequest {
      * @maxLength 128
      */
   bookingId?: string;
+  /** HTTPS image URL for rich push notifications. */
+  imageUrl?: string;
 }
 
 export interface PushDeliveryResult {
@@ -541,6 +543,8 @@ export interface Notification {
   route?: string;
   /** Related booking identifier when available */
   bookingId?: string;
+  /** Optional HTTPS image URL attached to the notification */
+  imageUrl?: string;
 }
 
 export interface ReadAllNotificationsResult {

@@ -2,6 +2,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { sendCallPushNotification, type CallPushEvent, type CallPushEventType } from "./callPush";
 import { logger } from "./logger";
+import { findNotificationImageUrl } from "./notificationImage";
 import { sendUserPushNotification, type UserPushPayload } from "./userPush";
 
 const POLL_INTERVAL_MS = 1_000;
@@ -195,16 +196,19 @@ export function buildPlatformNotification(
   const title = asNonEmptyString(payload.title);
   const body = asNonEmptyString(payload.body);
   if (!recipientId || !notificationId || !title || !body) return null;
+  const imageUrl = findNotificationImageUrl(payload);
 
   return {
     recipientId,
     notification: {
       title,
       body,
+      ...(imageUrl ? { richContent: { image: imageUrl } } : {}),
       data: {
         type: asNonEmptyString(payload.type) ?? "system_notification",
         notificationId,
         eventId: eventKey,
+        ...(imageUrl ? { imageUrl } : {}),
       },
     },
   };
@@ -431,7 +435,7 @@ async function currentSessionReminder(
 
 async function currentPlatformNotification(
   payload: Record<string, unknown>,
-): Promise<{ title: string; body: string; type: string } | null> {
+): Promise<{ title: string; body: string; type: string; imageUrl?: string } | null> {
   const notificationId = asNonEmptyString(payload.notificationId);
   const recipientId = asNonEmptyString(payload.recipientId);
   if (!notificationId || !recipientId) return null;
@@ -440,7 +444,8 @@ async function currentPlatformNotification(
     SELECT
       n.title,
       n.body,
-      COALESCE(to_jsonb(n) ->> 'type', 'system_notification') AS notification_type
+      COALESCE(to_jsonb(n) ->> 'type', 'system_notification') AS notification_type,
+      to_jsonb(n) AS notification_row
     FROM public.notifications AS n
     WHERE n.id::text = ${notificationId}
       AND n.user_id::text = ${recipientId}
@@ -450,6 +455,7 @@ async function currentPlatformNotification(
     title?: string | null;
     body?: string | null;
     notification_type?: string | null;
+    notification_row?: unknown;
   }>(result);
   const title = asNonEmptyString(row?.title);
   const body = asNonEmptyString(row?.body);
@@ -459,6 +465,9 @@ async function currentPlatformNotification(
     title,
     body,
     type: asNonEmptyString(row?.notification_type) ?? "system_notification",
+    ...(row?.notification_row
+      ? { imageUrl: findNotificationImageUrl(row.notification_row) ?? undefined }
+      : {}),
   };
 }
 
@@ -510,6 +519,11 @@ async function deliverCurrentEvent(event: PushOutboxEvent): Promise<boolean | "s
     payload.title = notification.title;
     payload.body = notification.body;
     payload.type = notification.type;
+    if (notification.imageUrl) {
+      payload.imageUrl = notification.imageUrl;
+    } else {
+      delete payload.imageUrl;
+    }
     return dispatchPushOutboxEvent({ ...event, payload });
   }
 

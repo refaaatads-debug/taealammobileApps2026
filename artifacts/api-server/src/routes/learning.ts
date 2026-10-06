@@ -28,6 +28,7 @@ import crypto from "node:crypto";
 import { db, assignmentsTable, bookingsTable, notificationsTable, usersTable } from "@workspace/db";
 import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
+import { findNotificationImageUrl } from "../lib/notificationImage";
 import { getSupabaseProfile, hasSupabaseRole, readBearerToken, supabaseRpc, supabaseTable } from "../lib/supabaseAuth";
 import { normalizeStage, normalizeStageList } from "../lib/teachingStages";
 
@@ -1373,6 +1374,7 @@ function mapRemoteNotification(row: RemoteRow) {
   const explicitRoute = remoteString(row, "route");
   const route = explicitRoute ?? notificationRouteForType(type, title, body, remoteString(row, "icon") ?? "");
   const bookingId = remoteString(row, "booking_id", "bookingId");
+  const imageUrl = findNotificationImageUrl(row);
   return {
     id: String(row.id),
     title,
@@ -1383,6 +1385,7 @@ function mapRemoteNotification(row: RemoteRow) {
     ...(type ? { type } : {}),
     ...(route ? { route } : {}),
     ...(bookingId ? { bookingId } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
   };
 }
 

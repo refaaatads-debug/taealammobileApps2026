@@ -158,7 +158,8 @@ export const SendUserNotificationBody = zod.object({
   "body": zod.string().min(1).max(sendUserNotificationBodyBodyMax),
   "type": zod.string().min(1).max(sendUserNotificationBodyTypeMax),
   "route": zod.enum(['/bookings', '/messages', '/notifications', '/assignments', '/support', '/subscription', '/invoices', '/profile']).optional(),
-  "bookingId": zod.string().min(1).max(sendUserNotificationBodyBookingIdMax).optional()
+  "bookingId": zod.string().min(1).max(sendUserNotificationBodyBookingIdMax).optional(),
+  "imageUrl": zod.string().optional().describe('HTTPS image URL for rich push notifications.')
 })
 
 export const SendUserNotificationResponse = zod.object({
@@ -691,7 +692,8 @@ export const ListMyNotificationsResponseItem = zod.object({
   "unread": zod.boolean(),
   "type": zod.string().optional().describe('Notification category from the platform'),
   "route": zod.string().optional().describe('In-app route to open when the notification is pressed'),
-  "bookingId": zod.string().optional().describe('Related booking identifier when available')
+  "bookingId": zod.string().optional().describe('Related booking identifier when available'),
+  "imageUrl": zod.string().optional().describe('Optional HTTPS image URL attached to the notification')
 })
 export const ListMyNotificationsResponse = zod.array(ListMyNotificationsResponseItem)
 
@@ -715,7 +717,8 @@ export const MarkNotificationReadResponse = zod.object({
   "unread": zod.boolean(),
   "type": zod.string().optional().describe('Notification category from the platform'),
   "route": zod.string().optional().describe('In-app route to open when the notification is pressed'),
-  "bookingId": zod.string().optional().describe('Related booking identifier when available')
+  "bookingId": zod.string().optional().describe('Related booking identifier when available'),
+  "imageUrl": zod.string().optional().describe('Optional HTTPS image URL attached to the notification')
 })
 
 

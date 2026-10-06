@@ -10,7 +10,7 @@ import {
 import { pushDedupeKey } from "./pushDedupe";
 import { decodePushTokenBundle } from "./pushTokenBundle";
 
-export type UserPushPayload = Pick<ExpoPushMessage, "title" | "body" | "data"> & Partial<Pick<ExpoPushMessage, "sound" | "priority" | "ttl" | "channelId">>;
+export type UserPushPayload = Pick<ExpoPushMessage, "title" | "body" | "data"> & Partial<Pick<ExpoPushMessage, "richContent" | "sound" | "priority" | "ttl" | "channelId">>;
 
 const recentPushes = new Map<string, number>();
 const PUSH_DEDUPE_WINDOW_MS = 60_000;
@@ -65,6 +65,7 @@ export async function sendUserPushNotification(userId: string, payload: UserPush
       title: payload.title,
       body: payload.body,
       data: payload.data,
+      ...(payload.richContent ? { richContent: payload.richContent } : {}),
       sound: payload.sound ?? presentation.sound,
       priority: payload.priority ?? "high",
       ttl: payload.ttl ?? 3600,

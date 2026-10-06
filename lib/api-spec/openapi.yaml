@@ -969,6 +969,9 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+        imageUrl:
+          type: string
+          description: HTTPS image URL for rich push notifications.
     PushDeliveryResult:
       type: object
       required: [delivered]
@@ -1278,6 +1281,7 @@ components:
         type: { type: string, description: Notification category from the platform }
         route: { type: string, description: In-app route to open when the notification is pressed }
         bookingId: { type: string, description: Related booking identifier when available }
+        imageUrl: { type: string, description: Optional HTTPS image URL attached to the notification }
     ReadAllNotificationsResult:
       type: object
       required: [updated]

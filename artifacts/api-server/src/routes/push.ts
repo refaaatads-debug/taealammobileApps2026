@@ -18,6 +18,7 @@ import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
 import crypto from "node:crypto";
 import { decodePushTokenBundle, mergePushTokenBundle } from "../lib/pushTokenBundle";
+import { findNotificationImageUrl } from "../lib/notificationImage";
 import { getSupabaseRoles, readBearerToken, supabaseTable } from "../lib/supabaseAuth";
 import { sendUserPushNotification } from "../lib/userPush";
 import { hasPushEligibleRole, incomingCallRowMatches } from "../lib/pushIdentity";
@@ -165,6 +166,7 @@ router.post("/push/notifications", async (req, res): Promise<void> => {
     parsed.data.title,
     parsed.data.body,
   );
+  const imageUrl = findNotificationImageUrl({ imageUrl: parsed.data.imageUrl });
   const delivered = await sendLegacyPlatformNotification(
     notificationId,
     () => sendUserPushNotification(parsed.data.recipientId, {
@@ -175,7 +177,9 @@ router.post("/push/notifications", async (req, res): Promise<void> => {
         ...(notificationId ? { notificationId } : {}),
         ...(parsed.data.route ? { route: parsed.data.route } : {}),
         ...(parsed.data.bookingId ? { bookingId: parsed.data.bookingId } : {}),
+        ...(imageUrl ? { imageUrl } : {}),
       },
+      ...(imageUrl ? { richContent: { image: imageUrl } } : {}),
     }),
   );
   res.status(202).json(SendUserNotificationResponse.parse({ delivered }));

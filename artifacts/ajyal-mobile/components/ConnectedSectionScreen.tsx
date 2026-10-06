@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Linking, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { VideoView, useVideoPlayer } from "expo-video";
 import { useColors } from "@/hooks/useColors";
@@ -255,28 +256,31 @@ function dateLabel(value: string | null, locale = "ar-SA"): string {
   return new Intl.DateTimeFormat(locale, { day: "numeric", month: "long", year: "numeric" }).format(date);
 }
 
-function useRemoteData<T>(loader: () => Promise<T>, dependencies: unknown[]) {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const reload = useCallback(() => {
-    let active = true;
-    setLoading(true);
-    setError(null);
-    void loader().then((value) => {
-      if (active) setData(value);
-    }).catch((reason: unknown) => {
-      if (active) setError(reason instanceof Error ? reason.message : "تعذر تحميل البيانات");
-    }).finally(() => {
-      if (active) setLoading(false);
-    });
-    return () => { active = false; };
-    // The caller controls the loader's inputs through dependencies.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, dependencies);
+function useRemoteData<T>(key: readonly unknown[], loader: () => Promise<T>, refreshToken?: unknown) {
+  const query = useQuery<T, Error>({
+    queryKey: ["connected-section", ...key],
+    queryFn: loader,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  });
+  const previousRefreshToken = React.useRef(refreshToken);
+  useEffect(() => {
+    if (previousRefreshToken.current === refreshToken) return;
+    previousRefreshToken.current = refreshToken;
+    void query.refetch();
+  }, [query.refetch, refreshToken]);
 
-  useEffect(() => reload(), [reload]);
-  return { data, loading, error, reload };
+  const reload = useCallback(async () => {
+    await query.refetch();
+  }, [query.refetch]);
+  const error = query.data === undefined && query.error
+    ? query.error.message || "تعذر تحميل البيانات"
+    : null;
+  return { data: query.data ?? null, loading: query.isLoading, error, reload };
 }
 
 function SectionHeader({ eyebrow, title, avatarText }: { eyebrow: string; title: string; avatarText?: string }) {
@@ -340,7 +344,7 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
     deductions: ConsumptionRecord[];
     freeTrialUsed: boolean;
     profileComplete: boolean;
-  }>(async () => {
+  }>(["subscriptions", user?.id, detail], async () => {
     if (!supabase || !user) return { plans: [], subscriptions: [], deductions: [], freeTrialUsed: false, profileComplete: false };
     const [plansResult, subscriptionsResult, profileResult] = await Promise.all([
       supabase.from("subscription_plans").select("*").order("price", { ascending: true }),
@@ -364,20 +368,29 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
       if (bookings.length) {
         const bookingIds = bookings.map((booking) => String(booking.id));
         const teacherIds = [...new Set(bookings.map((booking) => text(booking, "teacher_id")).filter(Boolean))] as string[];
-        const teacherProfilesResult = teacherIds.length
-          ? await supabase.from("teacher_profiles").select("id, user_id").in("user_id", teacherIds)
-          : { data: [], error: null };
+        const teachersNeedingSubjectFallback = [...new Set(bookings
+          .filter((booking) => {
+            const subject = booking.subjects;
+            return !subject || typeof subject !== "object" || !text(subject as Row, "name");
+          })
+          .map((booking) => text(booking, "teacher_id"))
+          .filter(Boolean))] as string[];
+        const [sessionsResult, profilesResult, teacherProfilesResult] = await Promise.all([
+          supabase.from("sessions").select("booking_id, duration_minutes, duration_seconds, deducted_minutes, short_session, started_at, ended_at").in("booking_id", bookingIds),
+          teacherIds.length ? supabase.from("public_profiles").select("user_id, full_name").in("user_id", teacherIds) : Promise.resolve({ data: [], error: null }),
+          teachersNeedingSubjectFallback.length
+            ? supabase.from("teacher_profiles").select("id, user_id").in("user_id", teachersNeedingSubjectFallback)
+            : Promise.resolve({ data: [], error: null }),
+        ]);
+        if (sessionsResult.error) throw sessionsResult.error;
+        if (profilesResult.error) throw profilesResult.error;
         if (teacherProfilesResult.error) throw teacherProfilesResult.error;
         const teacherProfiles = (teacherProfilesResult.data ?? []) as Row[];
         const userIdToProfileId = new Map(teacherProfiles.map((profileRow) => [String(profileRow.user_id), String(profileRow.id)]));
         const profileIds = teacherProfiles.map((profileRow) => String(profileRow.id));
-        const [sessionsResult, profilesResult, teacherSubjectsResult] = await Promise.all([
-          supabase.from("sessions").select("booking_id, duration_minutes, duration_seconds, deducted_minutes, short_session, started_at, ended_at").in("booking_id", bookingIds),
-          teacherIds.length ? supabase.from("public_profiles").select("user_id, full_name").in("user_id", teacherIds) : Promise.resolve({ data: [], error: null }),
-          profileIds.length ? supabase.from("teacher_subjects").select("teacher_id, subjects(name)").in("teacher_id", profileIds) : Promise.resolve({ data: [], error: null }),
-        ]);
-        if (sessionsResult.error) throw sessionsResult.error;
-        if (profilesResult.error) throw profilesResult.error;
+        const teacherSubjectsResult = profileIds.length
+          ? await supabase.from("teacher_subjects").select("teacher_id, subjects(name)").in("teacher_id", profileIds)
+          : { data: [], error: null };
         if (teacherSubjectsResult.error) throw teacherSubjectsResult.error;
         const sessionsByBooking = new Map((sessionsResult.data ?? []).map((session) => [String(session.booking_id), session as Row]));
         const namesByTeacher = new Map((profilesResult.data ?? []).map((profileRow) => [String(profileRow.user_id), text(profileRow as Row, "full_name") ?? "معلم"]));
@@ -418,7 +431,7 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
       freeTrialUsed: profile?.free_trial_used === true,
       profileComplete: Boolean(profile?.full_name && profile?.phone && profile?.teaching_stage),
     };
-  }, [user?.id, detail, revision]);
+  }, revision);
   const activeRows = (query.data?.subscriptions ?? []).filter((row) => subscriptionStatus(row) === "فعال");
   const endedRows = (query.data?.subscriptions ?? []).filter((row) => subscriptionStatus(row) !== "فعال");
   const active = activeRows[0];
@@ -429,7 +442,7 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
   const aggregateTotalMinutes = activeRows.reduce((sum, row) => sum + totalMinutesForSubscription(row, planById.get(String(row.plan_id))), 0);
   const usedMinutes = Math.max(0, aggregateTotalMinutes - aggregateRemainingMinutes);
   const usagePercent = aggregateTotalMinutes > 0 ? Math.min(100, (usedMinutes / aggregateTotalMinutes) * 100) : 0;
-  const overallStatus = subscriptionStatus(active ?? null);
+  const overallStatus = query.data ? subscriptionStatus(active ?? null) : null;
 
   const checkout = async (plan: Row) => {
     if (!supabase) return;
@@ -492,8 +505,8 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
          <View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("بيانات من حساب المنصة", "Data from your platform account")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{detail ? t("خطتك الحالية", "Your current plan") : t("اختر ما يناسب هدفك", "Choose what fits your goal")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("المعلومات المعروضة متزامنة من Supabase مباشرة.", "This information syncs directly from Supabase.")}</Text></View>
       </View>
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-         <View style={styles.cardTop}><Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{activePlan ? text(activePlan, "name", "name_en", "name_ar") ?? t("الاشتراك الحالي", "Current plan") : t("لا يوجد اشتراك فعال", "No active plan")}</Text><Text style={[styles.badge, statusStyle(overallStatus, colors)]}>{t(overallStatus, overallStatus === "فعال" ? "Active" : overallStatus === "منتهي" ? "Ended" : overallStatus === "موقوف" ? "Paused" : "Not subscribed")}</Text></View>
-         {activeRows.length ? <><ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(aggregateRemainingSessions)} ${t("جلسة", "sessions")}`} /><ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(aggregateRemainingMinutes)} ${t("دقيقة", "min")}`} /><ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(active, "starts_at", "created_at"), locale)} /><ValueRow label={t("تاريخ الانتهاء", "End date")} value={dateLabel(text(active, "ends_at"), locale)} /></> : <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("يمكنك اختيار إحدى الباقات المتاحة للبدء في حجز الجلسات.", "Choose one of the available plans to start booking sessions.")}</Text>}
+         <View style={styles.cardTop}><Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{activePlan ? text(activePlan, "name", "name_en", "name_ar") ?? t("الاشتراك الحالي", "Current plan") : query.data ? t("لا يوجد اشتراك فعال", "No active plan") : t("جارٍ تحميل بيانات الاشتراك…", "Loading subscription…")}</Text>{overallStatus ? <Text style={[styles.badge, statusStyle(overallStatus, colors)]}>{t(overallStatus, overallStatus === "فعال" ? "Active" : overallStatus === "منتهي" ? "Ended" : overallStatus === "موقوف" ? "Paused" : "Not subscribed")}</Text> : <Text style={[styles.badge, { color: colors.mutedForeground, backgroundColor: colors.background }]}>{t("جارٍ التحميل…", "Loading…")}</Text>}</View>
+         {activeRows.length ? <><ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(aggregateRemainingSessions)} ${t("جلسة", "sessions")}`} /><ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(aggregateRemainingMinutes)} ${t("دقيقة", "min")}`} /><ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(active, "starts_at", "created_at"), locale)} /><ValueRow label={t("تاريخ الانتهاء", "End date")} value={dateLabel(text(active, "ends_at"), locale)} /></> : query.data ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("يمكنك اختيار إحدى الباقات المتاحة للبدء في حجز الجلسات.", "Choose one of the available plans to start booking sessions.")}</Text> : null}
       </View>
       {detail && query.data && activeRows.length ? (
         <View style={[styles.usageCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -666,7 +679,7 @@ function InvoicesScreen() {
   const { user } = useAuth();
   const { t, direction } = useAppPreferences();
   const revision = useRealtimeRefresh(user?.id, ["invoices"]);
-  const query = useRemoteData<Row[]>(async () => {
+  const query = useRemoteData<Row[]>(["invoices", user?.id], async () => {
     if (!supabase || !user) return [];
     const invoicesResult = await supabase
       .from("invoices")
@@ -675,7 +688,7 @@ function InvoicesScreen() {
       .order("issued_at", { ascending: false });
     if (invoicesResult.error) throw invoicesResult.error;
     return (invoicesResult.data ?? []) as Row[];
-  }, [user?.id, revision]);
+  }, revision);
   return (
     <Screen>
       <SectionHeader eyebrow={t("سجل الفواتير", "Invoice history")} title={t("الفواتير", "Invoices")} avatarText={user?.email?.slice(0, 1)} />
@@ -699,7 +712,7 @@ function WalletScreen() {
   const { user } = useAuth();
   const { role } = useAjyal();
   const { t, direction, locale } = useAppPreferences();
-  const query = useRemoteData(async () => {
+  const query = useRemoteData(["wallet", user?.id, role], async () => {
     if (role !== "teacher" || !supabase || !user) return { wallet: null, transactions: [], earnings: [] };
     const [walletResult, transactionsResult, earningsResult] = await Promise.all([
       supabase.from("wallets").select("*").eq("user_id", user.id).maybeSingle(),
@@ -710,7 +723,7 @@ function WalletScreen() {
     if (transactionsResult.error) throw transactionsResult.error;
     if (earningsResult.error) throw earningsResult.error;
     return { wallet: walletResult.data as Row | null, transactions: (transactionsResult.data ?? []) as Row[], earnings: (earningsResult.data ?? []) as Row[] };
-  }, [user?.id, role]);
+  });
   if (role !== "teacher") {
     return <Screen><SectionHeader eyebrow={t("صلاحيات الحساب", "Account access")} title={t("المحفظة والأرباح", "Wallet and earnings")} avatarText={user?.email?.slice(0, 1)} /><EmptyState icon="lock" title={t("هذه الصفحة للمعلم فقط", "Teachers only")} body={t("لا يمكن الوصول إلى بيانات المحفظة من حساب الطالب.", "Student accounts cannot access wallet data.")} /></Screen>;
   }
@@ -873,7 +886,7 @@ function MaterialsScreen({ teacher }: { teacher: boolean }) {
   const { t: baseT, direction, locale } = useAppPreferences();
   const t = (arabic: string, english = "Check your connection and try again.") => baseT(arabic, english);
   const materialsRevision = useMaterialsRealtimeRefresh(user?.id, teacher);
-  const query = useRemoteData(async () => {
+  const query = useRemoteData(["session-materials", user?.id, teacher], async () => {
     if (!supabase || !user) return [];
     const column = teacher ? "teacher_id" : "student_id";
     const result = await supabase.from("session_materials").select("*").eq(column, user.id).eq("is_deleted", false).gt("expires_at", new Date().toISOString()).order("created_at", { ascending: false });
@@ -929,7 +942,7 @@ function MaterialsScreen({ teacher }: { teacher: boolean }) {
         days_remaining: Math.max(0, Math.ceil((new Date(text(material, "expires_at") ?? "").getTime() - Date.now()) / (1000 * 60 * 60 * 24))),
       };
     }) as Row[];
-  }, [user?.id, teacher, materialsRevision]);
+  }, materialsRevision);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const [recordingTitle, setRecordingTitle] = useState("");
   const [recordingLoading, setRecordingLoading] = useState(false);

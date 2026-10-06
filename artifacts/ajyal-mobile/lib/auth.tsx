@@ -23,6 +23,7 @@ type AuthContextValue = {
   isAuthenticated: boolean;
   isPasswordRecovery: boolean;
   beginPasswordRecovery: () => void;
+  retrySessionRestore: () => Promise<boolean>;
   login: (mode?: 'login' | 'signup', role?: 'student' | 'teacher', credentials?: { email: string; password: string; fullName?: string }) => Promise<void>;
   loginWithGoogle: (role?: 'student' | 'teacher', isSignup?: boolean) => Promise<void>;
   completePendingRole: (authenticatedEmail?: string | null) => Promise<void>;
@@ -36,6 +37,7 @@ const AuthContext = createContext<AuthContextValue>({
   isAuthenticated: false,
   isPasswordRecovery: false,
   beginPasswordRecovery: () => undefined,
+  retrySessionRestore: async () => false,
   login: async () => undefined,
   loginWithGoogle: async () => undefined,
   completePendingRole: async () => undefined,
@@ -114,12 +116,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
-      authStateVersion.current += 1;
       if (_event === "INITIAL_SESSION") {
         initialAuthBootstrap.resolveFromInitialEvent(
           session?.user ? mapUser(session.user) : null,
+          authStateVersion.current !== initialSessionVersion,
         );
+        return;
       }
+      authStateVersion.current += 1;
       if (_event === "PASSWORD_RECOVERY") setIsPasswordRecovery(true);
       if (_event === "SIGNED_OUT") setIsPasswordRecovery(false);
       if (_event === "SIGNED_IN" && deferSignedInUser.current) {
@@ -335,6 +339,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsPasswordRecovery(true);
   }, []);
 
+  const retrySessionRestore = useCallback(async () => {
+    if (!supabase) return false;
+    authStateVersion.current += 1;
+    const restoreVersion = authStateVersion.current;
+    setIsLoading(true);
+    try {
+      const { data, error } = await withTimeout(
+        supabase.auth.getSession(),
+        "انتهت مهلة استعادة الجلسة",
+      );
+      if (error) throw error;
+      if (authStateVersion.current !== restoreVersion) {
+        return Boolean(data.session?.user);
+      }
+      const restoredUser = data.session?.user ? mapUser(data.session.user) : null;
+      setUser(restoredUser);
+      setIsLoading(false);
+      return Boolean(restoredUser);
+    } catch (error) {
+      // A timeout or storage/network failure does not prove the user signed out.
+      // Keep the sign-in form hidden and let the user retry without losing the
+      // persisted Supabase session.
+      if (authStateVersion.current === restoreVersion) setIsLoading(true);
+      throw error;
+    }
+  }, []);
+
   const logout = useCallback(async () => {
     // Update the UI immediately. Local auth cleanup must not hold the user
     // inside the account screen while SecureStore or the network responds.
@@ -350,7 +381,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  return <AuthContext.Provider value={{ user, isLoading, isAuthenticated: !!user, isPasswordRecovery, beginPasswordRecovery, login, loginWithGoogle, completePendingRole, completePasswordRecovery, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, isLoading, isAuthenticated: !!user, isPasswordRecovery, beginPasswordRecovery, retrySessionRestore, login, loginWithGoogle, completePendingRole, completePasswordRecovery, logout }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {
