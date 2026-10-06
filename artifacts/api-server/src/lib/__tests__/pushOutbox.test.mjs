@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   dispatchPushOutboxEvent,
   buildPlatformNotification,
+  sendLegacyPlatformNotification,
   isCallEventCurrent,
   retryDelaySeconds,
 } from "../pushOutbox.ts";
@@ -139,6 +140,41 @@ test("platform notification rows become background push alerts with stable ident
   assert.equal(captured.recipientId, "recipient-1");
   assert.equal(captured.notification.data.notificationId, "notification-1");
   assert.equal(captured.notification.data.type, "booking_request");
+});
+
+test("legacy direct notification delivery is skipped when its row is already in the durable outbox", async () => {
+  let directAttempts = 0;
+  let checkedId = null;
+  const delivered = await sendLegacyPlatformNotification(
+    "notification-1",
+    async () => {
+      directAttempts += 1;
+      return true;
+    },
+    async (notificationId) => {
+      checkedId = notificationId;
+      return true;
+    },
+  );
+
+  assert.equal(delivered, true);
+  assert.equal(checkedId, "notification-1");
+  assert.equal(directAttempts, 0);
+});
+
+test("legacy direct notification delivery falls back when no outbox event exists", async () => {
+  let directAttempts = 0;
+  const delivered = await sendLegacyPlatformNotification(
+    "notification-2",
+    async () => {
+      directAttempts += 1;
+      return true;
+    },
+    async () => false,
+  );
+
+  assert.equal(delivered, true);
+  assert.equal(directAttempts, 1);
 });
 
 test("malformed outbox events are skipped without attempting provider delivery", async () => {

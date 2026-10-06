@@ -267,6 +267,37 @@ export async function isPushOutboxAvailable(): Promise<boolean> {
   return hasOutboxTable();
 }
 
+export async function hasPlatformNotificationOutboxEvent(notificationId: string): Promise<boolean | null> {
+  try {
+    if (!await hasOutboxTable()) return null;
+    const eventKey = `platform-notification:${notificationId}`;
+    const result = await db.execute(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM public.push_delivery_outbox
+        WHERE event_key = ${eventKey}
+      ) AS queued
+    `);
+    const [row] = rowsFrom<{ queued?: boolean }>(result);
+    return row?.queued === true;
+  } catch (error) {
+    logger.warn({
+      reason: "platform_notification_outbox_lookup_failed",
+      errorName: error instanceof Error ? error.name : "unknown",
+    }, "Could not check whether a platform notification is already queued");
+    return null;
+  }
+}
+
+export async function sendLegacyPlatformNotification(
+  notificationId: string | null,
+  sendDirect: () => Promise<boolean>,
+  checkQueued: (notificationId: string) => Promise<boolean | null> = hasPlatformNotificationOutboxEvent,
+): Promise<boolean> {
+  if (notificationId && await checkQueued(notificationId)) return true;
+  return sendDirect();
+}
+
 export async function enqueuePushOutboxEvent(
   eventKey: string,
   eventType: PushOutboxEventType,

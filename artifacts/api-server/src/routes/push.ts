@@ -21,7 +21,7 @@ import { decodePushTokenBundle, mergePushTokenBundle } from "../lib/pushTokenBun
 import { getSupabaseRoles, readBearerToken, supabaseTable } from "../lib/supabaseAuth";
 import { sendUserPushNotification } from "../lib/userPush";
 import { hasPushEligibleRole, incomingCallRowMatches } from "../lib/pushIdentity";
-import { enqueuePushOutboxEvent } from "../lib/pushOutbox";
+import { enqueuePushOutboxEvent, sendLegacyPlatformNotification } from "../lib/pushOutbox";
 
 const router: IRouter = Router();
 
@@ -165,16 +165,19 @@ router.post("/push/notifications", async (req, res): Promise<void> => {
     parsed.data.title,
     parsed.data.body,
   );
-  const delivered = await sendUserPushNotification(parsed.data.recipientId, {
-    title: parsed.data.title,
-    body: parsed.data.body,
-    data: {
-      type: parsed.data.type,
-      ...(notificationId ? { notificationId } : {}),
-      ...(parsed.data.route ? { route: parsed.data.route } : {}),
-      ...(parsed.data.bookingId ? { bookingId: parsed.data.bookingId } : {}),
-    },
-  });
+  const delivered = await sendLegacyPlatformNotification(
+    notificationId,
+    () => sendUserPushNotification(parsed.data.recipientId, {
+      title: parsed.data.title,
+      body: parsed.data.body,
+      data: {
+        type: parsed.data.type,
+        ...(notificationId ? { notificationId } : {}),
+        ...(parsed.data.route ? { route: parsed.data.route } : {}),
+        ...(parsed.data.bookingId ? { bookingId: parsed.data.bookingId } : {}),
+      },
+    }),
+  );
   res.status(202).json(SendUserNotificationResponse.parse({ delivered }));
 });
 
