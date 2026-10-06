@@ -154,20 +154,21 @@ async function createInstantSession({
     body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
     type: "instant_session",
   });
-  await customFetch<{ delivered: boolean }>("/api/push/notifications", {
-    method: "POST",
-    body: JSON.stringify({
-      recipientId: teacherId,
-      title: "طلب جلسة فورية",
-      body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
-      type: "instant_session",
-      route: "/bookings",
-      bookingId: booking.id,
-    }),
-  }).catch(() => undefined);
+  if (notificationError) {
+    await customFetch<{ delivered: boolean }>("/api/push/notifications", {
+      method: "POST",
+      body: JSON.stringify({
+        recipientId: teacherId,
+        title: "طلب جلسة فورية",
+        body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
+        type: "instant_session",
+        route: "/bookings",
+        bookingId: booking.id,
+      }),
+    }).catch(() => undefined);
+  }
   // The booking is authoritative. A notification delivery failure must not
   // make the user retry and accidentally create a second instant booking.
-  void notificationError;
   return booking.id as string;
 }
 

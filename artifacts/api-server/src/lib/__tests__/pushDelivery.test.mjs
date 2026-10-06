@@ -37,6 +37,24 @@ test("message notifications dedupe by message, not by the whole booking", () => 
   );
 });
 
+test("platform push calls dedupe against the persisted notification identity", () => {
+  const first = pushDedupeKey("recipient", {
+    type: "admin_announcement",
+    notificationId: "notification-1",
+  });
+  const sameNotification = pushDedupeKey("recipient", {
+    type: "admin_announcement",
+    notificationId: "notification-1",
+  });
+  const nextNotification = pushDedupeKey("recipient", {
+    type: "admin_announcement",
+    notificationId: "notification-2",
+  });
+
+  assert.equal(sameNotification, first);
+  assert.notEqual(nextNotification, first);
+});
+
 test("chat push identifies the sender and includes text content in the notification", () => {
   const notification = buildChatPushNotification("chat-message:message-1", {
     messageId: "message-1",

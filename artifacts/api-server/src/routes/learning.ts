@@ -30,7 +30,6 @@ import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { getSupabaseProfile, hasSupabaseRole, readBearerToken, supabaseRpc, supabaseTable } from "../lib/supabaseAuth";
 import { normalizeStage, normalizeStageList } from "../lib/teachingStages";
-import { sendUserPushNotification } from "../lib/userPush";
 
 const router: IRouter = Router();
 
@@ -243,15 +242,6 @@ async function maybeCreateFirstImpressionNotification(
         type: "first_impression",
       icon: "star",
       }),
-    });
-    void sendUserPushNotification(teacherId, {
-      title,
-      body,
-      data: {
-        type: "first_impression",
-        route: "/bookings",
-        dedupeKey: `first-impression:${teacherId}:${studentId}`,
-      },
     });
   } catch {
     // The booking remains authoritative if the optional first-impression
@@ -860,15 +850,6 @@ router.post("/booking-requests", async (req, res): Promise<void> => {
           type: "booking_request",
         }))),
       });
-      await Promise.all(notificationTeacherIds.map((teacherId) => sendUserPushNotification(teacherId, {
-        title: notificationTitle,
-        body: notificationBody,
-        data: {
-          type: "booking_request",
-          route: "/bookings",
-          bookingId: String(created[0].id),
-        },
-      })));
     }
   } catch {
     // A notification failure must not undo an already-created booking request.
@@ -1038,15 +1019,6 @@ router.post("/booking-requests/group", async (req, res): Promise<void> => {
           type: "booking_request",
         }))),
       });
-      await Promise.all(notificationTeacherIds.map((teacherId) => sendUserPushNotification(teacherId, {
-        title: notificationTitle,
-        body: notificationBody,
-        data: {
-          type: "booking_request",
-          route: "/bookings",
-          bookingId: groupId,
-        },
-      })));
     }
   } catch {
     // A notification failure must not undo an already-created booking group.
@@ -1242,17 +1214,6 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
           icon: "check-circle",
         }),
       });
-      void sendUserPushNotification(studentId, {
-        title: count > 1 ? `✅ تم تأكيد ${count} حصص` : "✅ تم تأكيد الحجز",
-        body: count > 1
-          ? `أكّد المعلم ${teacherName} جميع حصصك في ${subjectName}.`
-          : `أكّد المعلم ${teacherName} حجز حصة ${subjectName}.`,
-        data: {
-          type: "booking_confirmed",
-          route: "/bookings",
-          bookingId: String(bookings[0].id),
-        },
-      });
     } catch {
       // Notification delivery is best effort after the booking is confirmed.
     }
@@ -1293,17 +1254,6 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
           type: "booking_rejected",
           icon: "alert-circle",
         }),
-      });
-      void sendUserPushNotification(studentId, {
-        title: rejectedCount > 1 ? `تم رفض ${rejectedCount} طلبات حجز` : "تم رفض طلب الحجز",
-        body: rejectedCount > 1
-          ? `رفض المعلم ${teacherName} طلباتك في ${subjectName}.`
-          : `رفض المعلم ${teacherName} طلب حصة ${subjectName}.`,
-        data: {
-          type: "booking_rejected",
-          route: "/bookings",
-          bookingId: params.data.id,
-        },
       });
     } catch {
       // Rejection is authoritative even if notification delivery fails.
@@ -1840,17 +1790,6 @@ router.patch("/sessions/:id/cancel", async (req, res): Promise<void> => {
           type: "booking_cancelled",
         }),
       });
-      void sendUserPushNotification(recipientId, {
-        title: isTeacher ? "🗑️ تم إلغاء حصتك" : "🗑️ ألغى الطالب الحصة",
-        body: isTeacher
-          ? `قام المعلم ${teacherName} بإلغاء حصة ${subjectName}.`
-          : `قام الطالب بإلغاء حصة ${subjectName}.`,
-        data: {
-          type: "booking_cancelled",
-          bookingId: params.data.id,
-          route: "/bookings",
-        },
-      });
     } catch {
       // Cancellation state is authoritative even if notification delivery fails.
     }
@@ -1875,15 +1814,7 @@ router.patch("/sessions/:id/cancel", async (req, res): Promise<void> => {
                     body: `تجاوز المعلم ${teacherName} حد الإلغاءات الشهري (${monthlyCount}/3).`,
                     type: "teacher_cancellation_warning",
                   }),
-                }).then(() => sendUserPushNotification(adminId, {
-                  title: "تنبيه إلغاءات معلم",
-                  body: `تجاوز المعلم ${teacherName} حد الإلغاءات الشهري (${monthlyCount}/3).`,
-                  data: {
-                    type: "teacher_cancellation_warning",
-                    route: "/notifications",
-                    dedupeKey: `teacher-cancellation-warning:${userId}:${monthlyCount}`,
-                  },
-                }).catch(() => undefined));
+                });
           }));
         }
       } catch {

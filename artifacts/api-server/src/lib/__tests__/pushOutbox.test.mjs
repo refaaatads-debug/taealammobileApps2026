@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   dispatchPushOutboxEvent,
+  buildPlatformNotification,
   isCallEventCurrent,
   retryDelaySeconds,
 } from "../pushOutbox.ts";
@@ -83,6 +84,61 @@ test("session reminder events go to both roles with booking details", async () =
   assert.equal(captured.notification.data.route, "/bookings");
   assert.match(captured.notification.body, /الرياضيات/);
   assert.match(captured.notification.body, /الساعة/);
+});
+
+test("platform notification rows become background push alerts with stable identity", async () => {
+  const eventKey = "platform-notification:notification-1";
+  const built = buildPlatformNotification(eventKey, {
+    notificationId: "notification-1",
+    recipientId: "recipient-1",
+    title: "إشعار من الإدارة",
+    body: "تم تحديث سياسة المنصة.",
+    type: "admin_announcement",
+  });
+
+  assert.deepEqual(built, {
+    recipientId: "recipient-1",
+    notification: {
+      title: "إشعار من الإدارة",
+      body: "تم تحديث سياسة المنصة.",
+      data: {
+        type: "admin_announcement",
+        notificationId: "notification-1",
+        eventId: eventKey,
+      },
+    },
+  });
+  assert.equal(buildPlatformNotification(eventKey, {
+    notificationId: "notification-2",
+    recipientId: "recipient-1",
+    title: "تنبيه",
+  }), null);
+
+  let captured = null;
+  const result = await dispatchPushOutboxEvent({
+    event_key: eventKey,
+    event_type: "platform_notification",
+    payload: {
+      notificationId: "notification-1",
+      recipientId: "recipient-1",
+      title: "طلب حجز جديد",
+      body: "لديك طلب حجز جديد.",
+      type: "booking_request",
+    },
+  }, {
+    sendMessage: async (recipientId, notification) => {
+      captured = { recipientId, notification };
+      return true;
+    },
+    sendCall: async () => {
+      throw new Error("platform notifications must not use the call sender");
+    },
+  });
+
+  assert.equal(result, true);
+  assert.equal(captured.recipientId, "recipient-1");
+  assert.equal(captured.notification.data.notificationId, "notification-1");
+  assert.equal(captured.notification.data.type, "booking_request");
 });
 
 test("malformed outbox events are skipped without attempting provider delivery", async () => {

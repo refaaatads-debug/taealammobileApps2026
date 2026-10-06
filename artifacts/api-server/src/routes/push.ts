@@ -13,8 +13,8 @@ import {
   SendIncomingCallResponse,
   UnregisterPushTokenResponse,
 } from "@workspace/api-zod";
-import { db, pushTokensTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { db, notificationsTable, pushTokensTable } from "@workspace/db";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
 import crypto from "node:crypto";
 import { decodePushTokenBundle, mergePushTokenBundle } from "../lib/pushTokenBundle";
@@ -31,6 +31,31 @@ function requireUser(req: Request, res: Response): string | null {
     return null;
   }
   return req.user.id;
+}
+
+async function findRecentNotificationId(
+  recipientId: string,
+  title: string,
+  body: string,
+): Promise<string | null> {
+  try {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.user_id', ${recipientId}, true)`);
+      const [notification] = await tx.select({ id: notificationsTable.id })
+        .from(notificationsTable)
+        .where(and(
+          eq(notificationsTable.userId, recipientId),
+          eq(notificationsTable.title, title),
+          eq(notificationsTable.body, body),
+          gt(notificationsTable.createdAt, new Date(Date.now() - 60_000)),
+        ))
+        .orderBy(desc(notificationsTable.createdAt))
+        .limit(1);
+      return notification?.id ?? null;
+    });
+  } catch {
+    return null;
+  }
 }
 
 router.post("/push-tokens", async (req, res): Promise<void> => {
@@ -135,11 +160,17 @@ router.post("/push/notifications", async (req, res): Promise<void> => {
     return;
   }
 
+  const notificationId = await findRecentNotificationId(
+    parsed.data.recipientId,
+    parsed.data.title,
+    parsed.data.body,
+  );
   const delivered = await sendUserPushNotification(parsed.data.recipientId, {
     title: parsed.data.title,
     body: parsed.data.body,
     data: {
       type: parsed.data.type,
+      ...(notificationId ? { notificationId } : {}),
       ...(parsed.data.route ? { route: parsed.data.route } : {}),
       ...(parsed.data.bookingId ? { bookingId: parsed.data.bookingId } : {}),
     },

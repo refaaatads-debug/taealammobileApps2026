@@ -12,13 +12,14 @@ const RETRY_DELAYS_SECONDS = [2, 5, 15, 30, 60, 180, 300, 600];
 
 const OUTBOX_EVENT_TYPES = new Set<PushOutboxEventType>([
   "chat_message",
+  "platform_notification",
   "session_reminder",
   "incoming_call",
   "call_accepted",
   "call_ended",
 ]);
 
-export type PushOutboxEventType = "chat_message" | "session_reminder" | CallPushEventType;
+export type PushOutboxEventType = "chat_message" | "platform_notification" | "session_reminder" | CallPushEventType;
 
 export type PushOutboxEvent = {
   id: string;
@@ -185,6 +186,30 @@ export function buildSessionReminderNotification(
   };
 }
 
+export function buildPlatformNotification(
+  eventKey: string,
+  payload: Record<string, unknown>,
+): ChatPushNotification | null {
+  const recipientId = asNonEmptyString(payload.recipientId);
+  const notificationId = asNonEmptyString(payload.notificationId);
+  const title = asNonEmptyString(payload.title);
+  const body = asNonEmptyString(payload.body);
+  if (!recipientId || !notificationId || !title || !body) return null;
+
+  return {
+    recipientId,
+    notification: {
+      title,
+      body,
+      data: {
+        type: asNonEmptyString(payload.type) ?? "system_notification",
+        notificationId,
+        eventId: eventKey,
+      },
+    },
+  };
+}
+
 export async function dispatchPushOutboxEvent(
   event: Pick<PushOutboxEvent, "event_key" | "event_type" | "payload">,
   handlers: PushDeliveryHandlers = {
@@ -205,6 +230,12 @@ export async function dispatchPushOutboxEvent(
     const reminder = buildSessionReminderNotification(event.event_key, payload);
     if (!reminder) return "skip";
     return handlers.sendMessage(reminder.recipientId, reminder.notification);
+  }
+
+  if (event.event_type === "platform_notification") {
+    const notification = buildPlatformNotification(event.event_key, payload);
+    if (!notification) return "skip";
+    return handlers.sendMessage(notification.recipientId, notification.notification);
   }
 
   const callId = asNonEmptyString(payload.callId);
@@ -367,6 +398,39 @@ async function currentSessionReminder(
   };
 }
 
+async function currentPlatformNotification(
+  payload: Record<string, unknown>,
+): Promise<{ title: string; body: string; type: string } | null> {
+  const notificationId = asNonEmptyString(payload.notificationId);
+  const recipientId = asNonEmptyString(payload.recipientId);
+  if (!notificationId || !recipientId) return null;
+
+  const result = await db.execute(sql`
+    SELECT
+      n.title,
+      n.body,
+      COALESCE(to_jsonb(n) ->> 'type', 'system_notification') AS notification_type
+    FROM public.notifications AS n
+    WHERE n.id::text = ${notificationId}
+      AND n.user_id::text = ${recipientId}
+    LIMIT 1
+  `);
+  const [row] = rowsFrom<{
+    title?: string | null;
+    body?: string | null;
+    notification_type?: string | null;
+  }>(result);
+  const title = asNonEmptyString(row?.title);
+  const body = asNonEmptyString(row?.body);
+  if (!title || !body) return null;
+
+  return {
+    title,
+    body,
+    type: asNonEmptyString(row?.notification_type) ?? "system_notification",
+  };
+}
+
 async function currentProfileName(userId: string, fallback: string): Promise<string> {
   try {
     const result = await db.execute(sql`
@@ -406,6 +470,15 @@ async function deliverCurrentEvent(event: PushOutboxEvent): Promise<boolean | "s
     payload.recipientRole = reminder.recipientRole;
     payload.subjectName = reminder.subjectName;
     payload.scheduledAt = reminder.scheduledAt;
+    return dispatchPushOutboxEvent({ ...event, payload });
+  }
+
+  if (event.event_type === "platform_notification") {
+    const notification = await currentPlatformNotification(payload);
+    if (!notification) return "skip";
+    payload.title = notification.title;
+    payload.body = notification.body;
+    payload.type = notification.type;
     return dispatchPushOutboxEvent({ ...event, payload });
   }
 

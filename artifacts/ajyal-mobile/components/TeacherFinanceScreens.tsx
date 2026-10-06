@@ -167,22 +167,24 @@ export function TeacherWithdrawalsScreen() {
         attachment_name: attachmentName,
       }).select().single();
       if (created.error) throw created.error;
-      await supabase.from("notifications").insert({
+      const notificationInsert = await supabase.from("notifications").insert({
         user_id: user.id,
         title: "تم إرسال طلب سحب أرباح",
         body: `تم إرسال طلب سحب بمبلغ ${money(available)} وسيتم مراجعته من قبل الإدارة.`,
         type: "withdrawal",
       });
-       await customFetch<{ delivered: boolean }>("/api/push/notifications", {
-         method: "POST",
-         body: JSON.stringify({
-           recipientId: user.id,
-           title: "تم إرسال طلب سحب أرباح",
-           body: `تم إرسال طلب سحب بمبلغ ${money(available)} وسيتم مراجعته من قبل الإدارة.`,
-           type: "withdrawal",
-           route: "/notifications",
-         }),
-       }).catch(() => undefined);
+      if (notificationInsert.error) {
+        await customFetch<{ delivered: boolean }>("/api/push/notifications", {
+          method: "POST",
+          body: JSON.stringify({
+            recipientId: user.id,
+            title: "تم إرسال طلب سحب أرباح",
+            body: `تم إرسال طلب سحب بمبلغ ${money(available)} وسيتم مراجعته من قبل الإدارة.`,
+            type: "withdrawal",
+            route: "/notifications",
+          }),
+        }).catch(() => undefined);
+      }
       setNotes("");
       setAttachment(null);
       Alert.alert("تم إرسال الطلب", "سيظهر تحديث الطلب هنا بعد مراجعته من الإدارة.");
