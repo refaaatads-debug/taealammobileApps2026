@@ -269,7 +269,7 @@ export async function isPushOutboxAvailable(): Promise<boolean> {
 
 export async function hasPlatformNotificationOutboxEvent(notificationId: string): Promise<boolean | null> {
   try {
-    if (!await hasOutboxTable()) return null;
+    if (!await hasOutboxTable()) return false;
     const eventKey = `platform-notification:${notificationId}`;
     const result = await db.execute(sql`
       SELECT EXISTS (
@@ -294,7 +294,7 @@ export async function sendLegacyPlatformNotification(
   sendDirect: () => Promise<boolean>,
   checkQueued: (notificationId: string) => Promise<boolean | null> = hasPlatformNotificationOutboxEvent,
 ): Promise<boolean> {
-  if (notificationId && await checkQueued(notificationId)) return true;
+  if (notificationId && await checkQueued(notificationId) !== false) return true;
   return sendDirect();
 }
 
