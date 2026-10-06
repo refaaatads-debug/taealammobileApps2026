@@ -7,7 +7,7 @@
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
-    "test:push-delivery": "node --import tsx --test src/lib/__tests__/notificationImage.test.mjs src/lib/__tests__/pushDelivery.test.mjs src/lib/__tests__/pushIdentity.test.mjs src/lib/__tests__/pushOutbox.test.mjs",
+    "test:push-delivery": "node --import tsx --test src/lib/__tests__/notificationImage.test.mjs src/lib/__tests__/platformNotifications.test.mjs src/lib/__tests__/pushDelivery.test.mjs src/lib/__tests__/pushIdentity.test.mjs src/lib/__tests__/pushOutbox.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -89,6 +89,41 @@ export default function HomeScreen() {
       void unreadChatQuery.refetch();
     }
   }, [canLoadRoleData, isTeacher, profile?.id, unreadChatQuery.refetch]));
+  useFocusEffect(useCallback(() => {
+    const client = supabase;
+    if (!client || !canLoadRoleData || !isTeacher || !profile?.id) return undefined;
+    const refreshTeacherBookings = () => {
+      void incomingRequestsQuery.refetch();
+      void teacherDashboardQuery.refetch();
+    };
+    const topic = `teacher-home-bookings-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const channel = client
+      .channel(topic)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'booking_requests',
+      }, refreshTeacherBookings)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${profile.id}`,
+      }, (payload) => {
+        const notification = payload.new as Record<string, unknown>;
+        if (String(notification.type ?? '').startsWith('booking_')) refreshTeacherBookings();
+      })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[teacher-home] Realtime channel ${status.toLowerCase()}; using query refreshes instead.`);
+        }
+      });
+    return () => {
+      void client.removeChannel(channel).catch((error) => {
+        console.warn('[teacher-home] Could not remove realtime channel:', error);
+      });
+    };
+  }, [canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch]));
   const assignments = assignmentsQuery.data ?? [];
   const pendingAssignments = assignments.filter((assignment) => !isAssignmentComplete(assignment));
   const teacherDashboard = teacherDashboardQuery.data;
