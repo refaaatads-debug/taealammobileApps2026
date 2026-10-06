@@ -2,12 +2,14 @@ package com.ajyalalmaerifa.app
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.KeyguardManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -31,6 +33,10 @@ class IncomingCallMessagingService : ExpoFirebaseMessagingService() {
   }
 
   private fun isAppInForeground(): Boolean {
+    val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+    val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+    if (!powerManager.isInteractive || keyguardManager.isKeyguardLocked) return false
+
     val manager = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
     return manager.runningAppProcesses?.any { process ->
       process.processName == applicationContext.getPackageName()
