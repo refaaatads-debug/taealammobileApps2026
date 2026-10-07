@@ -1,9 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  bookingMessageRealtimeFilters,
   CHAT_HISTORY_BOOKING_BATCH_SIZE,
   loadParticipantChatHistory,
+  mergeChatMessageRows,
 } from "../chatMessageHistory.ts";
+
+test("builds one supported equality filter per unique booking", () => {
+  assert.deepEqual(
+    bookingMessageRealtimeFilters(["booking-1", "booking-2", "booking-1", ""]),
+    ["booking_id=eq.booking-1", "booking_id=eq.booking-2"],
+  );
+});
+
+test("merges realtime rows with fetched history once and in chronological order", () => {
+  const history = [
+    { id: "earlier", created_at: "2026-10-06T10:00:00.000Z", content: "old" },
+    { id: "latest", created_at: "2026-10-06T10:02:00.000Z", content: "original" },
+  ];
+  const merged = mergeChatMessageRows(history, [
+    { id: "latest", created_at: "2026-10-06T10:02:00.000Z", content: "updated" },
+    { id: "new", created_at: "2026-10-06T10:03:00.000Z", content: "new" },
+  ]);
+
+  assert.deepEqual(merged.map((row) => row.id), ["earlier", "latest", "new"]);
+  assert.equal(merged[1].content, "updated");
+});
 
 test("loads history across every booking for one participant in bounded, deduplicated batches", async () => {
   const bookingIds = Array.from(

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   Alert,
   FlatList,
   Linking,
@@ -34,7 +35,11 @@ import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useInternalCall } from "@/contexts/InternalCallContext";
 import { getReadChatMessageIds, markChatMessagesRead, subscribeToChatReadState } from "@/lib/localChatReadState";
-import { loadParticipantChatHistory } from "@/lib/chatMessageHistory";
+import {
+  bookingMessageRealtimeFilters,
+  loadParticipantChatHistory,
+  mergeChatMessageRows,
+} from "@/lib/chatMessageHistory";
 import { setActiveChatBookingIds } from "@/lib/activeChatNotifications";
 
 type Row = Record<string, any>;
@@ -1166,6 +1171,8 @@ export default function MessagesScreen() {
     status: "idle" | "loading" | "ready" | "error";
     messages: Row[];
   }>({ key: null, status: "idle", messages: [] });
+  const threadHistoryRef = useRef(threadHistory);
+  threadHistoryRef.current = threadHistory;
   const [profiles, setProfiles] = useState<Row[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1200,7 +1207,14 @@ export default function MessagesScreen() {
         return { data: result.data as Row[] | null, error: result.error };
       });
       if (requestId !== threadHistoryRequestRef.current) return;
-      setThreadHistory({ key, status: "ready", messages: history });
+      setThreadHistory((current) => ({
+        key,
+        status: "ready",
+        messages: mergeChatMessageRows(
+          history,
+          current.key === key ? current.messages : [],
+        ),
+      }));
     } catch (historyError) {
       if (requestId !== threadHistoryRequestRef.current) return;
       console.warn(
@@ -1336,19 +1350,46 @@ export default function MessagesScreen() {
     if (!client || !user || !bookings.length) return;
     const bookingIds = new Set(bookings.map((booking) => String(booking.id)));
     const bookingIdList = [...bookingIds];
-    const channel = client
-      .channel(`mobile-chat-${user.id}-${bookingIdList.join(",")}-${Date.now()}`)
-      .on("postgres_changes", {
+    const channel = client.channel(`mobile-chat-${user.id}-${Date.now()}`);
+    const handleMessageChange = (payload: { eventType: string; new: unknown }) => {
+      if (payload.eventType === "INSERT") {
+        const incoming = payload.new as Row;
+        const bookingId = String(incoming.booking_id ?? "");
+        if (!bookingId || !bookingIds.has(bookingId)) return;
+
+        setMessages((current) => mergeChatMessageRows(current, [incoming]));
+        const selectedParticipant = selectedHistoryParticipantRef.current;
+        if (selectedParticipant?.bookingIds.includes(bookingId)) {
+          const historyKey = participantHistoryKey(selectedParticipant);
+          setThreadHistory((current) => current.key === historyKey
+            ? {
+                ...current,
+                status: current.status === "loading" ? "loading" : "ready",
+                messages: mergeChatMessageRows(current.messages, [incoming]),
+              }
+            : current);
+        }
+        return;
+      }
+
+      void load({ showLoading: false });
+      const selectedParticipant = selectedHistoryParticipantRef.current;
+      if (selectedParticipant) void loadSelectedHistory(selectedParticipant);
+    };
+
+    for (const filter of bookingMessageRealtimeFilters(bookingIdList)) {
+      channel.on("postgres_changes", {
         event: "*",
         schema: "public",
         table: "chat_messages",
-        filter: `booking_id=in.(${bookingIdList.join(",")})`,
-      }, () => {
-        void load({ showLoading: false });
-        const selectedParticipant = selectedHistoryParticipantRef.current;
-        if (selectedParticipant) void loadSelectedHistory(selectedParticipant);
-      })
-      .subscribe();
+        filter,
+      }, handleMessageChange);
+    }
+    channel.subscribe((status) => {
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn(`[messages] Realtime unavailable: ${status}`);
+      }
+    });
     return () => {
       void client.removeChannel(channel);
     };
@@ -1447,6 +1488,68 @@ export default function MessagesScreen() {
     setActiveChatBookingIds(selectedBookingIdsKey ? selectedBookingIdsKey.split(",") : []);
     return () => setActiveChatBookingIds([]);
   }, [selectedBookingIdsKey]));
+  useFocusEffect(useCallback(() => {
+    if (!selectedHistoryKey || !selectedBookingIdsKey || !supabase) return undefined;
+
+    const client = supabase;
+    const bookingIds = selectedBookingIdsKey.split(",").filter(Boolean);
+    let cancelled = false;
+    let requestInFlight = false;
+
+    const refreshRecentMessages = async () => {
+      if (cancelled || requestInFlight || AppState.currentState !== "active") return;
+      const snapshot = threadHistoryRef.current;
+      if (snapshot.key !== selectedHistoryKey || snapshot.status === "loading") return;
+      requestInFlight = true;
+      const latestCreatedAt = snapshot.messages.at(-1)?.created_at;
+
+      try {
+        const recentMessages = await loadParticipantChatHistory(bookingIds, async (bookingIdBatch) => {
+          let query = client
+            .from("chat_messages")
+            .select("id,booking_id,sender_id,content,file_url,file_name,file_type,created_at")
+            .in("booking_id", bookingIdBatch)
+            .order("created_at", { ascending: true });
+          if (typeof latestCreatedAt === "string" && latestCreatedAt) {
+            query = query.gte("created_at", latestCreatedAt);
+          }
+          const result = await query;
+          return { data: result.data as Row[] | null, error: result.error };
+        });
+        if (cancelled || recentMessages.length === 0) return;
+
+        setMessages((current) => mergeChatMessageRows(current, recentMessages));
+        setThreadHistory((current) => current.key === selectedHistoryKey
+          ? {
+              ...current,
+              status: "ready",
+              messages: mergeChatMessageRows(current.messages, recentMessages),
+            }
+          : current);
+      } catch (refreshError) {
+        if (!cancelled) {
+          console.warn(
+            "[messages] recent message refresh failed:",
+            refreshError instanceof Error ? refreshError.message : refreshError,
+          );
+        }
+      } finally {
+        requestInFlight = false;
+      }
+    };
+
+    const timer = setInterval(() => void refreshRecentMessages(), 5_000);
+    const appStateListener = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refreshRecentMessages();
+    });
+    void refreshRecentMessages();
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      appStateListener.remove();
+    };
+  }, [selectedHistoryKey, selectedBookingIdsKey]));
   const visibleParticipants = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
     return participants.filter((item) => {
