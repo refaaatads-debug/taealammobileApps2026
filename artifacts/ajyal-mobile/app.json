@@ -21,7 +21,7 @@
     "android": {
       "package": "com.ajyalalmaerifa.app",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 1,
+      "versionCode": 190,
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.RECORD_AUDIO",
