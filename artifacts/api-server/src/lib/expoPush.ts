@@ -41,7 +41,10 @@ export function notificationPresentation(type: unknown): NotificationPresentatio
     || type === "automatic_cancellation"
     || type === "session_cancelled"
   ) {
-    return { sound: "session_notification.wav", channelId: SESSION_NOTIFICATION_CHANNEL };
+    // Use the default Android channel for automated session events. Some
+    // already-installed APKs predate the versioned session channel and Android
+    // will not show a remote notification for an unknown channel id.
+    return { sound: "default", channelId: DEFAULT_NOTIFICATION_CHANNEL };
   }
   if (
     type === "booking_request"
@@ -52,7 +55,9 @@ export function notificationPresentation(type: unknown): NotificationPresentatio
     || type === "instant_session"
     || type === "approval"
   ) {
-    return { sound: "approval_notification.wav", channelId: APPROVAL_NOTIFICATION_CHANNEL };
+    // Booking notifications must remain visible on older installed APKs even
+    // when their versioned approval channel was never created on the device.
+    return { sound: "default", channelId: DEFAULT_NOTIFICATION_CHANNEL };
   }
   return { sound: "default", channelId: DEFAULT_NOTIFICATION_CHANNEL };
 }
