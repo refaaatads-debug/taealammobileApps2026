@@ -72,6 +72,29 @@ function asNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+const SUPPORT_MESSAGE_NOTIFICATION_TYPES = new Set([
+  "support_reply",
+  "support_message",
+  "support_response",
+  "support_ticket_reply",
+  "ticket_reply",
+]);
+
+function findSupportTicketId(value: unknown, depth = 0): string | null {
+  if (depth > 2) return null;
+  const record = asRecord(value);
+  if (!record) return null;
+  for (const key of ["supportTicketId", "support_ticket_id", "ticketId", "ticket_id"]) {
+    const ticketId = asNonEmptyString(record[key]);
+    if (ticketId) return ticketId;
+  }
+  for (const key of ["metadata", "data", "payload", "notificationData", "notification_data"]) {
+    const ticketId = findSupportTicketId(record[key], depth + 1);
+    if (ticketId) return ticketId;
+  }
+  return null;
+}
+
 function messagePreview(value: unknown): string | null {
   const normalized = asNonEmptyString(value)
     ?.replace(/[\u0000-\u001f\u007f]+/g, " ")
@@ -196,6 +219,10 @@ export function buildPlatformNotification(
   const title = asNonEmptyString(payload.title);
   const body = asNonEmptyString(payload.body);
   if (!recipientId || !notificationId || !title || !body) return null;
+  const type = asNonEmptyString(payload.type) ?? "system_notification";
+  const supportTicketId = SUPPORT_MESSAGE_NOTIFICATION_TYPES.has(type)
+    ? findSupportTicketId(payload)
+    : null;
   const imageUrl = findNotificationImageUrl(payload);
 
   return {
@@ -205,9 +232,10 @@ export function buildPlatformNotification(
       body,
       ...(imageUrl ? { richContent: { image: imageUrl } } : {}),
       data: {
-        type: asNonEmptyString(payload.type) ?? "system_notification",
+        type,
         notificationId,
         eventId: eventKey,
+        ...(supportTicketId ? { supportTicketId } : {}),
         ...(imageUrl ? { imageUrl } : {}),
       },
     },
@@ -435,7 +463,7 @@ async function currentSessionReminder(
 
 async function currentPlatformNotification(
   payload: Record<string, unknown>,
-): Promise<{ title: string; body: string; type: string; imageUrl?: string } | null> {
+): Promise<{ title: string; body: string; type: string; imageUrl?: string; supportTicketId?: string } | null> {
   const notificationId = asNonEmptyString(payload.notificationId);
   const recipientId = asNonEmptyString(payload.recipientId);
   if (!notificationId || !recipientId) return null;
@@ -460,11 +488,16 @@ async function currentPlatformNotification(
   const title = asNonEmptyString(row?.title);
   const body = asNonEmptyString(row?.body);
   if (!title || !body) return null;
+  const type = asNonEmptyString(row?.notification_type) ?? "system_notification";
+  const supportTicketId = SUPPORT_MESSAGE_NOTIFICATION_TYPES.has(type)
+    ? findSupportTicketId(row?.notification_row) ?? findSupportTicketId(payload)
+    : null;
 
   return {
     title,
     body,
-    type: asNonEmptyString(row?.notification_type) ?? "system_notification",
+    type,
+    ...(supportTicketId ? { supportTicketId } : {}),
     ...(row?.notification_row
       ? { imageUrl: findNotificationImageUrl(row.notification_row) ?? undefined }
       : {}),
@@ -519,6 +552,11 @@ async function deliverCurrentEvent(event: PushOutboxEvent): Promise<boolean | "s
     payload.title = notification.title;
     payload.body = notification.body;
     payload.type = notification.type;
+    if (notification.supportTicketId) {
+      payload.supportTicketId = notification.supportTicketId;
+    } else {
+      delete payload.supportTicketId;
+    }
     if (notification.imageUrl) {
       payload.imageUrl = notification.imageUrl;
     } else {

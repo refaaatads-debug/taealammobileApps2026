@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,6 +9,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
+import { setActiveSupportTicketId } from "@/lib/activeChatNotifications";
 
 type Row = Record<string, unknown>;
 type SupportTab = "support" | "messages" | "ai";
@@ -72,6 +73,12 @@ export default function SupportCenterScreen({ mode = "support" }: { mode?: "supp
     () => tickets.find((ticket) => String(ticket.id) === ticketId),
     [ticketId, tickets],
   );
+  const activeSupportTicketId = tab === "support" && !showNewTicket ? ticketId : null;
+
+  useFocusEffect(useCallback(() => {
+    setActiveSupportTicketId(activeSupportTicketId);
+    return () => setActiveSupportTicketId(null);
+  }, [activeSupportTicketId]));
 
   const loadTickets = async (preferredId?: string | null) => {
     if (!supabase || !user) {

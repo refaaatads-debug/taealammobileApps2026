@@ -177,6 +177,7 @@ router.post("/push/notifications", async (req, res): Promise<void> => {
         ...(notificationId ? { notificationId } : {}),
         ...(parsed.data.route ? { route: parsed.data.route } : {}),
         ...(parsed.data.bookingId ? { bookingId: parsed.data.bookingId } : {}),
+        ...(parsed.data.supportTicketId ? { supportTicketId: parsed.data.supportTicketId } : {}),
         ...(imageUrl ? { imageUrl } : {}),
       },
       ...(imageUrl ? { richContent: { image: imageUrl } } : {}),

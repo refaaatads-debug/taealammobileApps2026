@@ -969,6 +969,10 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+        supportTicketId:
+          type: string
+          minLength: 1
+          maxLength: 128
         imageUrl:
           type: string
           description: HTTPS image URL for rich push notifications.

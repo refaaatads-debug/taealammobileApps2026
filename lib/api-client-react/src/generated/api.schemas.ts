@@ -162,6 +162,11 @@ export interface PushNotificationRequest {
      * @maxLength 128
      */
   bookingId?: string;
+  /**
+     * @minLength 1
+     * @maxLength 128
+     */
+  supportTicketId?: string;
   /** HTTPS image URL for rich push notifications. */
   imageUrl?: string;
 }

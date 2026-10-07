@@ -145,6 +145,28 @@ test("platform notification rows become background push alerts with stable ident
   assert.equal(captured.notification.data.type, "booking_request");
 });
 
+test("support reply pushes carry their ticket ID without attaching ticket IDs to platform announcements", () => {
+  const support = buildPlatformNotification("platform-notification:support-1", {
+    notificationId: "support-1",
+    recipientId: "recipient-1",
+    title: "رد فريق الدعم",
+    body: "تم الرد على طلبك.",
+    type: "support_reply",
+    metadata: { ticket_id: "ticket-42" },
+  });
+  assert.equal(support.notification.data.supportTicketId, "ticket-42");
+
+  const announcement = buildPlatformNotification("platform-notification:announcement-1", {
+    notificationId: "announcement-1",
+    recipientId: "recipient-1",
+    title: "إعلان",
+    body: "تحديث جديد.",
+    type: "admin_announcement",
+    metadata: { ticket_id: "not-a-support-ticket" },
+  });
+  assert.equal("supportTicketId" in announcement.notification.data, false);
+});
+
 test("legacy direct notification delivery is skipped when its row is already in the durable outbox", async () => {
   let directAttempts = 0;
   let checkedId = null;

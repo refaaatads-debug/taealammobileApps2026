@@ -15,7 +15,7 @@ import { supabase } from '@/lib/supabase';
 import { useColors } from '@/hooks/useColors';
 import { Icon } from '@/components/AjyalUI';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
-import { shouldSuppressActiveChatMessage } from '@/lib/activeChatNotifications';
+import { shouldSuppressActiveConversationNotification } from '@/lib/activeChatNotifications';
 import {
   registerPushToken as registerPushTokenOnServer,
   sendCallAccepted as sendCallAcceptedNotification,
@@ -145,8 +145,8 @@ async function configureNotificationsModule(notifications: NotificationsModule):
     handleNotification: async (notification) => {
       const data = notification.request.content.data ?? {};
       const isCallEnded = isEndedPayload(data);
-      const suppressActiveChatMessage = shouldSuppressActiveChatMessage(data, AppState.currentState);
-      const shouldPresent = !isCallEnded && !suppressActiveChatMessage;
+      const suppressActiveConversationNotification = shouldSuppressActiveConversationNotification(data, AppState.currentState);
+      const shouldPresent = !isCallEnded && !suppressActiveConversationNotification;
       return {
         // Keep messages in the visible conversation on Realtime only. Push
         // remains enabled when another thread is open or the app is backgrounded.

@@ -150,6 +150,8 @@ export const sendUserNotificationBodyTypeMax = 80;
 
 export const sendUserNotificationBodyBookingIdMax = 128;
 
+export const sendUserNotificationBodySupportTicketIdMax = 128;
+
 
 
 export const SendUserNotificationBody = zod.object({
@@ -159,6 +161,7 @@ export const SendUserNotificationBody = zod.object({
   "type": zod.string().min(1).max(sendUserNotificationBodyTypeMax),
   "route": zod.enum(['/bookings', '/messages', '/notifications', '/assignments', '/support', '/subscription', '/invoices', '/profile']).optional(),
   "bookingId": zod.string().min(1).max(sendUserNotificationBodyBookingIdMax).optional(),
+  "supportTicketId": zod.string().min(1).max(sendUserNotificationBodySupportTicketIdMax).optional(),
   "imageUrl": zod.string().optional().describe('HTTPS image URL for rich push notifications.')
 })
 
