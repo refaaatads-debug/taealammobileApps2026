@@ -12,7 +12,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { BlurHashImage } from "@/components/BlurHashImage";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -35,6 +35,7 @@ import { useAjyal } from "@/hooks/useAjyal";
 import { useInternalCall } from "@/contexts/InternalCallContext";
 import { getReadChatMessageIds, markChatMessagesRead, subscribeToChatReadState } from "@/lib/localChatReadState";
 import { loadParticipantChatHistory } from "@/lib/chatMessageHistory";
+import { setActiveChatBookingIds } from "@/lib/activeChatNotifications";
 
 type Row = Record<string, any>;
 const POSTGREST_IN_BATCH_SIZE = 40;
@@ -1441,6 +1442,11 @@ export default function MessagesScreen() {
     };
   }, [selected?.id, selected?.bookingIds.join(","), loadSelectedHistory]);
   const selectedBookingId = selected?.bookingId || null;
+  const selectedBookingIdsKey = selected?.bookingIds.join(",") ?? "";
+  useFocusEffect(useCallback(() => {
+    setActiveChatBookingIds(selectedBookingIdsKey ? selectedBookingIdsKey.split(",") : []);
+    return () => setActiveChatBookingIds([]);
+  }, [selectedBookingIdsKey]));
   const visibleParticipants = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
     return participants.filter((item) => {

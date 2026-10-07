@@ -15,6 +15,7 @@ import { supabase } from '@/lib/supabase';
 import { useColors } from '@/hooks/useColors';
 import { Icon } from '@/components/AjyalUI';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
+import { shouldSuppressActiveChatMessage } from '@/lib/activeChatNotifications';
 import {
   registerPushToken as registerPushTokenOnServer,
   sendCallAccepted as sendCallAcceptedNotification,
@@ -144,13 +145,15 @@ async function configureNotificationsModule(notifications: NotificationsModule):
     handleNotification: async (notification) => {
       const data = notification.request.content.data ?? {};
       const isCallEnded = isEndedPayload(data);
+      const suppressActiveChatMessage = shouldSuppressActiveChatMessage(data, AppState.currentState);
+      const shouldPresent = !isCallEnded && !suppressActiveChatMessage;
       return {
-        // Use the native notification surface for every regular push in every
-        // app state. Realtime-only events still use the in-app banner below.
-        shouldShowBanner: !isCallEnded,
-        shouldShowList: !isCallEnded,
-        shouldPlaySound: !isCallEnded,
-        shouldSetBadge: !isCallEnded,
+        // Keep messages in the visible conversation on Realtime only. Push
+        // remains enabled when another thread is open or the app is backgrounded.
+        shouldShowBanner: shouldPresent,
+        shouldShowList: shouldPresent,
+        shouldPlaySound: shouldPresent,
+        shouldSetBadge: shouldPresent,
         priority: notifications.AndroidNotificationPriority.MAX,
       };
     },
