@@ -258,14 +258,19 @@ export async function uploadTeacherCertificate(
   const existingCertificate = rows(existingResult.data)[0];
 
   const uploadOptions = { contentType: mimeType ?? undefined };
-  let uploadResult = existingCertificate
-    ? await storage.upload(path, bytes, { ...uploadOptions, upsert: true })
-    : await storage.upload(path, bytes, uploadOptions);
-  if (uploadResult.error && !existingCertificate) {
-    const overwriteResult = await storage.upload(path, bytes, { ...uploadOptions, upsert: true });
-    if (!overwriteResult.error) uploadResult = overwriteResult;
+  const uploadWithRetry = (upsert: boolean) => withTransientNetworkRetry(async () => {
+    const result = await storage.upload(path, bytes, { ...uploadOptions, upsert });
+    if (result.error) throw result.error;
+    return result;
+  });
+  try {
+    await uploadWithRetry(Boolean(existingCertificate));
+  } catch (error) {
+    if (existingCertificate) throw error;
+    // A prior request may have reached Storage even if its response was lost.
+    // Retry the same per-operation path instead of creating another file.
+    await uploadWithRetry(true);
   }
-  throwIfError(uploadResult, "Could not upload certificate file.");
 
   if (existingCertificate) {
     const updateResult = await client
@@ -362,10 +367,13 @@ export async function restoreMissingTeacherCertificateFile(
     throw new Error("This certificate cannot be restored to its saved storage path.");
   }
 
-  const result = await client.storage
-    .from("support-files")
-    .upload(path, bytes, { contentType: mimeType ?? inferredMimeType, upsert: true });
-  throwIfError(result, "Could not restore the certificate file.");
+  await withTransientNetworkRetry(async () => {
+    const result = await client.storage
+      .from("support-files")
+      .upload(path, bytes, { contentType: mimeType ?? inferredMimeType, upsert: true });
+    if (result.error) throw result.error;
+    return result;
+  });
 }
 
 function isTransientNetworkError(error: unknown, seen = new Set<object>()): boolean {

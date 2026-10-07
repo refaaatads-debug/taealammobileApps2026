@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Image, Modal, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
+import CertificatePdfDocument from "@/components/CertificatePdfDocument";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Header, Icon, Screen } from "@/components/AjyalUI";
@@ -163,6 +164,9 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   const [openingCertificateId, setOpeningCertificateId] = useState<string | null>(null);
   const [restoringCertificateId, setRestoringCertificateId] = useState<string | null>(null);
   const [certificateViewer, setCertificateViewer] = useState<CertificateViewerState | null>(null);
+  const [certificatePdfLoading, setCertificatePdfLoading] = useState(false);
+  const [certificatePdfError, setCertificatePdfError] = useState(false);
+  const [certificatePdfAttempt, setCertificatePdfAttempt] = useState(0);
   const [certificateDeleteError, setCertificateDeleteError] = useState<{ id: string; message: string } | null>(null);
   const [deletingCertificateId, setDeletingCertificateId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -335,17 +339,22 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   };
 
   const restoreCertificate = async (id: string, fileUrl: string, fileName: string, displayName: string) => {
-    if (!profileClient || !user || restoringCertificateId) return;
+    if (restoringCertificateId) return;
     setRestoringCertificateId(id);
     try {
       const picked = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
         multiple: false,
-        type: ["image/jpeg", "image/png", "image/webp"],
+        // Use the broad Android image filter; some device file providers do not
+        // launch when given a list of individual MIME types.
+        type: "image/*",
       });
       if (picked.canceled || !picked.assets[0]) return;
 
       const asset = picked.assets[0];
+      if (!profileClient || !user) {
+        throw new Error(t("تعذر التحقق من جلسة الحساب. أغلق هذه الشاشة وأعد فتحها قبل استعادة الشهادة.", "Could not verify your account session. Reopen this screen before restoring the certificate."));
+      }
       const bytes = await (await fetch(asset.uri)).arrayBuffer();
       await restoreMissingTeacherCertificateFile(
         profileClient as unknown as ProfileDataClient,
@@ -375,9 +384,14 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
     setOpeningCertificateId(id);
     try {
       const kind = certificateContentKind(fileName || fileUrl);
-      const url = kind === "image"
+      const url = kind === "image" || kind === "pdf"
         ? await getCertificateOpenUrl(profileClient as unknown as ProfileDataClient | null, fileUrl)
         : null;
+      if (kind === "pdf") {
+        setCertificatePdfLoading(true);
+        setCertificatePdfError(false);
+        setCertificatePdfAttempt(0);
+      }
       setCertificateViewer({ id, name: displayName, fileName, kind, url });
     } catch (error) {
       const detail = message(error, t("تعذر فتح الشهادة. أعد المحاولة.", "Could not open the certificate. Please try again."));
@@ -619,21 +633,63 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
             resizeMode="contain"
             style={styles.viewerImage}
           />
+        ) : certificateViewer?.kind === "pdf" && certificateViewer.url ? (
+          <View testID="certificate-pdf-preview" style={styles.viewerPdfContainer}>
+            <CertificatePdfDocument
+              uri={certificateViewer.url}
+              retryKey={certificatePdfAttempt}
+              onLoadComplete={() => {
+                setCertificatePdfLoading(false);
+                setCertificatePdfError(false);
+              }}
+              onError={() => {
+                setCertificatePdfLoading(false);
+                setCertificatePdfError(true);
+              }}
+            />
+            {certificatePdfLoading ? (
+              <View pointerEvents="none" style={styles.viewerPdfLoading}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={[styles.viewerNoticeBody, { color: colors.mutedForeground, writingDirection: direction }]}>
+                  {t("جارٍ تحميل الشهادة...", "Loading certificate...")}
+                </Text>
+              </View>
+            ) : null}
+            {certificatePdfError ? (
+              <View style={[styles.viewerPdfError, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Text style={[styles.viewerNoticeBody, { color: colors.destructive, writingDirection: direction }]}>
+                  {t("تعذر تحميل ملف PDF. تحقق من الاتصال ثم أعد المحاولة.", "Could not load the PDF. Check your connection and try again.")}
+                </Text>
+                <Pressable
+                  testID="retry-certificate-pdf"
+                  accessibilityRole="button"
+                  onPress={() => {
+                    setCertificatePdfError(false);
+                    setCertificatePdfLoading(true);
+                    setCertificatePdfAttempt((attempt) => attempt + 1);
+                  }}
+                  style={[styles.viewerPdfRetry, { backgroundColor: colors.primary }]}
+                >
+                  <Text style={[styles.viewerPdfRetryText, { color: colors.primaryForeground }]}>
+                    {t("إعادة المحاولة", "Retry")}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
         ) : (
           <View
-            testID={certificateViewer?.kind === "pdf" ? "certificate-viewer-pdf-notice" : "certificate-viewer-unsupported-notice"}
+            testID="certificate-viewer-unsupported-notice"
             style={styles.viewerNotice}
           >
             <View style={[styles.viewerNoticeIcon, { backgroundColor: colors.navySoft }]}>
-              <Icon name={certificateViewer?.kind === "pdf" ? "file-text" : "alert-circle"} size={30} color={colors.primary} />
+              <Icon name="alert-circle" size={30} color={colors.primary} />
             </View>
             <Text style={[styles.viewerNoticeTitle, { color: colors.foreground, writingDirection: direction }]}>
-              {certificateViewer?.kind === "pdf" ? "يلزم قارئ PDF داخلي" : "المعاينة غير متاحة لهذا الملف"}
+              {t("المعاينة غير متاحة لهذا الملف", "Preview is unavailable for this file")}
             </Text>
             <Text style={[styles.viewerNoticeBody, { color: colors.mutedForeground, writingDirection: direction }]}>
-              {certificateViewer?.kind === "pdf"
-                ? "سيبقى الملف داخل التطبيق. يلزم إضافة قارئ PDF لعرضه هنا."
-                : "لا نفتح الشهادة في متصفح أو تطبيق خارجي."}
+              {t("لا نفتح الشهادة في متصفح أو تطبيق خارجي.", "Certificates are not opened in an external browser or app.")}
             </Text>
           </View>
         )}
@@ -804,6 +860,11 @@ const styles = StyleSheet.create({
   viewerTitle: { width: "100%", fontSize: 15, fontFamily: "Inter_700Bold" },
   viewerFileName: { width: "100%", fontSize: 10, fontFamily: "Inter_400Regular", marginTop: 3 },
   viewerImage: { flex: 1, width: "100%", marginVertical: 12 },
+  viewerPdfContainer: { flex: 1, width: "100%", marginVertical: 12, position: "relative" },
+  viewerPdfLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: 10, backgroundColor: "rgba(255,255,255,0.82)" },
+  viewerPdfError: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", borderWidth: 1, borderRadius: 14, padding: 20 },
+  viewerPdfRetry: { minHeight: 40, borderRadius: 11, paddingHorizontal: 18, alignItems: "center", justifyContent: "center", marginTop: 14 },
+  viewerPdfRetryText: { fontSize: 12, fontFamily: "Inter_700Bold" },
   viewerNotice: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 22 },
   viewerNoticeIcon: { width: 62, height: 62, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 16 },
   viewerNoticeTitle: { fontSize: 18, fontFamily: "Inter_700Bold", textAlign: "center" },

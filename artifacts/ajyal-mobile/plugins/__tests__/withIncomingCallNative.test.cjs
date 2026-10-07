@@ -51,6 +51,14 @@ test("locked or sleeping devices still receive the native incoming-call notifica
   );
 });
 
+test("incoming calls request full-screen presentation and guide users when Android blocks it", () => {
+  const source = fs.readFileSync(nativeServiceTemplatePath, "utf8");
+  assert.match(source, /\.setFullScreenIntent\(pendingIntent,\s*true\)/);
+  assert.match(source, /canUseFullScreenIntent\(\)/);
+  assert.match(source, /Settings\.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT/);
+  assert.match(source, /السماح بواجهة المكالمة الكاملة/);
+});
+
 async function applyPlugin(contents) {
   const config = withIncomingCallNative({ name: "ajyal-test", mods: {} });
   const appBuildGradleMod = config.mods.android.appBuildGradle;

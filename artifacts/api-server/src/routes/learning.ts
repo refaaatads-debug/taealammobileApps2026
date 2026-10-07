@@ -2029,16 +2029,29 @@ router.get("/notifications", async (req, res): Promise<void> => {
   }
   const rows = await db.transaction(async (tx) => {
     await tx.execute(sql`select set_config('app.user_id', ${userId}, true)`);
-    return tx.select().from(notificationsTable).where(eq(notificationsTable.userId, userId)).orderBy(asc(notificationsTable.createdAt));
+    return tx.select({
+      id: notificationsTable.id,
+      title: notificationsTable.title,
+      body: notificationsTable.body,
+      icon: notificationsTable.icon,
+      createdAt: notificationsTable.createdAt,
+      readAt: notificationsTable.readAt,
+      // Keep legacy image/metadata columns available without requiring a DB migration.
+      notificationPayload: sql<Record<string, unknown>>`to_jsonb(${notificationsTable})`,
+    }).from(notificationsTable).where(eq(notificationsTable.userId, userId)).orderBy(asc(notificationsTable.createdAt));
   });
-  res.json(ListMyNotificationsResponse.parse(rows.reverse().map((row) => ({
-    id: row.id,
-    title: row.title,
-    body: row.body,
-    time: notificationTime(row.createdAt),
-    icon: row.icon,
-    unread: row.readAt === null,
-  }))));
+  res.json(ListMyNotificationsResponse.parse(rows.reverse().map((row) => {
+    const imageUrl = findNotificationImageUrl(row.notificationPayload);
+    return {
+      id: row.id,
+      title: row.title,
+      body: row.body,
+      time: notificationTime(row.createdAt),
+      icon: row.icon,
+      unread: row.readAt === null,
+      ...(imageUrl ? { imageUrl } : {}),
+    };
+  })));
 });
 
 router.patch("/notifications/:id/read", async (req, res): Promise<void> => {

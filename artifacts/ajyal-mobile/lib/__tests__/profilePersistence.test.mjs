@@ -183,6 +183,48 @@ test("certificate upload, secure open, reload, and deletion use isolated storage
   assert.deepEqual(afterDelete.certificates, []);
 });
 
+test("certificate upload retries a transient HTTP/2 reset without duplicating the certificate", async () => {
+  const session = createProfileTestSession("teacher");
+  const files = new Map();
+  const backingClient = new IsolatedProfileClient(emptyTeacherTables(session), files);
+  let attempts = 0;
+  const client = {
+    from: backingClient.from.bind(backingClient),
+    storage: {
+      from(bucket) {
+        const storage = backingClient.storage.from(bucket);
+        return {
+          ...storage,
+          async upload(...args) {
+            attempts += 1;
+            if (attempts === 1) {
+              return {
+                data: null,
+                error: new Error("fetch failed: okhttp3 StreamResetException: stream was reset: CANCEL"),
+              };
+            }
+            return storage.upload(...args);
+          },
+        };
+      },
+    },
+  };
+
+  const result = await uploadTeacherCertificate(
+    client,
+    session.user.id,
+    "شهادة اتصال",
+    "certificate.pdf",
+    "application/pdf",
+    new TextEncoder().encode("%PDF retry test").buffer,
+    34567,
+  );
+
+  assert.equal(attempts, 2);
+  assert.equal(result.length, 1);
+  assert.equal(files.size, 1);
+});
+
 test("a missing certificate image can be restored only to its existing owner-scoped path", async () => {
   const session = createProfileTestSession("teacher");
   const path = `certificates/${session.user.id}/123.png`;
