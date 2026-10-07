@@ -12,6 +12,8 @@ import {
   Text,
   TextInput,
   View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { BlurHashImage } from "@/components/BlurHashImage";
@@ -44,6 +46,7 @@ import { setActiveChatBookingIds } from "@/lib/activeChatNotifications";
 
 type Row = Record<string, any>;
 const POSTGREST_IN_BATCH_SIZE = 40;
+const MESSAGE_END_THRESHOLD = 96;
 
 type Participant = {
   id: string;
@@ -820,6 +823,8 @@ function ConversationView({
   const { t, direction, locale } = useAppPreferences();
   const isRTL = direction === "rtl";
   const listRef = useRef<FlatList<Row>>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const initialScrollParticipantRef = useRef<string | null>(null);
   const [draft, setDraft] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -830,10 +835,31 @@ function ConversationView({
   const webStreamRef = useRef<MediaStream | null>(null);
   const webChunksRef = useRef<Blob[]>([]);
 
+  const handleMessageListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromEnd = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    shouldStickToBottomRef.current = distanceFromEnd <= MESSAGE_END_THRESHOLD;
+  }, []);
+
+  const handleMessageContentSizeChange = useCallback(() => {
+    if (shouldStickToBottomRef.current) {
+      listRef.current?.scrollToEnd({ animated: false });
+    }
+  }, []);
+
   useEffect(() => {
+    if (
+      historyStatus !== "ready"
+      || !messages.length
+      || initialScrollParticipantRef.current === participant.id
+    ) {
+      return undefined;
+    }
+    initialScrollParticipantRef.current = participant.id;
+    shouldStickToBottomRef.current = true;
     const timer = setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 40);
     return () => clearTimeout(timer);
-  }, [messages.length]);
+  }, [historyStatus, messages.length, participant.id]);
 
   useEffect(() => {
     if (!supabase || !participant.bookingIds.length) return;
@@ -847,6 +873,7 @@ function ConversationView({
 
   const insertMessage = async (payload: { content: string; kind?: "text" | "file" | "voice"; asset?: { url: string; name: string; type: string; path?: string } }) => {
     if (!supabase || !bookingId) return;
+    shouldStickToBottomRef.current = true;
     const result = await supabase.from("chat_messages").insert({
       booking_id: bookingId,
       sender_id: userId,
@@ -1131,7 +1158,9 @@ function ConversationView({
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+          onScroll={handleMessageListScroll}
+          scrollEventThrottle={16}
+          onContentSizeChange={handleMessageContentSizeChange}
         />
         <Composer
           draft={draft}
