@@ -28,7 +28,7 @@ test("non-HTTPS and unrelated links are not treated as notification images", () 
 });
 
 test("automated booking and session notifications use the compatible default channel", () => {
-  for (const type of ["booking_request", "booking_cancelled", "session_reminder", "session_started"]) {
+  for (const type of ["booking_request", "booking_cancelled", "session_reminder", "session_started", "session_join", "instant_session"]) {
     assert.deepEqual(notificationPresentation(type), {
       sound: "default",
       channelId: DEFAULT_NOTIFICATION_CHANNEL,

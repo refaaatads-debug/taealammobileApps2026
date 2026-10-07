@@ -6,6 +6,7 @@ import { useColors } from '@/hooks/useColors';
 import { useInternalCall } from '@/contexts/InternalCallContext';
 import { useAjyal } from '@/hooks/useAjyal';
 import { useSessionWebRTC } from '@/hooks/useSessionWebRTC';
+import { customFetch } from '@workspace/api-client-react';
 import { SessionVideo } from '@/components/SessionVideo';
 import { SessionCollaboration } from '@/components/SessionCollaboration';
 import { SessionWhiteboard, normalizeWhiteboardAction, type WhiteboardAction } from '@/components/SessionWhiteboard';
@@ -39,6 +40,7 @@ export default function LiveSessionScreen() {
   const isStudent = role === 'student';
   const isActiveRef = useRef(isSessionCallActive);
   const isCurrentCallRef = useRef(isCurrentCall);
+  const sessionJoinNotificationBookingRef = useRef<string | null>(null);
   const [lifecycle, setLifecycle] = useState<{
     startedAt: string | null;
     endedAt: string | null;
@@ -282,6 +284,54 @@ export default function LiveSessionScreen() {
     enabled: shouldJoin && isStudent,
     onDataMessage: handleDataMessage,
   });
+  useEffect(() => {
+    if (
+      !shouldJoin
+      || rtc.connectionState !== 'connected'
+      || !bookingId
+      || !lifecycle.teacherId
+      || sessionJoinNotificationBookingRef.current === bookingId
+    ) {
+      return;
+    }
+
+    sessionJoinNotificationBookingRef.current = bookingId;
+    let cancelled = false;
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const notifyTeacher = async () => {
+      try {
+        const result = await customFetch<{ delivered: boolean }>('/api/push/notifications', {
+          method: 'POST',
+          body: JSON.stringify({
+            recipientId: lifecycle.teacherId,
+            title: 'انضم الطالب إلى الجلسة',
+            body: 'انضم الطالب إلى الجلسة. يمكنك متابعة الجلسة من لوحة التحكم.',
+            type: 'session_join',
+            route: '/bookings',
+            bookingId,
+          }),
+        });
+        if (result.delivered) return;
+        throw new Error('The session join notification was not accepted.');
+      } catch (error) {
+        if (cancelled) return;
+        attempts += 1;
+        if (attempts < 3) {
+          retryTimer = setTimeout(() => void notifyTeacher(), attempts * 1500);
+          return;
+        }
+        sessionJoinNotificationBookingRef.current = null;
+        console.warn('تعذر إرسال إشعار انضمام الطالب:', error);
+      }
+    };
+
+    void notifyTeacher();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [bookingId, lifecycle.teacherId, rtc.connectionState, shouldJoin]);
   const handleWhiteboardAction = useCallback((action: WhiteboardAction) => {
     if (!whiteboardCanDraw) return;
     setWhiteboardActions((current) => [...current, action].slice(-160));

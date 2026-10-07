@@ -1420,6 +1420,7 @@ function notificationRouteForType(type: string | null, title = "", body = "", ic
     case "session_reminder":
     case "session_starting":
     case "session_started":
+    case "session_join":
     case "session_ended":
     case "instant_session":
     case "first_impression":

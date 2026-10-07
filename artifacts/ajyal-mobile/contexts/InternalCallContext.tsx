@@ -315,6 +315,7 @@ function routeForNotification(data: Record<string, unknown>): AppNotificationRou
     || data.type === 'session_reminder'
     || data.type === 'session_starting'
     || data.type === 'session_started'
+    || data.type === 'session_join'
     || data.type === 'session_ended'
     || data.type === 'instant_session'
     || data.type === 'expired_no_show'

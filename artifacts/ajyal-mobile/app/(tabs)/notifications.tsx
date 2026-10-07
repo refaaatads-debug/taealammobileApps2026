@@ -97,6 +97,7 @@ function getNotificationRoute(item: ApiNotification): NotificationRoute | null {
     || type === 'session_reminder'
     || type === 'session_starting'
     || type === 'session_started'
+    || type === 'session_join'
     || type === 'session_ended'
     || type === 'instant_session'
     || type === 'first_impression'

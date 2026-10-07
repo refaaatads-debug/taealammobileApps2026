@@ -19,6 +19,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import crypto from "node:crypto";
 import { decodePushTokenBundle, mergePushTokenBundle } from "../lib/pushTokenBundle";
 import { findNotificationImageUrl } from "../lib/notificationImage";
+import { persistPlatformNotificationOnce } from "../lib/platformNotifications";
 import { getSupabaseRoles, readBearerToken, supabaseTable } from "../lib/supabaseAuth";
 import { sendUserPushNotification } from "../lib/userPush";
 import { hasPushEligibleRole, incomingCallRowMatches } from "../lib/pushIdentity";
@@ -158,6 +159,50 @@ router.post("/push/notifications", async (req, res): Promise<void> => {
   const parsed = SendUserNotificationBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+
+  if (parsed.data.type === "session_join" || parsed.data.type === "instant_session") {
+    const bookingId = parsed.data.bookingId?.trim() ?? "";
+    const supabaseToken = readBearerToken(req.get("authorization") ?? undefined);
+    if (!bookingId || !supabaseToken) {
+      res.status(400).json({ error: "A booking and authenticated Supabase session are required" });
+      return;
+    }
+
+    const bookings = await supabaseTable<Record<string, unknown>>(supabaseToken, "bookings", {
+      id: `eq.${bookingId}`,
+      student_id: `eq.${userId}`,
+      select: "id,student_id,teacher_id,status,session_status",
+      limit: "1",
+    });
+    const booking = bookings[0];
+    const studentId = typeof booking?.student_id === "string" ? booking.student_id : "";
+    const teacherId = typeof booking?.teacher_id === "string" ? booking.teacher_id : "";
+    const isInstantRequest = parsed.data.type === "instant_session";
+    const expectedSessionStatus = isInstantRequest ? "waiting_acceptance" : "in_progress";
+    if (
+      !booking
+      || studentId !== userId
+      || booking.status !== "confirmed"
+      || booking.session_status !== expectedSessionStatus
+      || !teacherId
+      || teacherId !== parsed.data.recipientId
+    ) {
+      res.status(403).json({ error: "The session notification does not match the authenticated student's booking" });
+      return;
+    }
+
+    await persistPlatformNotificationOnce({
+      recipientId: teacherId,
+      title: isInstantRequest ? "طلب جلسة فورية" : "انضم الطالب إلى الجلسة",
+      body: isInstantRequest
+        ? "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول."
+        : "انضم الطالب إلى الجلسة. يمكنك متابعة الجلسة من لوحة التحكم.",
+      type: parsed.data.type,
+      link: `/bookings?bookingId=${encodeURIComponent(bookingId)}`,
+    });
+    res.status(202).json(SendUserNotificationResponse.parse({ delivered: true }));
     return;
   }
 

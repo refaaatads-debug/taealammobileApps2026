@@ -159,6 +159,7 @@ async function createInstantSession({
     title: "طلب جلسة فورية",
     body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
     type: "instant_session",
+    link: `/bookings?bookingId=${encodeURIComponent(booking.id as string)}`,
   });
   if (notificationError) {
     await customFetch<{ delivered: boolean }>("/api/push/notifications", {
