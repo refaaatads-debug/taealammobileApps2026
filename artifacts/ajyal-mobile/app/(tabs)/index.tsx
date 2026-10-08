@@ -38,6 +38,29 @@ export default function HomeScreen() {
       refetchOnReconnect: false,
     },
   });
+  const teacherEarningsMonth = new Date().toISOString().slice(0, 7);
+  const teacherMonthlyEarningsQuery = useQuery({
+    queryKey: ['teacher-monthly-earnings', profile?.id, teacherEarningsMonth],
+    enabled: canLoadRoleData && isTeacher && Boolean(profile?.id) && Boolean(supabase),
+    queryFn: async () => {
+      const client = supabase;
+      const teacherId = profile?.id;
+      if (!client || !teacherId) throw new Error('Teacher account is not available.');
+      const { data, error } = await client.rpc('get_teacher_net_summary', {
+        _teacher_id: teacherId,
+        _month: teacherEarningsMonth,
+      });
+      if (error) throw error;
+      const summary: unknown = Array.isArray(data) ? data[0] : data;
+      const amount = summary && typeof summary === 'object' && 'net_total' in summary
+        ? Number((summary as Record<string, unknown>).net_total)
+        : 0;
+      return Number.isFinite(amount) ? amount : 0;
+    },
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
   const incomingRequestsQuery = useListBookingRequests(
     { view: 'incoming' },
     {
@@ -92,38 +115,58 @@ export default function HomeScreen() {
   useFocusEffect(useCallback(() => {
     const client = supabase;
     if (!client || !canLoadRoleData || !isTeacher || !profile?.id) return undefined;
+    void teacherMonthlyEarningsQuery.refetch();
     const refreshTeacherBookings = () => {
       void incomingRequestsQuery.refetch();
       void teacherDashboardQuery.refetch();
     };
-    const topic = `teacher-home-bookings-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const channel = client
-      .channel(topic)
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'booking_requests',
-      }, refreshTeacherBookings)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'notifications',
-        filter: `user_id=eq.${profile.id}`,
-      }, (payload) => {
-        const notification = payload.new as Record<string, unknown>;
-        if (String(notification.type ?? '').startsWith('booking_')) refreshTeacherBookings();
-      })
-      .subscribe((status) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn(`[teacher-home] Realtime channel ${status.toLowerCase()}; using query refreshes instead.`);
-        }
-      });
-    return () => {
-      void client.removeChannel(channel).catch((error) => {
-        console.warn('[teacher-home] Could not remove realtime channel:', error);
-      });
+    let earningsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshTeacherEarnings = () => {
+      if (earningsRefreshTimer) clearTimeout(earningsRefreshTimer);
+      earningsRefreshTimer = setTimeout(() => { void teacherMonthlyEarningsQuery.refetch(); }, 150);
     };
-  }, [canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch]));
+    const topic = `teacher-home-bookings-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let channel: ReturnType<typeof client.channel> | null = null;
+    try {
+      channel = client
+        .channel(topic)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'booking_requests',
+        }, refreshTeacherBookings)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${profile.id}`,
+        }, (payload) => {
+          const notification = payload.new as Record<string, unknown>;
+          if (String(notification.type ?? '').startsWith('booking_')) refreshTeacherBookings();
+        })
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'teacher_earnings',
+          filter: `teacher_id=eq.${profile.id}`,
+        }, refreshTeacherEarnings)
+        .subscribe((status) => {
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn(`[teacher-home] Realtime channel ${status.toLowerCase()}; using focus refreshes instead.`);
+          }
+        });
+    } catch (error) {
+      console.warn('[teacher-home] Could not create realtime channel:', error);
+    }
+    return () => {
+      if (earningsRefreshTimer) clearTimeout(earningsRefreshTimer);
+      if (channel) {
+        void client.removeChannel(channel).catch((error) => {
+          console.warn('[teacher-home] Could not remove realtime channel:', error);
+        });
+      }
+    };
+  }, [canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch, teacherMonthlyEarningsQuery.refetch]));
   const assignments = assignmentsQuery.data ?? [];
   const pendingAssignments = assignments.filter((assignment) => !isAssignmentComplete(assignment));
   const teacherDashboard = teacherDashboardQuery.data;
@@ -319,7 +362,7 @@ export default function HomeScreen() {
             <View style={[styles.earningsCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
                <Text style={[styles.earningsLabel, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('أرباح هذا الشهر', 'This month’s earnings')}</Text>
               <View style={[styles.earningsValueRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                <Text style={[styles.earningsValue, { color: colors.primaryForeground, writingDirection: direction }]}>{formatNumber(teacherDashboard?.stats.earnings ?? 0)}</Text>
+                <Text style={[styles.earningsValue, { color: colors.primaryForeground, writingDirection: direction }]}>{teacherMonthlyEarningsQuery.data == null ? '—' : formatNumber(teacherMonthlyEarningsQuery.data)}</Text>
                  <Text style={[styles.earningsCurrency, { color: colors.tint, writingDirection: direction }]}>{t('ر.س', 'SAR')}</Text>
               </View>
             </View>
