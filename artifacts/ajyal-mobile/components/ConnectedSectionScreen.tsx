@@ -10,6 +10,7 @@ import { useAjyal } from "@/hooks/useAjyal";
 import { EmptyState, Header, Icon, Screen, SectionHeading } from "@/components/AjyalUI";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { hasAiTutorFeature, isSubscriptionActive } from "@/lib/subscriptionEntitlements";
+import { getAvailableTeacherBalance, groupTeacherEarningsByMonthAndType } from "@/lib/teacherFinance";
 
 type Row = Record<string, unknown>;
 type AiReport = Row & {
@@ -711,24 +712,102 @@ function WalletScreen() {
   const colors = useColors();
   const { user } = useAuth();
   const { role } = useAjyal();
-  const { t, direction, locale } = useAppPreferences();
+  const { t, direction, locale, formatNumber } = useAppPreferences();
   const query = useRemoteData(["wallet", user?.id, role], async () => {
-    if (role !== "teacher" || !supabase || !user) return { wallet: null, transactions: [], earnings: [] };
-    const [walletResult, transactionsResult, earningsResult] = await Promise.all([
+    if (role !== "teacher" || !supabase || !user) return { wallet: null, transactions: [], earnings: [], earningsSummary: null, earningsBalanceError: null };
+    const [walletResult, transactionsResult, earningsResult, breakdownResult] = await Promise.all([
       supabase.from("wallets").select("*").eq("user_id", user.id).maybeSingle(),
       supabase.from("wallet_transactions").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
       supabase.from("teacher_earnings").select("*").eq("teacher_id", user.id).order("created_at", { ascending: false }),
+      supabase.rpc("get_teacher_earnings_breakdown", { _teacher_id: user.id }),
     ]);
     if (walletResult.error) throw walletResult.error;
     if (transactionsResult.error) throw transactionsResult.error;
     if (earningsResult.error) throw earningsResult.error;
-    return { wallet: walletResult.data as Row | null, transactions: (transactionsResult.data ?? []) as Row[], earnings: (earningsResult.data ?? []) as Row[] };
+    const earningsSummary = Array.isArray(breakdownResult.data)
+      ? (breakdownResult.data[0] as Row | undefined) ?? null
+      : breakdownResult.data as Row | null;
+    return {
+      wallet: walletResult.data as Row | null,
+      transactions: (transactionsResult.data ?? []) as Row[],
+      earnings: (earningsResult.data ?? []) as Row[],
+      earningsSummary,
+      earningsBalanceError: breakdownResult.error?.message ?? null,
+    };
   });
   if (role !== "teacher") {
     return <Screen><SectionHeader eyebrow={t("صلاحيات الحساب", "Account access")} title={t("المحفظة والأرباح", "Wallet and earnings")} avatarText={user?.email?.slice(0, 1)} /><EmptyState icon="lock" title={t("هذه الصفحة للمعلم فقط", "Teachers only")} body={t("لا يمكن الوصول إلى بيانات المحفظة من حساب الطالب.", "Student accounts cannot access wallet data.")} /></Screen>;
   }
-  const hasRows = Boolean(query.data?.wallet || query.data?.transactions.length || query.data?.earnings.length);
-  return <Screen><SectionHeader eyebrow={t("إدارة دخلك التعليمي", "Manage your teaching income")} title={t("المحفظة والأرباح", "Wallet and earnings")} avatarText={user?.email?.slice(0, 1)} /><View style={[styles.hero, { backgroundColor: colors.primary }]}><View style={[styles.heroIcon, { backgroundColor: colors.goldSoft }]}><Icon name="credit-card" size={22} color={colors.accentForeground} /></View><View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("حساب المعلم", "Teacher account")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{t("رصيدك وحركتك المالية", "Your balance and financial activity")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("تُعرض الأرقام كما هي محفوظة في محفظة المنصة.", "Figures are shown exactly as stored in the platform wallet.")}</Text></View></View><StateBlock loading={query.loading} error={query.error} empty={!hasRows} onRetry={query.reload} />{query.data?.wallet ? <View style={[styles.balanceCard, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}><Text style={[styles.balanceLabel, { color: colors.mutedForeground }]}>{t("الرصيد الحالي", "Current balance")}</Text><Text style={[styles.balance, { color: colors.teal }]}>{money(number(query.data.wallet, "balance", "available_balance", "current_balance"))}</Text></View> : null}<SectionHeading title={t("آخر الحركات", "Latest activity")} />{query.data?.transactions.map((row) => <View key={`tx-${String(row.id)}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.cardTop}><Text style={[styles.price, { color: row.type === "debit" ? colors.destructive : colors.teal }]}>{money(number(row, "amount", "amount_sar"))}</Text><Text style={[styles.badge, { color: colors.mutedForeground }]}>{text(row, "type", "transaction_type") ?? t("حركة", "Transaction")}</Text></View><Text style={[styles.cardTitle, { color: colors.foreground }]}>{text(row, "description", "reason") ?? t("حركة مالية", "Financial transaction")}</Text><Text style={[styles.cardBody, { color: colors.mutedForeground }]}>{dateLabel(text(row, "created_at"), locale)}</Text></View>)}</Screen>;
+  const groupedEarnings = groupTeacherEarningsByMonthAndType(query.data?.earnings ?? []);
+  const earningStatusLabel = (statuses: Set<string>) => {
+    if (statuses.size !== 1) return statuses.size > 1 ? t("حالات متعددة", "Multiple statuses") : "—";
+    const status = [...statuses][0];
+    if (status === "confirmed") return t("مؤكدة", "Confirmed");
+    if (status === "pending") return t("قيد المراجعة", "Pending");
+    if (status === "paid") return t("مدفوعة", "Paid");
+    if (status === "rejected") return t("مرفوضة", "Rejected");
+    return status;
+  };
+  const hasRows = Boolean(query.data?.wallet || query.data?.transactions.length || query.data?.earnings.length || query.data?.earningsSummary);
+  return (
+    <Screen>
+      <SectionHeader eyebrow={t("إدارة دخلك التعليمي", "Manage your teaching income")} title={t("المحفظة والأرباح", "Wallet and earnings")} avatarText={user?.email?.slice(0, 1)} />
+      <View style={[styles.hero, { backgroundColor: colors.primary }]}>
+        <View style={[styles.heroIcon, { backgroundColor: colors.goldSoft }]}><Icon name="credit-card" size={22} color={colors.accentForeground} /></View>
+        <View style={styles.heroCopy}>
+          <Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("حساب المعلم", "Teacher account")}</Text>
+          <Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{t("رصيدك وحركتك المالية", "Your balance and financial activity")}</Text>
+          <Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("يعرض رصيد السحب والأرباح المسجلة في المنصة.", "Shows your withdrawable balance and earnings recorded on the platform.")}</Text>
+        </View>
+      </View>
+      <StateBlock loading={query.loading} error={query.error} empty={!hasRows} onRetry={query.reload} />
+      {query.data?.earningsBalanceError ? (
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.cardBody, { color: colors.destructive }]}>{t("تعذر تحميل رصيد الأرباح من المنصة", "Could not load the platform earnings balance")}: {query.data.earningsBalanceError}</Text>
+        </View>
+      ) : null}
+      {query.data?.earningsSummary ? (
+        <View style={[styles.balanceCard, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}>
+          <Text style={[styles.balanceLabel, { color: colors.mutedForeground }]}>{t("الرصيد المتاح للسحب", "Available for withdrawal")}</Text>
+          <Text style={[styles.balance, { color: colors.teal }]}>{money(getAvailableTeacherBalance(query.data.earningsSummary))}</Text>
+        </View>
+      ) : null}
+      {query.data?.wallet ? (
+        <View style={[styles.balanceCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.balanceLabel, { color: colors.mutedForeground }]}>{t("رصيد المحفظة", "Wallet balance")}</Text>
+          <Text style={[styles.balance, { color: colors.foreground }]}>{money(number(query.data.wallet, "balance", "available_balance", "current_balance"))}</Text>
+        </View>
+      ) : null}
+      <SectionHeading title={t("الأرباح حسب الشهر والنوع", "Earnings by month and type")} />
+      {query.data ? groupedEarnings.length ? groupedEarnings.map((item) => (
+        <View key={`${item.month}:${item.earningType}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.cardTop}>
+            <Text style={[styles.price, { color: item.earningType === "deduction" ? colors.destructive : colors.teal }]}>{money(item.amount)}</Text>
+            <Text style={[styles.badge, { color: colors.mutedForeground }]}>{item.earningType === "bonus" ? t("مكافأة", "Bonus") : item.earningType === "deduction" ? t("خصم", "Deduction") : t("تحويل شهري", "Monthly transfer")}</Text>
+          </View>
+          <Text style={[styles.cardTitle, { color: colors.foreground }]}>{item.month}</Text>
+          <Text style={[styles.cardBody, { color: colors.mutedForeground }]}>
+            {item.hours > 0 ? `${formatNumber(item.hours)} ${t("ساعة", "hours")} · ` : ""}
+            {earningStatusLabel(item.statuses)}
+          </Text>
+        </View>
+      )) : <EmptyState icon="briefcase" title={t("لا توجد أرباح مسجلة", "No earnings recorded")} body={t("ستظهر التحويلات الشهرية والمكافآت والخصومات هنا.", "Monthly transfers, bonuses, and deductions will appear here.")} /> : null}
+      <Pressable onPress={() => router.push("/teacher-withdrawals")} style={[styles.card, { backgroundColor: colors.navySoft, borderColor: colors.border }]}>
+        <Text style={[styles.cardTitle, { color: colors.primary, textAlign: "center" }]}>{t("عرض طلبات السحب والمدفوعات", "View withdrawal requests and payments")}</Text>
+      </Pressable>
+      <SectionHeading title={t("آخر الحركات", "Latest activity")} />
+      {query.data?.transactions.map((row) => (
+        <View key={`tx-${String(row.id)}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.cardTop}>
+            <Text style={[styles.price, { color: row.type === "debit" ? colors.destructive : colors.teal }]}>{money(number(row, "amount", "amount_sar"))}</Text>
+            <Text style={[styles.badge, { color: colors.mutedForeground }]}>{text(row, "type", "transaction_type") ?? t("حركة", "Transaction")}</Text>
+          </View>
+          <Text style={[styles.cardTitle, { color: colors.foreground }]}>{text(row, "description", "reason") ?? t("حركة مالية", "Financial transaction")}</Text>
+          <Text style={[styles.cardBody, { color: colors.mutedForeground }]}>{dateLabel(text(row, "created_at"), locale)}</Text>
+        </View>
+      ))}
+    </Screen>
+  );
 }
 
 async function resolveRecordingUrl(url: string | null) {

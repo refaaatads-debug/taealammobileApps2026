@@ -77,6 +77,8 @@ export function TeacherWithdrawalsScreen() {
   const [minimum, setMinimum] = useState(100);
   const [withdrawals, setWithdrawals] = useState<Row[]>([]);
   const [earnings, setEarnings] = useState<Row[]>([]);
+  const [payments, setPayments] = useState<Row[]>([]);
+  const [paymentsLoadError, setPaymentsLoadError] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [attachment, setAttachment] = useState<PickedAttachment | null>(null);
 
@@ -85,11 +87,12 @@ export function TeacherWithdrawalsScreen() {
     setLoading(true);
     setLoadError(null);
     const month = new Date().toISOString().slice(0, 7);
-    const [breakdown, settings, earningsResult, withdrawalsResult, monthResult] = await Promise.all([
+    const [breakdown, settings, earningsResult, withdrawalsResult, paymentsResult, monthResult] = await Promise.all([
       supabase.rpc("get_teacher_earnings_breakdown", { _teacher_id: user.id }),
       supabase.from("financial_settings").select("min_withdrawal_amount").maybeSingle(),
       supabase.from("teacher_earnings").select("amount,month,hours,created_at,status,earning_type").eq("teacher_id", user.id).order("created_at", { ascending: false }),
       supabase.from("withdrawal_requests").select("*").eq("teacher_id", user.id).order("created_at", { ascending: false }).limit(10),
+      supabase.from("teacher_payments" as any).select("id,amount,created_at").eq("teacher_id", user.id).order("created_at", { ascending: false }).limit(20),
       supabase.rpc("get_teacher_net_summary", { _teacher_id: user.id, _month: month }),
     ]);
     const firstError = breakdown.error ?? settings.error ?? earningsResult.error ?? withdrawalsResult.error ?? monthResult.error;
@@ -106,6 +109,8 @@ export function TeacherWithdrawalsScreen() {
     setMinimum(numeric((settings.data as Row | null)?.min_withdrawal_amount) || 100);
     setEarnings((earningsResult.data ?? []) as Row[]);
     setWithdrawals((withdrawalsResult.data ?? []) as Row[]);
+    setPayments((paymentsResult.data ?? []) as Row[]);
+    setPaymentsLoadError(paymentsResult.error ? errorMessage(paymentsResult.error, "تعذر تحميل سجل المدفوعات.") : null);
     setLoading(false);
   }, [role, user]);
 
@@ -281,6 +286,13 @@ export function TeacherWithdrawalsScreen() {
               {typeof row.teacher_notes === "string" && row.teacher_notes ? <Text style={[styles.body, { color: colors.foreground }]}>{row.teacher_notes}</Text> : null}
               {typeof row.admin_notes === "string" && row.admin_notes ? <Text style={[styles.adminNote, { color: colors.primary, backgroundColor: colors.navySoft }]}>رد الإدارة: {row.admin_notes}</Text> : null}
               {typeof row.attachment_url === "string" && row.attachment_url ? <Pressable onPress={() => void openWithdrawalAttachment(row.attachment_url as string, typeof row.attachment_name === "string" ? row.attachment_name : "المرفق")}><Text style={[styles.link, { color: colors.teal }]}>{typeof row.attachment_name === "string" ? row.attachment_name : "فتح المرفق"}</Text></Pressable> : null}
+            </View>
+          ))}
+          <SectionHeading title="المدفوعات المكتملة" />
+          {paymentsLoadError ? <EmptyState icon="alert-circle" title="تعذر تحميل سجل المدفوعات" body={paymentsLoadError} /> : !payments.length ? <EmptyState icon="credit-card" title="لا توجد مدفوعات مسجلة" body="ستظهر هنا المبالغ التي سجلتها الإدارة كمدفوعة." /> : payments.map((row) => (
+            <View key={String(row.id)} style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.rowValue, { color: colors.teal }]}>{money(numeric(row.amount))}</Text>
+              <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: colors.foreground }]}>تم تسجيل الدفع</Text><Text style={[styles.muted, { color: colors.mutedForeground }]}>{dateTime(row.created_at)}</Text></View>
             </View>
           ))}
         </>
