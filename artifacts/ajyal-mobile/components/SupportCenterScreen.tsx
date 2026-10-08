@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { router } from "expo-router";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,16 +9,17 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
+import { setActiveSupportTicketId } from "@/lib/activeChatNotifications";
 
 type Row = Record<string, unknown>;
 type SupportTab = "support" | "messages" | "ai";
 type AiMessage = { role: "user" | "assistant"; content: string };
 
 const QUICK_REPLIES = [
-  "متى موعد حصتي القادمة؟",
-  "كم الدقائق المتبقية في باقتي؟",
-  "ما هي واجباتي الحالية؟",
-  "أريد التحدث مع الدعم البشري",
+  { ar: "متى موعد حصتي القادمة؟", en: "When is my next lesson?" },
+  { ar: "كم الدقائق المتبقية في باقتي؟", en: "How many minutes are left in my plan?" },
+  { ar: "ما هي واجباتي الحالية؟", en: "What assignments do I have?" },
+  { ar: "أريد التحدث مع الدعم البشري", en: "I would like to contact human support" },
 ];
 
 function text(row: Row, ...keys: string[]): string {
@@ -49,6 +50,8 @@ export default function SupportCenterScreen({ mode = "support" }: { mode?: "supp
   const colors = useColors();
   const { user } = useAuth();
   const { t, direction } = useAppPreferences();
+  const isRTL = direction === "rtl";
+  const { width: windowWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<SupportTab>(mode === "help" ? "ai" : "support");
   const [tickets, setTickets] = useState<Row[]>([]);
@@ -70,6 +73,12 @@ export default function SupportCenterScreen({ mode = "support" }: { mode?: "supp
     () => tickets.find((ticket) => String(ticket.id) === ticketId),
     [ticketId, tickets],
   );
+  const activeSupportTicketId = tab === "support" && !showNewTicket ? ticketId : null;
+
+  useFocusEffect(useCallback(() => {
+    setActiveSupportTicketId(activeSupportTicketId);
+    return () => setActiveSupportTicketId(null);
+  }, [activeSupportTicketId]));
 
   const loadTickets = async (preferredId?: string | null) => {
     if (!supabase || !user) {
@@ -242,26 +251,43 @@ export default function SupportCenterScreen({ mode = "support" }: { mode?: "supp
     : [{ id: "support", label: t("الدعم الفني", "Technical support"), icon: "headphones" }];
 
   return (
-    <Screen scroll={false} contentStyle={styles.screenContent}>
+    <Screen
+      scroll={false}
+      contentStyle={[
+        styles.screenContent,
+        {
+          width: "100%",
+          maxWidth: windowWidth >= 768 ? 1160 : undefined,
+          alignSelf: "center",
+          paddingHorizontal: windowWidth >= 768 ? 24 : 12,
+          paddingBottom: Math.max(insets.bottom + 12, 16),
+        },
+      ]}
+    >
       <KeyboardAvoidingView style={styles.flex} behavior="padding" keyboardVerticalOffset={0}>
-        <LinearGradient colors={[colors.teal, colors.primary]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.centerHeader}>
+        <LinearGradient
+          colors={[colors.teal, colors.primary]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={[styles.centerHeader, { flexDirection: isRTL ? "row" : "row-reverse" }]}
+        >
           <Pressable onPress={() => goBackOrHome()} hitSlop={8} style={styles.headerIcon}><Icon name="x" size={17} color={colors.primaryForeground} /></Pressable>
-          <View style={styles.centerHeaderCopy}>
-            <Text style={[styles.centerHeaderEyebrow, { color: colors.tint, writingDirection: direction }]}>{mode === "help" ? t("تعلم وتواصل بسهولة", "Learn and connect easily") : t("نحن هنا لمساعدتك", "We are here to help")}</Text>
-            <Text style={[styles.centerHeaderTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{mode === "help" ? t("مركز المساعدة", "Help center") : t("تواصل مع الفريق", "Contact the team")}</Text>
-            <Text style={[styles.centerHeaderBody, { color: colors.tint, writingDirection: direction }]}>{mode === "help" ? t("المساعد والرسائل في مكان واحد", "Your assistant and messages in one place") : t("الدعم الفني والتذاكر في مكان واحد", "Technical support and tickets in one place")}</Text>
+          <View style={[styles.centerHeaderCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
+            <Text style={[styles.centerHeaderEyebrow, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{mode === "help" ? t("تعلم وتواصل بسهولة", "Learn and connect easily") : t("نحن هنا لمساعدتك", "We are here to help")}</Text>
+            <Text style={[styles.centerHeaderTitle, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{mode === "help" ? t("مركز المساعدة", "Help center") : t("تواصل مع الفريق", "Contact the team")}</Text>
+            <Text style={[styles.centerHeaderBody, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{mode === "help" ? t("المساعد والرسائل في مكان واحد", "Your assistant and messages in one place") : t("الدعم الفني والتذاكر في مكان واحد", "Technical support and tickets in one place")}</Text>
           </View>
           <View style={[styles.headerBubble, { backgroundColor: colors.navySoft }]}>
             <Icon name={mode === "help" ? "star" : "headphones"} size={21} color={colors.primaryForeground} />
-            <View style={[styles.onlineDot, { backgroundColor: colors.teal }]} />
+            <View style={[styles.onlineDot, { backgroundColor: colors.teal, [isRTL ? "left" : "right"]: 0 }]} />
           </View>
         </LinearGradient>
 
-        <View style={[styles.tabs, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <View style={[styles.tabs, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row-reverse" : "row" }]}>
           {tabs.map((item) => {
             const active = tab === item.id;
             return (
-              <Pressable key={item.id} testID={`support-tab-${item.id}`} onPress={() => setTab(item.id)} style={[styles.tab, { borderColor: active ? colors.primary : "transparent" }, active && { backgroundColor: colors.navySoft }]}>
+              <Pressable key={item.id} testID={`support-tab-${item.id}`} onPress={() => setTab(item.id)} style={[styles.tab, { borderColor: active ? colors.primary : "transparent", flexDirection: isRTL ? "row-reverse" : "row" }, active && { backgroundColor: colors.navySoft }]}>
                 <Icon name={item.icon} size={14} color={active ? colors.primary : colors.mutedForeground} />
                 <Text style={[styles.tabText, { color: active ? colors.primary : colors.mutedForeground, writingDirection: direction }]}>{item.label}</Text>
               </Pressable>
@@ -271,49 +297,49 @@ export default function SupportCenterScreen({ mode = "support" }: { mode?: "supp
 
         {tab === "support" ? (
           <View style={styles.flex}>
-              <View style={[styles.sectionBar, { borderBottomColor: colors.border }]}>
-              <View style={styles.sectionBarCopy}>
-                <Text style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction }]}>{ticketId ? text(currentTicket ?? {}, "subject") || t("طلب الدعم", "Support request") : t("الدعم الفني", "Technical support")}</Text>
-                <Text style={[styles.sectionSubtitle, { color: colors.mutedForeground, writingDirection: direction }]}>{ticketId ? t("محادثة مع فريق الدعم", "Conversation with support") : t("لديك طلبات وتواصل مع فريق الدعم", "Your requests and contact with support")}</Text>
+              <View style={[styles.sectionBar, { borderBottomColor: colors.border, flexDirection: isRTL ? "row-reverse" : "row" }]}>
+              <View style={[styles.sectionBarCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
+                <Text style={[styles.sectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{ticketId ? text(currentTicket ?? {}, "subject") || t("طلب الدعم", "Support request") : t("الدعم الفني", "Technical support")}</Text>
+                <Text style={[styles.sectionSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{ticketId ? t("محادثة مع فريق الدعم", "Conversation with support") : t("لديك طلبات وتواصل مع فريق الدعم", "Your requests and contact with support")}</Text>
               </View>
-              <Pressable testID="new-support-ticket" onPress={() => setShowNewTicket((current) => !current)} style={[styles.newTicketButton, { backgroundColor: colors.primary }]}>
+              <Pressable testID="new-support-ticket" onPress={() => setShowNewTicket((current) => !current)} style={[styles.newTicketButton, { backgroundColor: colors.primary, flexDirection: isRTL ? "row-reverse" : "row" }]}>
                 <Icon name="plus" size={14} color={colors.primaryForeground} />
-                <Text style={[styles.newTicketText, { color: colors.primaryForeground }]}>{t("تذكرة جديدة", "New ticket")}</Text>
+                <Text style={[styles.newTicketText, { color: colors.primaryForeground, writingDirection: direction }]}>{t("تذكرة جديدة", "New ticket")}</Text>
               </Pressable>
             </View>
             {showNewTicket ? (
               <View style={[styles.newTicketCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <View style={[styles.newTicketIntro, { backgroundColor: colors.tealSoft }]}>
+                <View style={[styles.newTicketIntro, { backgroundColor: colors.tealSoft, flexDirection: isRTL ? "row-reverse" : "row" }]}>
                   <View style={[styles.newTicketIntroIcon, { backgroundColor: colors.teal }]}><Icon name="edit-3" size={15} color={colors.primaryForeground} /></View>
-                  <View style={styles.newTicketIntroCopy}>
-                    <Text style={[styles.newTicketIntroTitle, { color: colors.foreground, writingDirection: direction }]}>{t("كيف نساعدك اليوم؟", "How can we help today?")}</Text>
-                    <Text style={[styles.newTicketIntroBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("اكتب عنواناً مختصراً وسيتابع فريقنا طلبك.", "Add a short subject and our team will follow up.")}</Text>
+                  <View style={[styles.newTicketIntroCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
+                    <Text style={[styles.newTicketIntroTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("كيف نساعدك اليوم؟", "How can we help today?")}</Text>
+                    <Text style={[styles.newTicketIntroBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("اكتب عنواناً مختصراً وسيتابع فريقنا طلبك.", "Add a short subject and our team will follow up.")}</Text>
                   </View>
                 </View>
-                <TextInput value={ticketSubject} onChangeText={setTicketSubject} placeholder={t("اكتب عنوان المشكلة أو الاستفسار", "Describe the issue or question")} placeholderTextColor={colors.mutedForeground} textAlign="right" style={[styles.subjectInput, { color: colors.foreground, borderColor: colors.border }]} />
-                <Pressable disabled={!ticketSubject.trim() || sending} onPress={() => void createTicket()} style={[styles.fullButton, { backgroundColor: ticketSubject.trim() ? colors.primary : colors.muted }]}>
-                  {sending ? <ActivityIndicator color={colors.primaryForeground} /> : <><Icon name="send" size={14} color={ticketSubject.trim() ? colors.primaryForeground : colors.mutedForeground} /><Text style={[styles.fullButtonText, { color: ticketSubject.trim() ? colors.primaryForeground : colors.mutedForeground }]}>{t("إرسال الطلب", "Submit request")}</Text></>}
+                <TextInput value={ticketSubject} onChangeText={setTicketSubject} placeholder={t("اكتب عنوان المشكلة أو الاستفسار", "Describe the issue or question")} placeholderTextColor={colors.mutedForeground} textAlign={isRTL ? "right" : "left"} style={[styles.subjectInput, { color: colors.foreground, borderColor: colors.border, writingDirection: direction }]} />
+                <Pressable disabled={!ticketSubject.trim() || sending} onPress={() => void createTicket()} style={[styles.fullButton, { backgroundColor: ticketSubject.trim() ? colors.primary : colors.muted, flexDirection: isRTL ? "row-reverse" : "row" }]}>
+                  {sending ? <ActivityIndicator color={colors.primaryForeground} /> : <><Icon name="send" size={14} color={ticketSubject.trim() ? colors.primaryForeground : colors.mutedForeground} /><Text style={[styles.fullButtonText, { color: ticketSubject.trim() ? colors.primaryForeground : colors.mutedForeground, writingDirection: direction }]}>{t("إرسال الطلب", "Submit request")}</Text></>}
                 </Pressable>
               </View>
             ) : null}
             {loading ? <View style={styles.center}><ActivityIndicator color={colors.teal} /></View> : error ? <EmptyState icon="alert-circle" title={t("تعذر تحميل الدعم", "Unable to load support")} body={error} action={t("إعادة المحاولة", "Try again")} onAction={() => void loadTickets()} /> : ticketId ? (
               <View style={styles.flex}>
-                <ScrollView style={styles.messages} contentContainerStyle={styles.messagesContent} showsVerticalScrollIndicator={false} keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled">
+                <ScrollView style={[styles.messages, styles.wideContent]} contentContainerStyle={styles.messagesContent} showsVerticalScrollIndicator={false} keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled">
                   {messages.length ? messages.map((message) => {
                     const mine = message.is_admin !== true;
-                    return <View key={String(message.id)} style={[styles.messageBubble, { alignSelf: mine ? "flex-end" : "flex-start", backgroundColor: mine ? colors.primary : colors.card, borderColor: colors.border }]}><Text style={[styles.messageText, { color: mine ? colors.primaryForeground : colors.foreground, writingDirection: direction }]}>{text(message, "content")}</Text><Text style={[styles.messageDate, { color: mine ? colors.tint : colors.mutedForeground }]}>{dateLabel(message)}</Text></View>;
+                    return <View key={String(message.id)} style={[styles.messageBubble, { alignSelf: mine ? "flex-end" : "flex-start", backgroundColor: mine ? colors.primary : colors.card, borderColor: colors.border }]}><Text style={[styles.messageText, { color: mine ? colors.primaryForeground : colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{text(message, "content")}</Text><Text style={[styles.messageDate, { color: mine ? colors.tint : colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{dateLabel(message)}</Text></View>;
                   }) : <EmptyState icon="headphones" title={t("ابدأ التواصل مع الدعم", "Start a support conversation")} body={t("اكتب رسالتك وسيتمكن فريق الدعم من متابعتها.", "Write a message and the support team will follow up.")} />}
                 </ScrollView>
                 <View style={[styles.composerDock, { backgroundColor: colors.card, borderColor: colors.border, paddingBottom: Math.max(insets.bottom, 8) }]}>
-                  <View style={[styles.composer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={[styles.composer, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row" : "row-reverse" }]}>
                     <Pressable disabled={sending || !draft.trim()} onPress={() => void sendSupportMessage()} style={[styles.sendButton, { backgroundColor: draft.trim() ? colors.primary : colors.muted }]}><Icon name="send" size={16} color={draft.trim() ? colors.primaryForeground : colors.mutedForeground} /></Pressable>
-                    <TextInput value={draft} onChangeText={setDraft} placeholder={t("اكتب رسالتك لفريق الدعم…", "Write to support…")} placeholderTextColor={colors.mutedForeground} multiline textAlign="right" style={[styles.composerInput, { color: colors.foreground }]} />
+                    <TextInput value={draft} onChangeText={setDraft} placeholder={t("اكتب رسالتك لفريق الدعم…", "Write to support…")} placeholderTextColor={colors.mutedForeground} multiline textAlign={isRTL ? "right" : "left"} style={[styles.composerInput, { color: colors.foreground, writingDirection: direction }]} />
                   </View>
                 </View>
               </View>
             ) : tickets.length ? (
-              <ScrollView style={styles.messages} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
-                {tickets.map((ticket) => <Pressable key={String(ticket.id)} onPress={() => setTicketId(String(ticket.id))} style={[styles.ticketCard, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.ticketIcon, { backgroundColor: colors.tealSoft }]}><Icon name="headphones" size={18} color={colors.teal} /></View><View style={styles.ticketCopy}><Text style={[styles.ticketTitle, { color: colors.foreground, writingDirection: direction }]}>{text(ticket, "subject") || t("طلب دعم", "Support request")}</Text><Text style={[styles.ticketMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{dateLabel(ticket)} · {text(ticket, "status") || t("مفتوحة", "Open")}</Text></View><Icon name="chevron-left" size={16} color={colors.mutedForeground} /></Pressable>)}
+               <ScrollView style={[styles.messages, styles.wideContent]} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
+                 {tickets.map((ticket) => <Pressable key={String(ticket.id)} onPress={() => setTicketId(String(ticket.id))} style={[styles.ticketCard, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row-reverse" : "row" }]}><View style={[styles.ticketIcon, { backgroundColor: colors.tealSoft }]}><Icon name="headphones" size={18} color={colors.teal} /></View><View style={[styles.ticketCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}><Text style={[styles.ticketTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{text(ticket, "subject") || t("طلب دعم", "Support request")}</Text><Text style={[styles.ticketMeta, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{dateLabel(ticket)} · {text(ticket, "status") || t("مفتوحة", "Open")}</Text></View><Icon name={isRTL ? "chevron-left" : "chevron-right"} size={16} color={colors.mutedForeground} /></Pressable>)}
               </ScrollView>
             ) : (
               <View style={styles.emptyWrap}><View style={[styles.emptySupportIcon, { backgroundColor: colors.navySoft }]}><Icon name="headphones" size={27} color={colors.primary} /></View><Text style={[styles.emptyTitle, { color: colors.foreground, writingDirection: direction }]}>{t("لا توجد تذاكر", "No tickets yet")}</Text><Text style={[styles.emptyBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("أنشئ تذكرة جديدة وسيساعدك فريق الدعم داخل هذه النافذة.", "Create a ticket and the support team will help you here.")}</Text></View>
@@ -324,24 +350,27 @@ export default function SupportCenterScreen({ mode = "support" }: { mode?: "supp
             <View style={[styles.emptySupportIcon, { backgroundColor: colors.navySoft }]}><Icon name="message-square" size={27} color={colors.primary} /></View>
             <Text style={[styles.emptyTitle, { color: colors.foreground, writingDirection: direction }]}>{t("رسائلك التعليمية", "Your learning messages")}</Text>
             <Text style={[styles.emptyBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("افتح المحادثات المرتبطة بحجوزاتك وتواصل مع معلميك.", "Open booking conversations and contact your teachers.")}</Text>
-            <Pressable onPress={() => router.push("/(tabs)/messages")} style={[styles.fullButton, { backgroundColor: colors.primary }]}><Text style={[styles.fullButtonText, { color: colors.primaryForeground }]}>{t("فتح المحادثات", "Open messages")}</Text><Icon name="arrow-left" size={15} color={colors.primaryForeground} /></Pressable>
+            <Pressable onPress={() => router.push("/(tabs)/messages")} style={[styles.fullButton, { backgroundColor: colors.primary, flexDirection: isRTL ? "row-reverse" : "row" }]}><Text style={[styles.fullButtonText, { color: colors.primaryForeground, writingDirection: direction }]}>{t("فتح المحادثات", "Open messages")}</Text><Icon name={isRTL ? "arrow-left" : "arrow-right"} size={15} color={colors.primaryForeground} /></Pressable>
           </View>
         ) : (
           <View style={styles.flex}>
-            <ScrollView style={styles.aiMessages} contentContainerStyle={styles.aiContent} showsVerticalScrollIndicator={false} keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled">
-              <View style={styles.aiHeader}>
+             <ScrollView style={[styles.aiMessages, styles.wideContent]} contentContainerStyle={styles.aiContent} showsVerticalScrollIndicator={false} keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled">
+               <View style={[styles.aiHeader, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
                 <View style={[styles.aiAvatar, { backgroundColor: colors.navySoft }]}><Icon name="star" size={24} color={colors.primary} /><View style={[styles.aiOnline, { backgroundColor: colors.teal }]} /></View>
-                <View style={styles.aiHeaderCopy}><Text style={[styles.aiTitle, { color: colors.foreground, writingDirection: direction }]}>{t("المساعد الذكي", "AI assistant")}</Text><Text style={[styles.aiSubtitle, { color: colors.mutedForeground, writingDirection: direction }]}>{t("متصل دائماً · يفهم بياناتك", "Always available · understands your account")}</Text></View>
+                 <View style={[styles.aiHeaderCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}><Text style={[styles.aiTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("المساعد الذكي", "AI assistant")}</Text><Text style={[styles.aiSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("متصل دائماً · يفهم بياناتك", "Always available · understands your account")}</Text></View>
               </View>
-              {!aiMessages.length ? <View style={styles.aiWelcome}><View style={[styles.aiWelcomeIcon, { backgroundColor: colors.navySoft }]}><Icon name="star" size={27} color={colors.primary} /></View><Text style={[styles.aiWelcomeTitle, { color: colors.foreground, writingDirection: direction }]}>{t("مرحباً 👋", "Hello 👋")}</Text><Text style={[styles.aiWelcomeBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("أنا مساعدك الذكي. اسألني عن باقتك أو حصصك أو واجباتك، ويمكنني تحويلك لفريق الدعم البشري.", "I’m your AI assistant. Ask about your plan, sessions, or assignments, and I can hand you to human support.")}</Text></View> : null}
-              {aiMessages.map((message, index) => <View key={`${message.role}-${index}`} style={[styles.aiBubble, { alignSelf: message.role === "user" ? "flex-end" : "flex-start", backgroundColor: message.role === "user" ? colors.primary : colors.card, borderColor: colors.border }]}><Text style={[styles.aiBubbleText, { color: message.role === "user" ? colors.primaryForeground : colors.foreground, writingDirection: direction }]}>{message.content}</Text></View>)}
-              {mode !== "help" && aiTicketId ? <Pressable onPress={() => void handoffToSupport()} style={[styles.handoffButton, { backgroundColor: colors.tealSoft }]}><Icon name="headphones" size={15} color={colors.teal} /><Text style={[styles.handoffText, { color: colors.teal }]}>{t("فتح تذكرة الدعم", "Open support ticket")}</Text></Pressable> : null}
+             {!aiMessages.length ? <View style={styles.aiWelcome}><View style={[styles.aiWelcomeIcon, { backgroundColor: colors.navySoft }]}><Icon name="star" size={27} color={colors.primary} /></View><Text style={[styles.aiWelcomeTitle, { color: colors.foreground, writingDirection: direction }]}>{t("مرحباً 👋", "Hello 👋")}</Text><Text style={[styles.aiWelcomeBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("أنا مساعدك الذكي. اسألني عن باقتك أو حصصك أو واجباتك، ويمكنني تحويلك لفريق الدعم البشري.", "I’m your AI assistant. Ask about your plan, sessions, or assignments, and I can hand you to human support.")}</Text></View> : null}
+               {aiMessages.map((message, index) => <View key={`${message.role}-${index}`} style={[styles.aiBubble, { alignSelf: message.role === "user" ? "flex-end" : "flex-start", backgroundColor: message.role === "user" ? colors.primary : colors.card, borderColor: colors.border }]}><Text style={[styles.aiBubbleText, { color: message.role === "user" ? colors.primaryForeground : colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{message.content}</Text></View>)}
+              {mode !== "help" && aiTicketId ? <Pressable onPress={() => void handoffToSupport()} style={[styles.handoffButton, { backgroundColor: colors.tealSoft, flexDirection: isRTL ? "row-reverse" : "row" }]}><Icon name="headphones" size={15} color={colors.teal} /><Text style={[styles.handoffText, { color: colors.teal, writingDirection: direction }]}>{t("فتح تذكرة الدعم", "Open support ticket")}</Text></Pressable> : null}
             </ScrollView>
-            {!aiMessages.length ? <View style={styles.quickReplies}><Text style={[styles.quickLabel, { color: colors.mutedForeground, writingDirection: direction }]}>{t("اقتراحات سريعة:", "Quick suggestions:")}</Text><View style={styles.quickWrap}>{QUICK_REPLIES.map((reply) => <Pressable key={reply} onPress={() => void sendAiMessage(reply)} style={[styles.quickChip, { backgroundColor: colors.muted }]}><Text style={[styles.quickText, { color: colors.primary, writingDirection: direction }]}>{reply}</Text></Pressable>)}</View></View> : null}
+              {!aiMessages.length ? <View style={[styles.quickReplies, { borderTopColor: colors.border }]}><Text style={[styles.quickLabel, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("اقتراحات سريعة:", "Quick suggestions:")}</Text><View style={[styles.quickWrap, { flexDirection: isRTL ? "row-reverse" : "row" }]}>{QUICK_REPLIES.map((reply) => {
+                const label = t(reply.ar, reply.en);
+                return <Pressable key={reply.ar} onPress={() => void sendAiMessage(label)} style={[styles.quickChip, { backgroundColor: colors.muted }]}><Text style={[styles.quickText, { color: colors.primary, writingDirection: direction }]}>{label}</Text></Pressable>;
+              })}</View></View> : null}
              <View style={[styles.composerDock, { backgroundColor: colors.card, borderColor: colors.border, paddingBottom: Math.max(insets.bottom, 8) }]}>
-               <View style={[styles.composer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={[styles.composer, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row" : "row-reverse" }]}>
                  <Pressable testID="ai-send-button" disabled={aiSending || !aiDraft.trim()} onPress={() => void sendAiMessage()} style={[styles.sendButton, { backgroundColor: aiDraft.trim() ? colors.primary : colors.muted }]}>{aiSending ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Icon name="send" size={16} color={aiDraft.trim() ? colors.primaryForeground : colors.mutedForeground} />}</Pressable>
-                 <TextInput testID="ai-message-input" value={aiDraft} onChangeText={setAiDraft} placeholder={aiSending ? t("جاري التفكير…", "Thinking…") : t("اسأل المساعد الذكي…", "Ask the AI assistant…")} placeholderTextColor={colors.mutedForeground} multiline textAlign="right" style={[styles.composerInput, { color: colors.foreground }]} />
+                  <TextInput testID="ai-message-input" value={aiDraft} onChangeText={setAiDraft} placeholder={aiSending ? t("جاري التفكير…", "Thinking…") : t("اسأل المساعد الذكي…", "Ask the AI assistant…")} placeholderTextColor={colors.mutedForeground} multiline textAlign={isRTL ? "right" : "left"} style={[styles.composerInput, { color: colors.foreground, writingDirection: direction }]} />
                </View>
              </View>
           </View>
@@ -353,7 +382,8 @@ export default function SupportCenterScreen({ mode = "support" }: { mode?: "supp
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  screenContent: { paddingHorizontal: 10 },
+  screenContent: { paddingHorizontal: 12 },
+  wideContent: { width: "100%", alignSelf: "center", maxWidth: 1120 },
   centerHeader: { minHeight: 82, borderTopLeftRadius: 23, borderTopRightRadius: 23, paddingHorizontal: 13, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 10, shadowColor: "#173E8C", shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 3 },
   headerIcon: { width: 25, height: 25, alignItems: "center", justifyContent: "center" },
   centerHeaderCopy: { flex: 1, alignItems: "flex-end" },
@@ -396,11 +426,11 @@ const styles = StyleSheet.create({
   composerInput: { flex: 1, minHeight: 38, maxHeight: 86, paddingHorizontal: 9, paddingVertical: 8, fontSize: 11, fontFamily: "Inter_400Regular", writingDirection: "rtl" },
   sendButton: { width: 39, height: 39, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 9 },
-  emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 35 },
+  emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
   emptySupportIcon: { width: 58, height: 58, borderRadius: 18, alignItems: "center", justifyContent: "center", marginBottom: 12 },
   emptyTitle: { fontSize: 15, fontFamily: "Inter_700Bold", textAlign: "center", writingDirection: "rtl" },
-  emptyBody: { maxWidth: 300, fontSize: 10, lineHeight: 17, fontFamily: "Inter_400Regular", textAlign: "center", writingDirection: "rtl", marginTop: 5 },
-  messagesLanding: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 30 },
+  emptyBody: { width: "100%", maxWidth: 680, alignSelf: "center", fontSize: 10, lineHeight: 17, fontFamily: "Inter_400Regular", textAlign: "center", writingDirection: "rtl", marginTop: 5 },
+  messagesLanding: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
   aiMessages: { flex: 1 },
   aiContent: { padding: 14, flexGrow: 1, justifyContent: "flex-end", gap: 9 },
   aiHeader: { flexDirection: "row-reverse", alignItems: "center", gap: 9, marginBottom: 7 },
@@ -412,7 +442,7 @@ const styles = StyleSheet.create({
   aiWelcome: { alignItems: "center", justifyContent: "center", paddingVertical: 36, borderTopWidth: 1, borderBottomWidth: 1, borderColor: "#E8ECF2" },
   aiWelcomeIcon: { width: 58, height: 58, borderRadius: 29, alignItems: "center", justifyContent: "center", marginBottom: 12 },
   aiWelcomeTitle: { fontSize: 15, fontFamily: "Inter_700Bold", textAlign: "center", writingDirection: "rtl" },
-  aiWelcomeBody: { maxWidth: 300, fontSize: 11, lineHeight: 19, fontFamily: "Inter_400Regular", textAlign: "center", writingDirection: "rtl", marginTop: 6 },
+  aiWelcomeBody: { width: "100%", maxWidth: 680, alignSelf: "center", fontSize: 11, lineHeight: 19, fontFamily: "Inter_400Regular", textAlign: "center", writingDirection: "rtl", marginTop: 6 },
   aiBubble: { maxWidth: "88%", borderWidth: 1, borderRadius: 16, padding: 11 },
   aiBubbleText: { fontSize: 11, lineHeight: 18, fontFamily: "Inter_500Medium", textAlign: "right", writingDirection: "rtl" },
   quickReplies: { borderTopWidth: 1, borderTopColor: "#E8ECF2", paddingHorizontal: 10, paddingTop: 9 },

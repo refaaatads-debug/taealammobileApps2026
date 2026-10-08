@@ -21,7 +21,7 @@
     "android": {
       "package": "com.ajyalalmaerifa.app",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 1,
+      "versionCode": 191,
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.RECORD_AUDIO",
@@ -56,6 +56,10 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withIncomingCallNative",
+      "./plugins/withAjyalNativeCalls",
+      "@config-plugins/react-native-blob-util",
+      "@config-plugins/react-native-pdf",
       [
         "@config-plugins/react-native-webrtc",
         {

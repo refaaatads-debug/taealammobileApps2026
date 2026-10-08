@@ -174,7 +174,9 @@ export function useSessionWebRTC({
   const [localStream, setLocalStream] = useState<any>(null);
   const [remoteStream, setRemoteStream] = useState<any>(null);
   const [muted, setMuted] = useState(false);
+  const [speakerEnabled, setSpeakerEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
+  const speakerEnabledRef = useRef(true);
   const [rtcView, setRtcView] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [mediaWarning, setMediaWarning] = useState<string | null>(null);
@@ -610,7 +612,11 @@ export function useSessionWebRTC({
       setRtcView(rtc.RTCView ?? null);
       let localStream: any;
       try {
-        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+        await setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+          shouldRouteThroughEarpiece: !speakerEnabledRef.current,
+        });
       } catch {
         // Native audio routing is best-effort; WebRTC still owns the tracks.
       }
@@ -711,6 +717,21 @@ export function useSessionWebRTC({
     setMuted(nextMuted);
   }, [muted]);
 
+  const toggleSpeaker = useCallback(async () => {
+    const nextSpeakerEnabled = !speakerEnabledRef.current;
+    try {
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        shouldRouteThroughEarpiece: !nextSpeakerEnabled,
+      });
+      speakerEnabledRef.current = nextSpeakerEnabled;
+      setSpeakerEnabled(nextSpeakerEnabled);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'تعذر تغيير مخرج الصوت.');
+    }
+  }, []);
+
   const toggleVideo = useCallback(() => {
     const tracks = localStreamRef.current?.getVideoTracks?.() ?? [];
     const nextEnabled = !videoEnabled;
@@ -724,6 +745,7 @@ export function useSessionWebRTC({
     remoteStream,
     rtcView,
     muted,
+    speakerEnabled,
     videoEnabled,
     error,
     mediaWarning,
@@ -731,6 +753,7 @@ export function useSessionWebRTC({
     start,
     stop,
     toggleMute,
+    toggleSpeaker,
     toggleVideo,
     sendDataMessage,
   };

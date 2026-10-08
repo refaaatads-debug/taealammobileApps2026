@@ -18,9 +18,10 @@ function withCallbackTimeout<T>(promise: PromiseLike<T>, message: string): Promi
 
 export default function AuthCallbackScreen() {
   const colors = useColors();
-  const { user, isLoading, isAuthenticated, isPasswordRecovery, beginPasswordRecovery, completePendingRole, logout } = useAuth();
+  const { user, isLoading, isAuthenticated, isPasswordRecovery, beginPasswordRecovery, completePendingRole, retrySessionRestore } = useAuth();
   const [roleError, setRoleError] = React.useState<string | null>(null);
   const [roleReady, setRoleReady] = React.useState(false);
+  const [callbackUrlChecked, setCallbackUrlChecked] = React.useState(false);
 
   React.useEffect(() => {
     let active = true;
@@ -72,8 +73,13 @@ export default function AuthCallbackScreen() {
         if (active) setRoleError(error instanceof Error ? error.message : "تعذر إكمال تسجيل الدخول");
       }
     };
-    void Linking.getInitialURL().then(handleCallbackUrl).catch((error) => {
+    void withCallbackTimeout(
+      Linking.getInitialURL(),
+      "انتهت مهلة قراءة رابط المصادقة",
+    ).then(handleCallbackUrl).catch((error) => {
       if (active) setRoleError(error instanceof Error ? error.message : "تعذر قراءة رابط المصادقة");
+    }).finally(() => {
+      if (active) setCallbackUrlChecked(true);
     });
     const subscription = Linking.addEventListener("url", ({ url }) => {
       void handleCallbackUrl(url);
@@ -85,12 +91,12 @@ export default function AuthCallbackScreen() {
   }, [beginPasswordRecovery]);
 
   React.useEffect(() => {
-    if (isAuthenticated || isPasswordRecovery || roleReady || roleError) return;
+    if (isLoading || !callbackUrlChecked || isAuthenticated || isPasswordRecovery || roleReady || roleError) return;
     const timeout = setTimeout(() => {
       setRoleError("لم تصل استجابة المصادقة من المنصة في الوقت المتوقع.");
     }, CALLBACK_TIMEOUT_MS);
     return () => clearTimeout(timeout);
-  }, [isAuthenticated, isPasswordRecovery, roleError, roleReady]);
+  }, [callbackUrlChecked, isAuthenticated, isLoading, isPasswordRecovery, roleError, roleReady]);
 
   React.useEffect(() => {
     if (isLoading || !isAuthenticated || isPasswordRecovery) return;
@@ -120,11 +126,16 @@ export default function AuthCallbackScreen() {
           ) : (
             <Pressable
               onPress={() => {
-                void logout().finally(() => router.replace("/"));
+                setRoleError(null);
+                void retrySessionRestore().then((restored) => {
+                  if (!restored) router.replace("/");
+                }).catch((error) => {
+                  setRoleError(error instanceof Error ? error.message : "تعذرت استعادة الجلسة");
+                });
               }}
               style={[styles.retry, { backgroundColor: colors.primary }]}
             >
-              <Text style={[styles.retryText, { color: colors.primaryForeground }]}>العودة لتسجيل الدخول</Text>
+              <Text style={[styles.retryText, { color: colors.primaryForeground }]}>إعادة محاولة استعادة الجلسة</Text>
             </Pressable>
           )}
         </>
