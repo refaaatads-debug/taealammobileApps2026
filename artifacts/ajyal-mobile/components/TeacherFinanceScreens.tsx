@@ -56,6 +56,7 @@ function WithdrawalStatus({ status }: { status: unknown }) {
   const map: Record<string, { label: string; color: string; background: string }> = {
     pending: { label: "قيد المراجعة", color: colors.accentForeground, background: colors.goldSoft },
     approved: { label: "تمت الموافقة", color: colors.teal, background: colors.tealSoft },
+    processing: { label: "قيد المعالجة", color: colors.accentForeground, background: colors.goldSoft },
     paid: { label: "تم الدفع", color: colors.primaryForeground, background: colors.primary },
     rejected: { label: "مرفوض", color: colors.destructive, background: colors.background },
   };
@@ -71,7 +72,7 @@ export function TeacherWithdrawalsScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [available, setAvailable] = useState(0);
-  const [confirmed, setConfirmed] = useState(0);
+  const [paidTotal, setPaidTotal] = useState(0);
   const [monthNet, setMonthNet] = useState(0);
   const [minimum, setMinimum] = useState(100);
   const [withdrawals, setWithdrawals] = useState<Row[]>([]);
@@ -87,7 +88,7 @@ export function TeacherWithdrawalsScreen() {
     const [breakdown, settings, earningsResult, withdrawalsResult, monthResult] = await Promise.all([
       supabase.rpc("get_teacher_earnings_breakdown", { _teacher_id: user.id }),
       supabase.from("financial_settings").select("min_withdrawal_amount").maybeSingle(),
-      supabase.from("teacher_earnings").select("amount,month,hours,created_at,status").eq("teacher_id", user.id).order("created_at", { ascending: false }),
+      supabase.from("teacher_earnings").select("amount,month,hours,created_at,status,earning_type").eq("teacher_id", user.id).order("created_at", { ascending: false }),
       supabase.from("withdrawal_requests").select("*").eq("teacher_id", user.id).order("created_at", { ascending: false }).limit(10),
       supabase.rpc("get_teacher_net_summary", { _teacher_id: user.id, _month: month }),
     ]);
@@ -99,8 +100,8 @@ export function TeacherWithdrawalsScreen() {
     }
     const summary = Array.isArray(breakdown.data) ? (breakdown.data[0] as Row | undefined) : breakdown.data as Row | null;
     const currentMonth = Array.isArray(monthResult.data) ? (monthResult.data[0] as Row | undefined) : monthResult.data as Row | null;
-    setAvailable(numeric(summary?.available_for_withdrawal));
-    setConfirmed(numeric(summary?.confirmed_total));
+    setAvailable(numeric(summary?.available_balance));
+    setPaidTotal(numeric(summary?.paid_total));
     setMonthNet(numeric(currentMonth?.net_total));
     setMinimum(numeric((settings.data as Row | null)?.min_withdrawal_amount) || 100);
     setEarnings((earningsResult.data ?? []) as Row[]);
@@ -110,17 +111,55 @@ export function TeacherWithdrawalsScreen() {
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
+  useFocusEffect(useCallback(() => {
+    const client = supabase;
+    if (!client || !user || role !== "teacher") return undefined;
+
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => { void load(); }, 150);
+    };
+    const topic = `teacher-financial-mobile-${user.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let channel: ReturnType<typeof client.channel> | null = null;
+    try {
+      channel = client
+        .channel(topic)
+        .on("postgres_changes", { event: "*", schema: "public", table: "teacher_earnings", filter: `teacher_id=eq.${user.id}` }, refresh)
+        .on("postgres_changes", { event: "*", schema: "public", table: "withdrawal_requests", filter: `teacher_id=eq.${user.id}` }, refresh)
+        .on("postgres_changes", { event: "*", schema: "public", table: "teacher_payments", filter: `teacher_id=eq.${user.id}` }, refresh)
+        .subscribe((status) => {
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            console.warn(`[teacher-withdrawals] Realtime channel ${status.toLowerCase()}; using focus refresh instead.`);
+          }
+        });
+    } catch (error) {
+      console.warn("[teacher-withdrawals] Could not create realtime channel:", error);
+    }
+
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (channel) {
+        void client.removeChannel(channel).catch((error) => {
+          console.warn("[teacher-withdrawals] Could not remove realtime channel:", error);
+        });
+      }
+    };
+  }, [load, role, user]));
+
   const monthlyEarnings = useMemo(() => {
-    const grouped = new Map<string, { amount: number; hours: number; statuses: Set<string> }>();
+    const grouped = new Map<string, { month: string; earningType: string; amount: number; hours: number; statuses: Set<string> }>();
     earnings.forEach((row) => {
       const month = typeof row.month === "string" ? row.month : "—";
-      const item = grouped.get(month) ?? { amount: 0, hours: 0, statuses: new Set<string>() };
+      const earningType = typeof row.earning_type === "string" ? row.earning_type : "monthly_transfer";
+      const key = `${month}:${earningType}`;
+      const item = grouped.get(key) ?? { month, earningType, amount: 0, hours: 0, statuses: new Set<string>() };
       item.amount += numeric(row.amount);
       item.hours += numeric(row.hours);
       if (typeof row.status === "string") item.statuses.add(row.status);
-      grouped.set(month, item);
+      grouped.set(key, item);
     });
-    return [...grouped.entries()];
+    return [...grouped.values()].sort((a, b) => b.month.localeCompare(a.month) || a.earningType.localeCompare(b.earningType));
   }, [earnings]);
 
   const pickAttachment = async () => {
@@ -206,7 +245,7 @@ export function TeacherWithdrawalsScreen() {
       {loading ? <View style={styles.center}><ActivityIndicator color={colors.teal} /><Text style={[styles.muted, { color: colors.mutedForeground }]}>جارٍ تحميل الأرباح...</Text></View> : loadError ? <EmptyState icon="alert-circle" title="تعذر تحميل الأرباح" body={loadError} action="إعادة المحاولة" onAction={() => void load()} /> : (
         <>
           <View style={styles.metricGrid}>
-            <MetricCard label="الأرباح الحالية" value={money(confirmed)} tone="navy" />
+            <MetricCard label="إجمالي الأرباح المدفوعة" value={money(paidTotal)} tone="navy" />
             <MetricCard label="الرصيد المتاح للسحب" value={money(available)} tone="teal" />
             <MetricCard label="إجمالي ربح هذا الشهر" value={money(monthNet)} tone="gold" />
           </View>
@@ -220,13 +259,20 @@ export function TeacherWithdrawalsScreen() {
               {submitting ? <ActivityIndicator color={colors.primaryForeground} /> : <><Icon name="send" size={16} color={colors.primaryForeground} /><Text style={[styles.primaryText, { color: colors.primaryForeground }]}>طلب سحب الأرباح</Text></>}
             </Pressable>
           </View>
-          <SectionHeading title="الأرباح حسب الشهر" />
-          {!monthlyEarnings.length ? <EmptyState icon="briefcase" title="لا توجد أرباح مسجلة" body="ستظهر أرباح الجلسات المؤكدة من المنصة هنا." /> : monthlyEarnings.map(([month, item]) => (
-            <View key={month} style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.rowValue, { color: colors.foreground }]}>{money(item.amount)}</Text>
-              <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: colors.foreground }]}>{month}</Text><Text style={[styles.muted, { color: colors.mutedForeground }]}>{item.hours.toFixed(1)} ساعة · {item.statuses.has("paid") && item.statuses.size === 1 ? "مدفوعة" : item.statuses.has("confirmed") ? "مؤكدة" : "قيد المراجعة"}</Text></View>
-            </View>
-          ))}
+          <SectionHeading title="سجل الأرباح المضافة" />
+          {!monthlyEarnings.length ? <EmptyState icon="briefcase" title="لا توجد إضافات أرباح" body="ستظهر التحويلات والمكافآت التي أضافتها الإدارة هنا." /> : monthlyEarnings.map((item) => {
+            const typeLabel = item.earningType === "bonus" ? "مكافأة إضافية" : item.earningType === "deduction" ? "خصم" : "تحويل من أرباح الشهر";
+            const statusLabel = item.statuses.has("paid") && item.statuses.size === 1 ? "مدفوعة" : item.statuses.has("confirmed") ? "مسجلة" : "قيد المراجعة";
+            return (
+              <View key={`${item.month}:${item.earningType}`} style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Text style={[styles.rowValue, { color: colors.foreground }]}>{money(item.amount)}</Text>
+                <View style={styles.rowCopy}>
+                  <Text style={[styles.rowTitle, { color: colors.foreground }]}>{item.month}</Text>
+                  <Text style={[styles.muted, { color: colors.mutedForeground }]}>{typeLabel} · {item.hours.toFixed(1)} ساعة · {statusLabel}</Text>
+                </View>
+              </View>
+            );
+          })}
           <SectionHeading title="سجل طلبات السحب" />
           {!withdrawals.length ? <EmptyState icon="file-text" title="لا توجد طلبات سحب" body="ستظهر طلباتك السابقة وحالتها هنا." /> : withdrawals.map((row) => (
             <View key={String(row.id)} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
