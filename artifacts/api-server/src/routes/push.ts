@@ -22,7 +22,11 @@ import { findNotificationImageUrl } from "../lib/notificationImage";
 import { persistPlatformNotificationOnce } from "../lib/platformNotifications";
 import { getSupabaseRoles, readBearerToken, supabaseTable } from "../lib/supabaseAuth";
 import { sendUserPushNotification } from "../lib/userPush";
-import { hasPushEligibleRole, incomingCallRowMatches } from "../lib/pushIdentity";
+import {
+  canUseLegacyNotificationFallback,
+  hasPushEligibleRole,
+  incomingCallRowMatches,
+} from "../lib/pushIdentity";
 import { enqueuePushOutboxEvent, sendLegacyPlatformNotification } from "../lib/pushOutbox";
 
 const router: IRouter = Router();
@@ -206,11 +210,27 @@ router.post("/push/notifications", async (req, res): Promise<void> => {
     return;
   }
 
+  if (parsed.data.type !== "withdrawal") {
+    res.status(400).json({ error: "Unsupported notification type" });
+    return;
+  }
+
   const notificationId = await findRecentNotificationId(
     parsed.data.recipientId,
     parsed.data.title,
     parsed.data.body,
   );
+  if (!canUseLegacyNotificationFallback(
+    userId,
+    parsed.data.recipientId,
+    parsed.data.type,
+    notificationId,
+  )) {
+    res.status(403).json({
+      error: "A matching saved notification is required; withdrawal notifications can only target the sender",
+    });
+    return;
+  }
   const imageUrl = findNotificationImageUrl({ imageUrl: parsed.data.imageUrl });
   const delivered = await sendLegacyPlatformNotification(
     notificationId,
