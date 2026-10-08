@@ -4,6 +4,19 @@ export function hasPushEligibleRole(roles: readonly PlatformRole[]): boolean {
   return roles.includes("student") || roles.includes("teacher");
 }
 
+export function canUseLegacyNotificationFallback(
+  userId: string,
+  recipientId: string,
+  type: string,
+  matchingNotificationId: string | null,
+): boolean {
+  const authenticatedUserId = userId.trim();
+  if (type === "withdrawal") {
+    return Boolean(authenticatedUserId && recipientId.trim() === authenticatedUserId);
+  }
+  return Boolean(matchingNotificationId?.trim());
+}
+
 const CALLER_ID_FIELDS = ["caller_id", "from_user_id"] as const;
 const RECIPIENT_ID_FIELDS = ["callee_id", "receiver_id", "to_user_id", "student_id"] as const;
 

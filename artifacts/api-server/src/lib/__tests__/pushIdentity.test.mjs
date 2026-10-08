@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canUseLegacyNotificationFallback,
   hasPushEligibleRole,
   incomingCallRowMatches,
 } from "../pushIdentity.ts";
+
+test("withdrawal fallback can only notify the authenticated account itself", () => {
+  assert.equal(canUseLegacyNotificationFallback("teacher-1", "teacher-1", "withdrawal", null), true);
+  assert.equal(canUseLegacyNotificationFallback("teacher-1", "student-1", "withdrawal", "notification-1"), false);
+  assert.equal(canUseLegacyNotificationFallback(" ", " ", "withdrawal", null), false);
+});
+
+test("legacy notification fallback requires a matching persisted notification", () => {
+  assert.equal(canUseLegacyNotificationFallback("student-1", "teacher-1", "booking_request", "notification-1"), true);
+  assert.equal(canUseLegacyNotificationFallback("student-1", "teacher-1", "booking_request", null), false);
+});
 
 test("allows push registration only for verified student or teacher roles", () => {
   assert.equal(hasPushEligibleRole(["student"]), true);
