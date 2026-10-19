@@ -15,7 +15,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { AjyalProvider, useAjyal } from '@/hooks/useAjyal';
 import { setAuthTokenGetter, setBaseUrl } from '@workspace/api-client-react';
 import { AuthProvider, getAuthToken, useAuth } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
+import { profileUiTestMode, supabase } from '@/lib/supabase';
 import { useColors } from '@/hooks/useColors';
 import { InternalCallProvider } from '@/contexts/InternalCallContext';
 import { IncomingCallOverlay } from '@/components/IncomingCallOverlay';
@@ -52,7 +52,9 @@ const appFontsReady = loadAsync(APP_FONT_MAP)
     console.warn('[fonts] Could not preload app fonts:', error);
     return false;
   });
-const apiDomain = process.env.EXPO_PUBLIC_DOMAIN;
+// The API is hosted outside Replit. EXPO_PUBLIC_DOMAIN remains the Expo
+// preview/packager domain, so it must not be used as the mobile API origin.
+const apiDomain = process.env.EXPO_PUBLIC_API_DOMAIN;
 if (apiDomain) setBaseUrl(`https://${apiDomain}`);
 setAuthTokenGetter(getAuthToken);
 
@@ -64,6 +66,7 @@ const PUBLIC_PATHS = new Set([
   '/reset-password',
   '/payment-success',
 ]);
+if (profileUiTestMode) PUBLIC_PATHS.add('/profile-test');
 const ONBOARDING_COMPLETED_KEY = 'ajyal.onboarding.completed.v1';
 const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
   '/profile',
@@ -77,7 +80,7 @@ const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
 
 function RootLayoutNav() {
   const colors = useColors();
-  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, user } = useAuth();
+  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, retrySessionRestore, user } = useAuth();
   const { profile, role, roleResolved, profileError, retryProfile, logout: logoutAjyal, isLoading: profileLoading } = useAjyal();
   const { t } = useAppPreferences();
   const pathname = usePathname();
@@ -285,10 +288,18 @@ function RootLayoutNav() {
       <AccessStateScreen
         title={authLoading ? t("تعذر استعادة الجلسة", "Couldn't restore your session") : t("تعذر تحميل ملف الحساب", "Couldn't load your account")}
         body={authLoading
-          ? t("استغرق الاتصال بمنصة أجيال المعرفة وقتاً أطول من المتوقع. يمكنك العودة لتسجيل الدخول والمحاولة مرة أخرى.", "Connecting to Ajyal Knowledge is taking longer than expected. Return to sign in and try again.")
+          ? t("استغرقت استعادة الجلسة وقتاً أطول من المتوقع. أعد المحاولة؛ لن يتم تسجيل الخروج تلقائياً.", "Restoring your session is taking longer than expected. Retry; you won't be signed out automatically.")
           : t("تم تسجيل الدخول، لكن لم تصل بيانات الملف والصلاحيات من المنصة. تحقق من الاتصال ثم أعد المحاولة.", "You are signed in, but your profile and permissions did not arrive. Check your connection and try again.")}
-        actionLabel={authLoading ? t("العودة لتسجيل الدخول", "Return to sign in") : t("إعادة المحاولة", "Try again")}
-        onAction={() => void (authLoading ? logoutAjyal() : retryProfile())}
+        actionLabel={t("إعادة المحاولة", "Try again")}
+        onAction={() => {
+          if (authLoading) {
+            void retrySessionRestore().catch((error) => {
+              console.warn("[auth] Session restore retry failed:", error instanceof Error ? error.message : error);
+            });
+            return;
+          }
+          void retryProfile();
+        }}
         colors={colors}
       />
     );
@@ -546,6 +557,7 @@ function RootLayoutNav() {
         <Stack.Screen name="teacher-withdrawals" options={{ headerShown: false }} />
         <Stack.Screen name="call-wallet" options={{ headerShown: false }} />
         <Stack.Screen name="chat" options={{ headerShown: false }} />
+        <Stack.Screen name="help-center" options={{ headerShown: false }} />
         <Stack.Screen name="support" options={{ headerShown: false }} />
         <Stack.Screen name="rating" options={{ headerShown: false }} />
         <Stack.Screen name="booking" options={{ headerShown: false }} />

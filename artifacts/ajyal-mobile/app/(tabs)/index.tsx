@@ -1,9 +1,13 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
+import { useQuery } from '@tanstack/react-query';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
+import { getReadChatMessageIds } from '@/lib/localChatReadState';
+import { getStudentUnreadChatMessageCount } from '@/lib/studentUnreadMessages';
+import { supabase } from '@/lib/supabase';
 import { isAssignmentComplete } from '@/constants/localData';
 import { DashboardActions, EmptyState, Header, Icon, IconName, LoadingBlock, Screen, SectionHeading, SessionCard, WelcomeBanner } from '@/components/AjyalUI';
 import { getListBookingRequestsQueryKey, getListMyAssignmentsQueryKey, useGetStudentDashboard, useGetTeacherDashboard, useListBookingRequests, useListMyAssignments } from '@workspace/api-client-react';
@@ -33,6 +37,29 @@ export default function HomeScreen() {
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },
+  });
+  const teacherEarningsMonth = new Date().toISOString().slice(0, 7);
+  const teacherMonthlyEarningsQuery = useQuery({
+    queryKey: ['teacher-monthly-earnings', profile?.id, teacherEarningsMonth],
+    enabled: canLoadRoleData && isTeacher && Boolean(profile?.id) && Boolean(supabase),
+    queryFn: async () => {
+      const client = supabase;
+      const teacherId = profile?.id;
+      if (!client || !teacherId) throw new Error('Teacher account is not available.');
+      const { data, error } = await client.rpc('get_teacher_net_summary', {
+        _teacher_id: teacherId,
+        _month: teacherEarningsMonth,
+      });
+      if (error) throw error;
+      const summary: unknown = Array.isArray(data) ? data[0] : data;
+      const amount = summary && typeof summary === 'object' && 'net_total' in summary
+        ? Number((summary as Record<string, unknown>).net_total)
+        : 0;
+      return Number.isFinite(amount) ? amount : 0;
+    },
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
   const incomingRequestsQuery = useListBookingRequests(
     { view: 'incoming' },
@@ -67,6 +94,79 @@ export default function HomeScreen() {
       refetchOnReconnect: false,
     },
   });
+  const unreadChatQuery = useQuery({
+    queryKey: ['student-unread-chat-count', profile?.id],
+    enabled: canLoadRoleData && !isTeacher && Boolean(profile?.id) && Boolean(supabase),
+    queryFn: async () => {
+      if (!profile?.id || !supabase) throw new Error('Student chat is unavailable.');
+      const readMessageIds = await getReadChatMessageIds(profile.id);
+      return getStudentUnreadChatMessageCount(supabase, profile.id, readMessageIds);
+    },
+    staleTime: 30_000,
+    refetchInterval: canLoadRoleData && !isTeacher ? 60_000 : false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+  useFocusEffect(useCallback(() => {
+    if (canLoadRoleData && !isTeacher && profile?.id && supabase) {
+      void unreadChatQuery.refetch();
+    }
+  }, [canLoadRoleData, isTeacher, profile?.id, unreadChatQuery.refetch]));
+  useFocusEffect(useCallback(() => {
+    const client = supabase;
+    if (!client || !canLoadRoleData || !isTeacher || !profile?.id) return undefined;
+    void teacherMonthlyEarningsQuery.refetch();
+    const refreshTeacherBookings = () => {
+      void incomingRequestsQuery.refetch();
+      void teacherDashboardQuery.refetch();
+    };
+    let earningsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshTeacherEarnings = () => {
+      if (earningsRefreshTimer) clearTimeout(earningsRefreshTimer);
+      earningsRefreshTimer = setTimeout(() => { void teacherMonthlyEarningsQuery.refetch(); }, 150);
+    };
+    const topic = `teacher-home-bookings-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let channel: ReturnType<typeof client.channel> | null = null;
+    try {
+      channel = client
+        .channel(topic)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'booking_requests',
+        }, refreshTeacherBookings)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${profile.id}`,
+        }, (payload) => {
+          const notification = payload.new as Record<string, unknown>;
+          if (String(notification.type ?? '').startsWith('booking_')) refreshTeacherBookings();
+        })
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'teacher_earnings',
+          filter: `teacher_id=eq.${profile.id}`,
+        }, refreshTeacherEarnings)
+        .subscribe((status) => {
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn(`[teacher-home] Realtime channel ${status.toLowerCase()}; using focus refreshes instead.`);
+          }
+        });
+    } catch (error) {
+      console.warn('[teacher-home] Could not create realtime channel:', error);
+    }
+    return () => {
+      if (earningsRefreshTimer) clearTimeout(earningsRefreshTimer);
+      if (channel) {
+        void client.removeChannel(channel).catch((error) => {
+          console.warn('[teacher-home] Could not remove realtime channel:', error);
+        });
+      }
+    };
+  }, [canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch, teacherMonthlyEarningsQuery.refetch]));
   const assignments = assignmentsQuery.data ?? [];
   const pendingAssignments = assignments.filter((assignment) => !isAssignmentComplete(assignment));
   const teacherDashboard = teacherDashboardQuery.data;
@@ -76,7 +176,10 @@ export default function HomeScreen() {
   const dashboardSessions = isTeacher ? (teacherDashboard?.upcomingSessions ?? []) : (studentDashboard?.upcomingSessions ?? []);
   const firstSession = dashboardSessions[0];
   const unread = isTeacher ? (teacherDashboard?.unreadNotifications ?? 0) : (studentDashboard?.unreadNotifications ?? 0);
-  const degradedSections = isTeacher ? (teacherDashboard?.degradedSections ?? []) : (studentDashboard?.degradedSections ?? []);
+  const dashboardDegradedSections = isTeacher ? (teacherDashboard?.degradedSections ?? []) : (studentDashboard?.degradedSections ?? []);
+  const degradedSections = !isTeacher && unreadChatQuery.isError
+    ? [...dashboardDegradedSections, 'messages']
+    : dashboardDegradedSections;
   const hasError = isTeacher ? teacherDashboardQuery.isError : studentDashboardQuery.isError || assignmentsQuery.isError;
   const hasDashboardData = isTeacher ? Boolean(teacherDashboard) : Boolean(studentDashboard || assignmentsQuery.data);
   const dashboardInitialLoading = !hasDashboardData && (
@@ -87,16 +190,6 @@ export default function HomeScreen() {
     isTeacher ? teacherDashboardQuery.isFetching : studentDashboardQuery.isFetching || assignmentsQuery.isFetching
   );
   const todayTasks: TodayTask[] = [];
-  if (!isTeacher && studentDashboard?.openBookingRequests) {
-    todayTasks.push({
-      id: 'open-bookings',
-      icon: 'calendar',
-      tone: 'gold',
-      title: `${formatNumber(studentDashboard.openBookingRequests)} ${t('طلبات حجز مفتوحة', 'open booking requests')}`,
-      body: t('تابع حالتها من الحجوزات', 'Track their status in bookings'),
-      onPress: () => router.push('/bookings'),
-    });
-  }
   if (!isTeacher && firstSession) {
     todayTasks.push({
       id: `session-${firstSession.id}`,
@@ -107,16 +200,45 @@ export default function HomeScreen() {
       onPress: () => router.push('/bookings'),
     });
   }
-  if (!isTeacher) {
-    pendingAssignments.slice(0, 2).forEach((assignment) => {
-      todayTasks.push({
-        id: `assignment-${assignment.id}`,
-        icon: assignment.kind === 'اختبار' ? 'edit-3' : 'clipboard',
-        tone: 'navy',
-        title: assignment.title,
-        body: `${assignment.subject} · ${assignment.due}`,
-        onPress: () => router.push('/assignments'),
-      });
+  const nextAssignment = pendingAssignments[0];
+  if (!isTeacher && nextAssignment) {
+    todayTasks.push({
+      id: `assignment-${nextAssignment.id}`,
+      icon: nextAssignment.kind === 'اختبار' ? 'edit-3' : 'clipboard',
+      tone: 'navy',
+      title: nextAssignment.title,
+      body: `${nextAssignment.subject} · ${nextAssignment.due}`,
+      onPress: () => router.push('/assignments'),
+    });
+  }
+  if (!isTeacher && (unreadChatQuery.data ?? 0) > 0) {
+    todayTasks.push({
+      id: 'unread-chat-messages',
+      icon: 'message-circle',
+      tone: 'teal',
+      title: `${formatNumber(unreadChatQuery.data ?? 0)} ${t('رسائل غير مقروءة', 'unread messages')}`,
+      body: t('افتح محادثاتك لمراجعتها', 'Open your conversations to review them'),
+      onPress: () => router.push('/messages'),
+    });
+  }
+  if (!isTeacher && (studentDashboard?.unreadNotifications ?? 0) > 0) {
+    todayTasks.push({
+      id: 'unread-notifications',
+      icon: 'bell',
+      tone: 'gold',
+      title: `${formatNumber(studentDashboard?.unreadNotifications ?? 0)} ${t('تنبيهات غير مقروءة', 'unread notifications')}`,
+      body: t('افتحها لمراجعة أي تحديث يحتاج انتباهك', 'Open them to review updates that need your attention'),
+      onPress: () => router.push('/notifications'),
+    });
+  }
+  if (!isTeacher && studentDashboard?.openBookingRequests) {
+    todayTasks.push({
+      id: 'open-bookings',
+      icon: 'calendar',
+      tone: 'gold',
+      title: `${formatNumber(studentDashboard.openBookingRequests)} ${t('طلبات حجز مفتوحة', 'open booking requests')}`,
+      body: t('تابع حالتها من الحجوزات', 'Track their status in bookings'),
+      onPress: () => router.push('/bookings'),
     });
   }
   const openDashboardAction = (id: string) => {
@@ -154,7 +276,12 @@ export default function HomeScreen() {
           <Icon name="arrow-left" size={17} color={colors.accentForeground} />
         </Pressable>
       ) : null}
-      <DashboardActions role={role} onAction={openDashboardAction} />
+      <DashboardActions
+        role={role}
+        onAction={openDashboardAction}
+        studentBalance={studentDashboard?.balance}
+        nextAssignment={pendingAssignments[0] ? { title: pendingAssignments[0].title, due: pendingAssignments[0].due } : null}
+      />
 
       {dashboardInitialLoading ? <LoadingBlock /> : null}
       {dashboardRefreshing ? (
@@ -200,8 +327,8 @@ export default function HomeScreen() {
            </View>
          ) : (
            <View style={styles.todayTasks}>
-             {todayTasks.slice(0, 3).map((task) => <TodayTaskRow key={task.id} {...task} />)}
-             {!todayTasks.length && !studentDashboardQuery.isLoading && !assignmentsQuery.isLoading ? (
+              {todayTasks.slice(0, 4).map((task) => <TodayTaskRow key={task.id} {...task} />)}
+              {!todayTasks.length && !studentDashboardQuery.isLoading && !assignmentsQuery.isLoading && !unreadChatQuery.isLoading && !unreadChatQuery.isError ? (
                <View style={[styles.todayEmpty, { backgroundColor: colors.tealSoft }]}>
                  <View style={[styles.todayEmptyIcon, { backgroundColor: colors.card }]}><Icon name="check-circle" size={16} color={colors.teal} /></View>
                   <Text style={[styles.todayEmptyText, { color: colors.accentForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('لا توجد مهام معلقة الآن', 'Nothing is waiting for you right now')}</Text>
@@ -235,7 +362,7 @@ export default function HomeScreen() {
             <View style={[styles.earningsCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
                <Text style={[styles.earningsLabel, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('أرباح هذا الشهر', 'This month’s earnings')}</Text>
               <View style={[styles.earningsValueRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                <Text style={[styles.earningsValue, { color: colors.primaryForeground, writingDirection: direction }]}>{formatNumber(teacherDashboard?.stats.earnings ?? 0)}</Text>
+                <Text style={[styles.earningsValue, { color: colors.primaryForeground, writingDirection: direction }]}>{teacherMonthlyEarningsQuery.data == null ? '—' : formatNumber(teacherMonthlyEarningsQuery.data)}</Text>
                  <Text style={[styles.earningsCurrency, { color: colors.tint, writingDirection: direction }]}>{t('ر.س', 'SAR')}</Text>
               </View>
             </View>

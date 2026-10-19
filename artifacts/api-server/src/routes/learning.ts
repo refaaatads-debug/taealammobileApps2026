@@ -28,9 +28,10 @@ import crypto from "node:crypto";
 import { db, assignmentsTable, bookingsTable, notificationsTable, usersTable } from "@workspace/db";
 import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
+import { findNotificationImageUrl } from "../lib/notificationImage";
+import { persistPlatformNotifications } from "../lib/platformNotifications";
 import { getSupabaseProfile, hasSupabaseRole, readBearerToken, supabaseRpc, supabaseTable } from "../lib/supabaseAuth";
 import { normalizeStage, normalizeStageList } from "../lib/teachingStages";
-import { sendUserPushNotification } from "../lib/userPush";
 
 const router: IRouter = Router();
 
@@ -243,15 +244,6 @@ async function maybeCreateFirstImpressionNotification(
         type: "first_impression",
       icon: "star",
       }),
-    });
-    void sendUserPushNotification(teacherId, {
-      title,
-      body,
-      data: {
-        type: "first_impression",
-        route: "/bookings",
-        dedupeKey: `first-impression:${teacherId}:${studentId}`,
-      },
     });
   } catch {
     // The booking remains authoritative if the optional first-impression
@@ -537,6 +529,27 @@ async function listRemoteBookingRequests(accessToken: string, userId: string, vi
   return rows.map((row) => mapRemoteBookingRequest(row, remotePersonName(people.get(remoteString(row, "student_id", "studentId") ?? "")) || null));
 }
 
+async function eligibleBookingTeacherIds(
+  accessToken: string,
+  subjectId: string,
+  requestedStage: unknown,
+): Promise<string[]> {
+  const eligibleTeacherRows = await supabaseTable<RemoteRow>(accessToken, "teacher_subjects", {
+    subject_id: `eq.${subjectId}`,
+    select: "teacher_profiles!inner(user_id,is_approved,teaching_stages)",
+  });
+  const stage = normalizeStage(requestedStage);
+  return [...new Set(eligibleTeacherRows.flatMap((row) => {
+    const teacherProfile = remoteNestedRow(row, "teacher_profiles");
+    const teacherStages = normalizeStageList(teacherProfile?.teaching_stages);
+    return teacherProfile?.is_approved === true
+      && (!stage || teacherStages.includes(stage))
+      && typeof teacherProfile.user_id === "string"
+      ? [teacherProfile.user_id]
+      : [];
+  }))];
+}
+
 router.get("/booking-requests", async (req, res): Promise<void> => {
   const userId = requireUser(req, res);
   if (!userId) return;
@@ -600,6 +613,35 @@ router.patch("/booking-requests/:id/cancel", async (req, res): Promise<void> => 
   if (!updated.length) {
     res.status(409).json({ error: "تعذر إلغاء طلب الحجز. ربما تمت معالجته من قبل." });
     return;
+  }
+  const subjectId = remoteString(current[0], "subject_id", "subjectId");
+  const subjectName = remoteString(remoteNestedRow(current[0], "subjects") ?? {}, "name") ?? "المادة";
+  const scheduledAt = remoteDate(current[0], "scheduled_at", "scheduledAt");
+  try {
+    const teacherIds = subjectId
+      ? await eligibleBookingTeacherIds(
+        supabaseToken,
+        subjectId,
+        remoteString(current[0], "teaching_stage", "teachingStage"),
+      )
+      : [];
+    const when = scheduledAt ? ` يوم ${formatDate(scheduledAt)} الساعة ${formatTime(scheduledAt)}` : "";
+    const isGroup = updated.length > 1;
+    await persistPlatformNotifications(teacherIds.map((teacherId) => ({
+      recipientId: teacherId,
+      title: "تم إلغاء طلب حجز",
+      body: isGroup
+        ? `ألغى الطالب مجموعة من ${updated.length} طلبات حجز لمادة ${subjectName}.`
+        : `ألغى الطالب طلب حجز حصة ${subjectName}${when}.`,
+      type: "booking_cancelled",
+      icon: "calendar",
+    })));
+  } catch (error) {
+    console.error("[booking-requests] Could not notify teachers about a student cancellation.", {
+      errorCode: error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code ?? "unknown")
+        : "unknown",
+    });
   }
   const refreshed = await supabaseTable<RemoteRow>(supabaseToken, "booking_requests", {
     id: `eq.${params.data.id}`,
@@ -846,32 +888,16 @@ router.post("/booking-requests", async (req, res): Promise<void> => {
     res.status(502).json({ error: "Booking request was not returned by the platform" });
     return;
   }
-  try {
-    const notificationTitle = "طلب حجز جلسة جديد";
-    const notificationBody = `يرغب طالب في حجز جلسة ${remoteString(profile, "full_name", "display_name") ?? ""} لمادة ${input.subject}.`;
-    if (notificationTeacherIds.length) {
-      await supabaseTable<RemoteRow>(supabaseToken, "notifications", {}, {
-        method: "POST",
-        body: JSON.stringify(notificationTeacherIds.map((teacherId) => ({
-          user_id: teacherId,
-          title: notificationTitle,
-          body: notificationBody,
-          type: "booking_request",
-        }))),
-      });
-      await Promise.all(notificationTeacherIds.map((teacherId) => sendUserPushNotification(teacherId, {
-        title: notificationTitle,
-        body: notificationBody,
-        data: {
-          type: "booking_request",
-          route: "/bookings",
-          bookingId: String(created[0].id),
-        },
-      })));
-    }
-  } catch {
-    // A notification failure must not undo an already-created booking request.
-  }
+  const notificationTitle = "طلب حجز جلسة جديد";
+  const studentName = remoteString(profile, "full_name", "display_name") ?? "طالب";
+  const notificationBody = `طلب جديد من ${studentName} لحصة ${input.subject} يوم ${formatDate(input.startsAt)} الساعة ${formatTime(input.startsAt)}.`;
+  await persistPlatformNotifications(notificationTeacherIds.map((teacherId) => ({
+    recipientId: teacherId,
+    title: notificationTitle,
+    body: notificationBody,
+    type: "booking_request",
+    icon: "calendar",
+  })));
   const data = mapRemoteBookingRequest(created[0], remoteString(profile, "full_name", "display_name"));
   res.status(201).json(CreateBookingRequestResponse.parse(data));
 });
@@ -1023,33 +1049,16 @@ router.post("/booking-requests/group", async (req, res): Promise<void> => {
     res.status(502).json({ error: "لم تُرجع المنصة جميع صفوف مجموعة الحجز بعد الإنشاء." });
     return;
   }
-  try {
-    const notificationTitle = `طلب حجز ${input.slots.length} حصص`;
-    const slotsText = input.slots.map((slot) => `${formatDate(slot.startsAt)} ${formatTime(slot.startsAt)}`).join(" • ");
-    const notificationBody = `يرغب طالب في حجز ${input.slots.length} حصص لمادة ${input.subject}: ${slotsText}.`;
-    if (notificationTeacherIds.length) {
-      await supabaseTable<RemoteRow>(supabaseToken, "notifications", {}, {
-        method: "POST",
-        body: JSON.stringify(notificationTeacherIds.map((teacherId) => ({
-          user_id: teacherId,
-          title: notificationTitle,
-          body: notificationBody,
-          type: "booking_request",
-        }))),
-      });
-      await Promise.all(notificationTeacherIds.map((teacherId) => sendUserPushNotification(teacherId, {
-        title: notificationTitle,
-        body: notificationBody,
-        data: {
-          type: "booking_request",
-          route: "/bookings",
-          bookingId: groupId,
-        },
-      })));
-    }
-  } catch {
-    // A notification failure must not undo an already-created booking group.
-  }
+  const notificationTitle = `طلب حجز ${input.slots.length} حصص`;
+  const slotsText = input.slots.map((slot) => `${formatDate(slot.startsAt)} ${formatTime(slot.startsAt)}`).join(" • ");
+  const notificationBody = `يرغب طالب في حجز ${input.slots.length} حصص لمادة ${input.subject}: ${slotsText}.`;
+  await persistPlatformNotifications(notificationTeacherIds.map((teacherId) => ({
+    recipientId: teacherId,
+    title: notificationTitle,
+    body: notificationBody,
+    type: "booking_request",
+    icon: "calendar",
+  })));
   const data = created.map((row) => mapRemoteBookingRequest(row, remoteString(profile, "full_name", "display_name")));
   res.status(201).json(CreateBookingRequestGroupResponse.parse(data));
 });
@@ -1228,33 +1237,15 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
       studentName,
       bookings.map((booking) => String(booking.id)),
     );
-    try {
-      await supabaseTable<RemoteRow>(supabaseToken, "notifications", {}, {
-        method: "POST",
-        body: JSON.stringify({
-          user_id: studentId,
-          title: count > 1 ? `✅ تم تأكيد ${count} حصص` : "✅ تم تأكيد الحجز",
-          body: count > 1
-            ? `أكّد المعلم ${teacherName} جميع حصصك في ${subjectName}. راجع جدولك للاطلاع على المواعيد.`
-            : `أكّد المعلم ${teacherName} حجز حصة ${subjectName}. جهّز نفسك للحصة في موعدها.`,
-          type: "booking_confirmed",
-          icon: "check-circle",
-        }),
-      });
-      void sendUserPushNotification(studentId, {
-        title: count > 1 ? `✅ تم تأكيد ${count} حصص` : "✅ تم تأكيد الحجز",
-        body: count > 1
-          ? `أكّد المعلم ${teacherName} جميع حصصك في ${subjectName}.`
-          : `أكّد المعلم ${teacherName} حجز حصة ${subjectName}.`,
-        data: {
-          type: "booking_confirmed",
-          route: "/bookings",
-          bookingId: String(bookings[0].id),
-        },
-      });
-    } catch {
-      // Notification delivery is best effort after the booking is confirmed.
-    }
+    await persistPlatformNotifications([{
+      recipientId: studentId,
+      title: count > 1 ? `✅ تم تأكيد ${count} حصص` : "✅ تم تأكيد الحجز",
+      body: count > 1
+        ? `أكّد المعلم ${teacherName} جميع حصصك في ${subjectName}. راجع جدولك للاطلاع على المواعيد.`
+        : `أكّد المعلم ${teacherName} حجز حصة ${subjectName}. جهّز نفسك للحصة في موعدها.`,
+      type: "booking_confirmed",
+      icon: "check-circle",
+    }]);
     try {
       await supabaseTable<RemoteRow>(supabaseToken, "chat_messages", {}, {
         method: "POST",
@@ -1280,33 +1271,15 @@ router.patch("/booking-requests/:id/decision", async (req, res): Promise<void> =
     const teacherName = remoteString(teacherProfile ?? {}, "full_name", "display_name") ?? "المعلم";
     const subjectName = remoteString(remoteNestedRow(request, "subjects") ?? {}, "name") ?? "المادة";
     const rejectedCount = decisionRequests.length;
-    try {
-      await supabaseTable<RemoteRow>(supabaseToken, "notifications", {}, {
-        method: "POST",
-        body: JSON.stringify({
-          user_id: studentId,
-          title: rejectedCount > 1 ? `تم رفض ${rejectedCount} طلبات حجز` : "تم رفض طلب الحجز",
-          body: rejectedCount > 1
-            ? `رفض المعلم ${teacherName} طلباتك في ${subjectName}. يمكنك اختيار موعد أو معلم آخر.`
-            : `رفض المعلم ${teacherName} طلب حصة ${subjectName}. يمكنك اختيار موعد أو معلم آخر.`,
-          type: "booking_rejected",
-          icon: "alert-circle",
-        }),
-      });
-      void sendUserPushNotification(studentId, {
-        title: rejectedCount > 1 ? `تم رفض ${rejectedCount} طلبات حجز` : "تم رفض طلب الحجز",
-        body: rejectedCount > 1
-          ? `رفض المعلم ${teacherName} طلباتك في ${subjectName}.`
-          : `رفض المعلم ${teacherName} طلب حصة ${subjectName}.`,
-        data: {
-          type: "booking_rejected",
-          route: "/bookings",
-          bookingId: params.data.id,
-        },
-      });
-    } catch {
-      // Rejection is authoritative even if notification delivery fails.
-    }
+    await persistPlatformNotifications([{
+      recipientId: studentId,
+      title: rejectedCount > 1 ? `تم رفض ${rejectedCount} طلبات حجز` : "تم رفض طلب الحجز",
+      body: rejectedCount > 1
+        ? `رفض المعلم ${teacherName} طلباتك في ${subjectName}. يمكنك اختيار موعد أو معلم آخر.`
+        : `رفض المعلم ${teacherName} طلب حصة ${subjectName}. يمكنك اختيار موعد أو معلم آخر.`,
+      type: "booking_rejected",
+      icon: "alert-circle",
+    }]);
   }
   const updated = await supabaseTable<RemoteRow>(supabaseToken, "booking_requests", {
     id: `eq.${params.data.id}`,
@@ -1422,6 +1395,7 @@ function mapRemoteNotification(row: RemoteRow) {
   const explicitRoute = remoteString(row, "route");
   const route = explicitRoute ?? notificationRouteForType(type, title, body, remoteString(row, "icon") ?? "");
   const bookingId = remoteString(row, "booking_id", "bookingId");
+  const imageUrl = findNotificationImageUrl(row);
   return {
     id: String(row.id),
     title,
@@ -1432,6 +1406,7 @@ function mapRemoteNotification(row: RemoteRow) {
     ...(type ? { type } : {}),
     ...(route ? { route } : {}),
     ...(bookingId ? { bookingId } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
   };
 }
 
@@ -1445,6 +1420,7 @@ function notificationRouteForType(type: string | null, title = "", body = "", ic
     case "session_reminder":
     case "session_starting":
     case "session_started":
+    case "session_join":
     case "session_ended":
     case "instant_session":
     case "first_impression":
@@ -1839,17 +1815,6 @@ router.patch("/sessions/:id/cancel", async (req, res): Promise<void> => {
           type: "booking_cancelled",
         }),
       });
-      void sendUserPushNotification(recipientId, {
-        title: isTeacher ? "🗑️ تم إلغاء حصتك" : "🗑️ ألغى الطالب الحصة",
-        body: isTeacher
-          ? `قام المعلم ${teacherName} بإلغاء حصة ${subjectName}.`
-          : `قام الطالب بإلغاء حصة ${subjectName}.`,
-        data: {
-          type: "booking_cancelled",
-          bookingId: params.data.id,
-          route: "/bookings",
-        },
-      });
     } catch {
       // Cancellation state is authoritative even if notification delivery fails.
     }
@@ -1874,15 +1839,7 @@ router.patch("/sessions/:id/cancel", async (req, res): Promise<void> => {
                     body: `تجاوز المعلم ${teacherName} حد الإلغاءات الشهري (${monthlyCount}/3).`,
                     type: "teacher_cancellation_warning",
                   }),
-                }).then(() => sendUserPushNotification(adminId, {
-                  title: "تنبيه إلغاءات معلم",
-                  body: `تجاوز المعلم ${teacherName} حد الإلغاءات الشهري (${monthlyCount}/3).`,
-                  data: {
-                    type: "teacher_cancellation_warning",
-                    route: "/notifications",
-                    dedupeKey: `teacher-cancellation-warning:${userId}:${monthlyCount}`,
-                  },
-                }).catch(() => undefined));
+                });
           }));
         }
       } catch {
@@ -2073,16 +2030,29 @@ router.get("/notifications", async (req, res): Promise<void> => {
   }
   const rows = await db.transaction(async (tx) => {
     await tx.execute(sql`select set_config('app.user_id', ${userId}, true)`);
-    return tx.select().from(notificationsTable).where(eq(notificationsTable.userId, userId)).orderBy(asc(notificationsTable.createdAt));
+    return tx.select({
+      id: notificationsTable.id,
+      title: notificationsTable.title,
+      body: notificationsTable.body,
+      icon: notificationsTable.icon,
+      createdAt: notificationsTable.createdAt,
+      readAt: notificationsTable.readAt,
+      // Keep legacy image/metadata columns available without requiring a DB migration.
+      notificationPayload: sql<Record<string, unknown>>`to_jsonb(${notificationsTable})`,
+    }).from(notificationsTable).where(eq(notificationsTable.userId, userId)).orderBy(asc(notificationsTable.createdAt));
   });
-  res.json(ListMyNotificationsResponse.parse(rows.reverse().map((row) => ({
-    id: row.id,
-    title: row.title,
-    body: row.body,
-    time: notificationTime(row.createdAt),
-    icon: row.icon,
-    unread: row.readAt === null,
-  }))));
+  res.json(ListMyNotificationsResponse.parse(rows.reverse().map((row) => {
+    const imageUrl = findNotificationImageUrl(row.notificationPayload);
+    return {
+      id: row.id,
+      title: row.title,
+      body: row.body,
+      time: notificationTime(row.createdAt),
+      icon: row.icon,
+      unread: row.readAt === null,
+      ...(imageUrl ? { imageUrl } : {}),
+    };
+  })));
 });
 
 router.patch("/notifications/:id/read", async (req, res): Promise<void> => {

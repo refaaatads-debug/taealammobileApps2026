@@ -90,6 +90,17 @@ export const RegisterPushTokenRequestPlatform = {
   android: 'android',
 } as const;
 
+/**
+ * APNs environment for the PushKit token; required with apnsVoipToken.
+ */
+export type RegisterPushTokenRequestApnsVoipEnvironment = typeof RegisterPushTokenRequestApnsVoipEnvironment[keyof typeof RegisterPushTokenRequestApnsVoipEnvironment];
+
+
+export const RegisterPushTokenRequestApnsVoipEnvironment = {
+  production: 'production',
+  sandbox: 'sandbox',
+} as const;
+
 export interface RegisterPushTokenRequest {
   /**
      * @minLength 1
@@ -97,6 +108,15 @@ export interface RegisterPushTokenRequest {
      */
   token: string;
   platform: RegisterPushTokenRequestPlatform;
+  /**
+     * Optional iOS PushKit VoIP device token.
+     * @minLength 64
+     * @maxLength 64
+     * @pattern ^[0-9a-fA-F]{64}$
+     */
+  apnsVoipToken?: string;
+  /** APNs environment for the PushKit token; required with apnsVoipToken. */
+  apnsVoipEnvironment?: RegisterPushTokenRequestApnsVoipEnvironment;
 }
 
 export const PushTokenRegistrationResultValue = {
@@ -142,6 +162,13 @@ export interface PushNotificationRequest {
      * @maxLength 128
      */
   bookingId?: string;
+  /**
+     * @minLength 1
+     * @maxLength 128
+     */
+  supportTicketId?: string;
+  /** HTTPS image URL for rich push notifications. */
+  imageUrl?: string;
 }
 
 export interface PushDeliveryResult {
@@ -521,6 +548,8 @@ export interface Notification {
   route?: string;
   /** Related booking identifier when available */
   bookingId?: string;
+  /** Optional HTTPS image URL attached to the notification */
+  imageUrl?: string;
 }
 
 export interface ReadAllNotificationsResult {

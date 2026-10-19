@@ -6,6 +6,7 @@ import { useColors } from '@/hooks/useColors';
 import { useInternalCall } from '@/contexts/InternalCallContext';
 import { useAjyal } from '@/hooks/useAjyal';
 import { useSessionWebRTC } from '@/hooks/useSessionWebRTC';
+import { customFetch } from '@workspace/api-client-react';
 import { SessionVideo } from '@/components/SessionVideo';
 import { SessionCollaboration } from '@/components/SessionCollaboration';
 import { SessionWhiteboard, normalizeWhiteboardAction, type WhiteboardAction } from '@/components/SessionWhiteboard';
@@ -39,6 +40,7 @@ export default function LiveSessionScreen() {
   const isStudent = role === 'student';
   const isActiveRef = useRef(isSessionCallActive);
   const isCurrentCallRef = useRef(isCurrentCall);
+  const sessionJoinNotificationBookingRef = useRef<string | null>(null);
   const [lifecycle, setLifecycle] = useState<{
     startedAt: string | null;
     endedAt: string | null;
@@ -267,7 +269,8 @@ export default function LiveSessionScreen() {
     ) {
       setWhiteboardVisible(true);
     } else if (
-      messageType === 'screen-share-start'
+      (messageType === 'screen-share-status' && enabled)
+      || messageType === 'screen-share-start'
       || messageType === 'screen-share'
       || messageType === 'screen-share-state'
       || messageType === 'screen-share-toggle'
@@ -282,6 +285,54 @@ export default function LiveSessionScreen() {
     enabled: shouldJoin && isStudent,
     onDataMessage: handleDataMessage,
   });
+  useEffect(() => {
+    if (
+      !shouldJoin
+      || rtc.connectionState !== 'connected'
+      || !bookingId
+      || !lifecycle.teacherId
+      || sessionJoinNotificationBookingRef.current === bookingId
+    ) {
+      return;
+    }
+
+    sessionJoinNotificationBookingRef.current = bookingId;
+    let cancelled = false;
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const notifyTeacher = async () => {
+      try {
+        const result = await customFetch<{ delivered: boolean }>('/api/push/notifications', {
+          method: 'POST',
+          body: JSON.stringify({
+            recipientId: lifecycle.teacherId,
+            title: 'انضم الطالب إلى الجلسة',
+            body: 'انضم الطالب إلى الجلسة. يمكنك متابعة الجلسة من لوحة التحكم.',
+            type: 'session_join',
+            route: '/bookings',
+            bookingId,
+          }),
+        });
+        if (result.delivered) return;
+        throw new Error('The session join notification was not accepted.');
+      } catch (error) {
+        if (cancelled) return;
+        attempts += 1;
+        if (attempts < 3) {
+          retryTimer = setTimeout(() => void notifyTeacher(), attempts * 1500);
+          return;
+        }
+        sessionJoinNotificationBookingRef.current = null;
+        console.warn('تعذر إرسال إشعار انضمام الطالب:', error);
+      }
+    };
+
+    void notifyTeacher();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [bookingId, lifecycle.teacherId, rtc.connectionState, shouldJoin]);
   const handleWhiteboardAction = useCallback((action: WhiteboardAction) => {
     if (!whiteboardCanDraw) return;
     setWhiteboardActions((current) => [...current, action].slice(-160));
@@ -505,14 +556,14 @@ export default function LiveSessionScreen() {
           <Icon name={rtc.connectionState === 'connected' || isSessionCallActive ? 'phone' : 'video'} size={26} color={colors.teal} />
         </View>
         <Text style={[styles.heroTitle, { color: colors.primaryForeground }]}>{rtc.connectionState === 'connected' ? 'الجلسة جارية الآن' : role === 'teacher' ? 'الجلسة تبدأ من الكمبيوتر' : canStudentJoin ? 'المعلم بدأ الجلسة' : 'بانتظار بدء المعلم'}</Text>
-        <Text style={[styles.heroBody, { color: colors.tint }]}>{rtc.connectionState === 'connected' ? 'الصوت متصل بالطرف الآخر عبر WebRTC.' : role === 'teacher' ? 'لا يمكن بدء جلسة المعلم من الهاتف أو الجهاز اللوحي.' : isSessionCallActive ? `أنت متصل مع ${call?.callerName ?? 'المعلم'}` : canStudentJoin ? 'اضغط على الانضمام للدخول إلى غرفة الشرح.' : session ? `${session.subject} · ${session.duration}` : 'ستظهر تفاصيل الجلسة هنا عند فتحها.'}</Text>
+        <Text style={[styles.heroBody, { color: colors.tint }]}>{rtc.connectionState === 'connected' ? `الصوت متصل بالطرف الآخر عبر ${rtc.transportProvider === 'agora' ? 'Agora' : 'WebRTC'}.` : role === 'teacher' ? 'لا يمكن بدء جلسة المعلم من الهاتف أو الجهاز اللوحي.' : isSessionCallActive ? `أنت متصل مع ${call?.callerName ?? 'المعلم'}` : canStudentJoin ? 'اضغط على الانضمام للدخول إلى غرفة الشرح.' : session ? `${session.subject} · ${session.duration}` : 'ستظهر تفاصيل الجلسة هنا عند فتحها.'}</Text>
       </View>
 
       <View style={[styles.roomCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={[styles.statusDot, { backgroundColor: rtc.connectionState === 'connected' ? colors.teal : lifecycle.status === 'in_progress' ? colors.accent : colors.mutedForeground }]} />
         <View style={styles.roomCopy}>
           <Text style={[styles.roomTitle, { color: colors.foreground }]}>{rtc.connectionState === 'connected' ? 'الاتصال الصوتي متصل' : session?.title ?? 'جلسة أجيال المعرفة'}</Text>
-          <Text style={[styles.roomBody, { color: colors.mutedForeground }]}>{rtc.connectionState === 'connected' ? 'تم إنشاء اتصال WebRTC آمن.' : lifecycle.status === 'in_progress' ? 'بدأ المعلم الجلسة من الكمبيوتر.' : session ? `${session.date} · ${session.time}` : 'تم قبول الجلسة ويمكنك العودة إليها من الحجوزات.'}</Text>
+          <Text style={[styles.roomBody, { color: colors.mutedForeground }]}>{rtc.connectionState === 'connected' ? `تم إنشاء اتصال ${rtc.transportProvider === 'agora' ? 'Agora' : 'WebRTC'} آمن.` : lifecycle.status === 'in_progress' ? 'بدأ المعلم الجلسة من الكمبيوتر.' : session ? `${session.date} · ${session.time}` : 'تم قبول الجلسة ويمكنك العودة إليها من الحجوزات.'}</Text>
         </View>
       </View>
 
@@ -523,6 +574,8 @@ export default function LiveSessionScreen() {
             <SessionVideo
               stream={rtc.remoteStream}
               nativeView={rtc.rtcView}
+              agoraRemoteUid={rtc.agoraRemoteUid}
+              agoraSurfaceView={rtc.agoraSurfaceView}
               label="بانتظار عرض المعلم"
               height={360}
               fit="contain"
@@ -569,6 +622,30 @@ export default function LiveSessionScreen() {
               <Icon name={rtc.muted ? 'mic-off' : 'mic'} size={17} color={rtc.muted ? colors.destructive : colors.teal} />
               <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.muted ? 'إلغاء الكتم' : 'كتم الصوت'}</Text>
             </Pressable>
+            {Platform.OS === 'android' && rtc.transportProvider === 'agora' ? (
+              <Pressable
+                testID="toggle-session-screen-share"
+                accessibilityRole="button"
+                accessibilityLabel={rtc.screenSharing ? 'إيقاف مشاركة الشاشة' : 'مشاركة الشاشة'}
+                onPress={() => void rtc.toggleScreenShare()}
+                style={[styles.sessionControl, { backgroundColor: rtc.screenSharing ? colors.tealSoft : colors.card, borderColor: rtc.screenSharing ? colors.teal : colors.border }]}
+              >
+                <Icon name="monitor" size={17} color={rtc.screenSharing ? colors.teal : colors.foreground} />
+                <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.screenSharing ? 'إيقاف المشاركة' : 'مشاركة الشاشة'}</Text>
+              </Pressable>
+            ) : null}
+            {Platform.OS !== 'web' ? (
+              <Pressable
+                testID="toggle-session-speaker"
+                accessibilityRole="button"
+                accessibilityLabel={rtc.speakerEnabled ? 'التبديل إلى سماعة الهاتف' : 'تشغيل مكبر الصوت'}
+                onPress={() => void rtc.toggleSpeaker()}
+                style={[styles.sessionControl, { backgroundColor: rtc.speakerEnabled ? colors.tealSoft : colors.card, borderColor: rtc.speakerEnabled ? colors.teal : colors.border }]}
+              >
+                <Icon name={rtc.speakerEnabled ? 'volume-2' : 'volume-1'} size={17} color={rtc.speakerEnabled ? colors.teal : colors.foreground} />
+                <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.speakerEnabled ? 'مكبر الصوت' : 'سماعة الهاتف'}</Text>
+              </Pressable>
+            ) : null}
             <Pressable testID="toggle-raise-hand" onPress={toggleRaiseHand} style={[styles.sessionControl, { backgroundColor: handRaised ? colors.goldSoft : colors.card, borderColor: handRaised ? colors.accent : colors.border }]}>
               <Icon name="flag" size={17} color={handRaised ? colors.accentForeground : colors.primary} />
               <Text style={[styles.sessionControlText, { color: handRaised ? colors.accentForeground : colors.foreground }]}>{handRaised ? 'تم رفع اليد' : 'رفع اليد'}</Text>
@@ -587,6 +664,8 @@ export default function LiveSessionScreen() {
             <SessionVideo
               stream={rtc.remoteStream}
               nativeView={rtc.rtcView}
+              agoraRemoteUid={rtc.agoraRemoteUid}
+              agoraSurfaceView={rtc.agoraSurfaceView}
               label="بانتظار عرض المعلم"
               fit="cover"
               scale={displayScale}
@@ -645,6 +724,62 @@ export default function LiveSessionScreen() {
               </Pressable>
               </View>
             </View>
+              <View
+                style={[
+                  styles.fullscreenCallControls,
+                  {
+                    backgroundColor: colors.card + 'F2',
+                    borderColor: colors.border,
+                    bottom: Math.max(74, insets.bottom + 64),
+                    left: 12,
+                    right: 12,
+                  },
+                ]}
+              >
+                <Pressable
+                  testID="fullscreen-toggle-session-mute"
+                  accessibilityRole="button"
+                  accessibilityLabel={rtc.muted ? 'إلغاء كتم الميكروفون' : 'كتم الميكروفون'}
+                  onPress={rtc.toggleMute}
+                  style={[styles.fullscreenControl, { borderColor: colors.border }]}
+                >
+                  <Icon name={rtc.muted ? 'mic-off' : 'mic'} size={18} color={rtc.muted ? colors.destructive : colors.teal} />
+                  <Text style={[styles.fullscreenControlText, { color: colors.foreground }]}>{rtc.muted ? 'فتح الصوت' : 'كتم'}</Text>
+                </Pressable>
+                {Platform.OS !== 'web' ? (
+                  <Pressable
+                    testID="fullscreen-toggle-session-speaker"
+                    accessibilityRole="button"
+                    accessibilityLabel={rtc.speakerEnabled ? 'التبديل إلى سماعة الهاتف' : 'تشغيل مكبر الصوت'}
+                    onPress={() => void rtc.toggleSpeaker()}
+                    style={[styles.fullscreenControl, { borderColor: colors.border }]}
+                  >
+                    <Icon name={rtc.speakerEnabled ? 'volume-2' : 'volume-1'} size={18} color={rtc.speakerEnabled ? colors.teal : colors.foreground} />
+                    <Text style={[styles.fullscreenControlText, { color: colors.foreground }]}>{rtc.speakerEnabled ? 'المكبر' : 'السماعة'}</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  testID="fullscreen-leave-session"
+                  accessibilityRole="button"
+                  accessibilityLabel="إنهاء الجلسة"
+                  disabled={ending}
+                  onPress={() => void finishCall()}
+                  style={[styles.fullscreenControl, { borderColor: colors.destructive, opacity: ending ? 0.65 : 1 }]}
+                >
+                  <Icon name="phone-off" size={18} color={colors.destructive} />
+                  <Text style={[styles.fullscreenControlText, { color: colors.destructive }]}>{ending ? 'جارٍ الإنهاء' : 'إنهاء'}</Text>
+                </Pressable>
+                <Pressable
+                  testID="close-fullscreen-session"
+                  accessibilityRole="button"
+                  accessibilityLabel="إغلاق العرض بملء الشاشة"
+                  onPress={() => setIsFullscreen(false)}
+                  style={[styles.fullscreenControl, { borderColor: colors.border }]}
+                >
+                  <Icon name="x" size={18} color={colors.foreground} />
+                  <Text style={[styles.fullscreenControlText, { color: colors.foreground }]}>إغلاق</Text>
+                </Pressable>
+              </View>
           </View>
         </View>
       </Modal>
@@ -688,6 +823,14 @@ export default function LiveSessionScreen() {
         <View style={[styles.infoCard, { backgroundColor: colors.goldSoft, borderColor: colors.accent }]}>
           <Icon name="info" size={17} color={colors.accent} />
           <Text style={[styles.infoText, { color: colors.foreground }]}>{rtc.mediaWarning}</Text>
+        </View>
+      ) : null}
+      {Platform.OS === 'ios' && rtc.transportProvider === 'agora' ? (
+        <View style={[styles.infoCard, { backgroundColor: colors.muted, borderColor: colors.border }]}>
+          <Icon name="info" size={17} color={colors.teal} />
+          <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
+            مشاركة شاشة iOS تحتاج إلى ReplayKit Broadcast Extension أصلي؛ غير مفعّلة في هذا الإصدار.
+          </Text>
         </View>
       ) : null}
       {lifecycleError || rtc.error ? (
@@ -747,6 +890,9 @@ const styles = StyleSheet.create({
   fullscreenTimerValue: { fontSize: 17, lineHeight: 21, fontFamily: 'Inter_700Bold', fontVariant: ['tabular-nums'] },
   fullscreenTimerLabel: { fontSize: 10, lineHeight: 15, marginTop: 1, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
   fullscreenZoomDock: { position: 'absolute', borderRadius: 14, borderWidth: 1, padding: 5, shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 5 },
+  fullscreenCallControls: { position: 'absolute', flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 15, borderWidth: 1, padding: 6, shadowColor: '#000000', shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 6 },
+  fullscreenControl: { flex: 1, minHeight: 48, borderWidth: 1, borderRadius: 10, alignItems: 'center', justifyContent: 'center', gap: 3 },
+  fullscreenControlText: { fontSize: 10, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
   whiteboardOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 1, justifyContent: 'center' },
   whiteboardOverlayLabel: { position: 'absolute', top: 10, right: 10, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 6, flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
   infoText: { flex: 1, textAlign: 'right', writingDirection: 'rtl', fontSize: 11, lineHeight: 19, fontFamily: 'Inter_400Regular' },

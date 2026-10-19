@@ -645,7 +645,7 @@ export const getRegisterPushTokenUrl = () => {
 }
 
 /**
- * @summary Register the authenticated user's Expo push token
+ * @summary Register the authenticated user's device push tokens
  */
 export const registerPushToken = async (registerPushTokenRequest: RegisterPushTokenRequest, options?: Parameters<typeof customFetch>[1]): Promise<PushTokenRegistrationResult> => {
 
@@ -694,7 +694,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type RegisterPushTokenMutationError = ErrorType<BadRequestResponse | UnauthorizedResponse>
 
     /**
- * @summary Register the authenticated user's Expo push token
+ * @summary Register the authenticated user's device push tokens
  */
 export const useRegisterPushToken = <TError = ErrorType<BadRequestResponse | UnauthorizedResponse>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof registerPushToken>>, TError,{data: BodyType<RegisterPushTokenRequest>}, TContext>, request?: SecondParameter<typeof customFetch>}

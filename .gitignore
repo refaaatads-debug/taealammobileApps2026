@@ -47,3 +47,6 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local Firebase service-account credential (never commit)
+attached_assets/0_ajyal-al-maerifa-4355a-firebase-adminsdk-fbsvc-5019ce6597_1789206150499.json

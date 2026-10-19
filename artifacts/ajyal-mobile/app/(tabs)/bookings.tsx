@@ -14,6 +14,19 @@ import { useQueryClient } from '@tanstack/react-query';
 
 type StudentRequestSection = 'pending' | 'accepted' | 'completed';
 
+function isAlreadyClosedBookingRequestError(error: unknown): boolean {
+  if (error && typeof error === 'object') {
+    const status = 'status' in error
+      ? Number((error as { status?: unknown }).status)
+      : 'statusCode' in error
+        ? Number((error as { statusCode?: unknown }).statusCode)
+        : null;
+    if (status === 404 || status === 409) return true;
+  }
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /\b(?:404|409)\b|already (?:been )?(?:decided|processed)|not found|تمت معالجته|غير موجود/iu.test(message);
+}
+
 function localDayKey(value: Date): string {
   if (Number.isNaN(value.getTime())) return 'invalid';
   return `${value.getFullYear()}-${value.getMonth()}-${value.getDate()}`;
@@ -39,7 +52,16 @@ export default function BookingsScreen() {
   const historyQuery = useListMySessions({ view: 'past' }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: 'past' }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
   const requestQuery = useListBookingRequests(
     { view: requestView },
-    { query: { enabled: roleResolved, queryKey: getListBookingRequestsQueryKey({ view: requestView }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } },
+    {
+      query: {
+        enabled: roleResolved,
+        queryKey: getListBookingRequestsQueryKey({ view: requestView }),
+        staleTime: role === 'teacher' ? 10_000 : 60_000,
+        refetchInterval: roleResolved ? (role === 'teacher' ? 15_000 : 60_000) : false,
+        refetchOnWindowFocus: role === 'teacher',
+        refetchOnReconnect: true,
+      },
+    },
   );
   const decisionMutation = useDecideBookingRequest({
     mutation: {
@@ -54,6 +76,16 @@ export default function BookingsScreen() {
         ]);
       },
       onError: (error) => {
+        if (isAlreadyClosedBookingRequestError(error)) {
+          setDecisionFeedback(null);
+          void Promise.all([
+            requestQuery.refetch(),
+            sessionsQuery.refetch(),
+            historyQuery.refetch(),
+            queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] }),
+          ]);
+          return;
+        }
          setDecisionFeedback('error');
          const message = error instanceof Error ? error.message : t('تحقق من الاتصال ثم حاول مرة أخرى.', 'Check your connection and try again.');
          Alert.alert(t('تعذر تحديث الطلب', 'Could not update request'), message);
@@ -165,14 +197,13 @@ export default function BookingsScreen() {
     () => visibleSessions.filter((session) => localDayKey(new Date(session.scheduledAt)) === todayKey && session.status === 'upcoming'),
     [todayKey, visibleSessions],
   );
-  const bookingChannelSequence = useRef(0);
   const pendingRequestCount = role === 'teacher' ? incomingRequestRows.length : displayedRequests.filter(({ request }) => request.status === 'open').length;
   const activeSessionCount = visibleSessions.filter((session) => session.status === 'upcoming' || session.sessionStatus === 'in_progress').length;
 
   useEffect(() => {
     const client = supabase;
     if (!client || !profile?.id) return undefined;
-    const topic = `mobile-bookings-${role}-${profile.id}-${bookingChannelSequence.current += 1}`;
+    const topic = `mobile-bookings-${role}-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let channel: ReturnType<typeof client.channel> | null = null;
     try {
       channel = client
@@ -182,10 +213,39 @@ export default function BookingsScreen() {
           schema: 'public',
           table: 'booking_requests',
           ...(role === 'student' ? { filter: `student_id=eq.${profile.id}` } : {}),
-        }, () => {
+        }, (payload) => {
+          if (role === 'teacher' && payload.eventType === 'UPDATE') {
+            const updatedRequest = payload.new as Record<string, unknown>;
+            if (updatedRequest.status === 'cancelled') {
+              const cancelledId = String(updatedRequest.id ?? '');
+              const cancelledGroupId = String(updatedRequest.group_id ?? '');
+              if (cancelledId) {
+                queryClient.setQueryData<BookingRequest[]>(
+                  getListBookingRequestsQueryKey({ view: 'incoming' }),
+                  (currentRequests) => currentRequests?.filter((request) =>
+                    request.id !== cancelledId
+                    && (!cancelledGroupId || request.groupId !== cancelledGroupId)),
+                );
+              }
+            }
+          }
           void requestQuery.refetch();
           void sessionsQuery.refetch();
           void historyQuery.refetch();
+          void queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] });
+        })
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${profile.id}`,
+        }, (payload) => {
+          const notification = payload.new as Record<string, unknown>;
+          if (!String(notification.type ?? '').startsWith('booking_')) return;
+          void requestQuery.refetch();
+          void sessionsQuery.refetch();
+          void historyQuery.refetch();
+          void queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] });
         })
         .on('postgres_changes', {
           event: '*',
@@ -219,7 +279,7 @@ export default function BookingsScreen() {
         console.warn('[bookings] Could not remove realtime channel:', error);
       });
     };
-  }, [bookingChannelSequence, historyQuery.refetch, role, profile?.id, requestQuery.refetch, sessionsQuery.refetch]);
+  }, [historyQuery.refetch, role, profile?.id, queryClient, requestQuery.refetch, sessionsQuery.refetch]);
 
   const openSession = (id: string) => {
     const session = scheduleSessions.find((item) => item.id === id);

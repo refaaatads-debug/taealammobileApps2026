@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo } from 'react';
 import { AppState } from 'react-native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
@@ -96,6 +97,7 @@ function getNotificationRoute(item: ApiNotification): NotificationRoute | null {
     || type === 'session_reminder'
     || type === 'session_starting'
     || type === 'session_started'
+    || type === 'session_join'
     || type === 'session_ended'
     || type === 'instant_session'
     || type === 'first_impression'
@@ -211,12 +213,24 @@ export default function NotificationsScreen() {
                   const isRead = !item.unread;
                   return (
                     <Pressable key={item.id} testID={`notification-${item.id}`} onPress={() => openNotification(item)} accessibilityRole="button" style={({ pressed }) => [styles.noticeRow, { backgroundColor: colors.card, borderColor: colors.border }, !isRead && { borderRightColor: colors.teal, borderRightWidth: 3 }, pressed && styles.pressed]}>
-                      <View style={[styles.rowIcon, { backgroundColor: background }]}><Icon name={safeNotificationIcon(item.icon)} size={17} color={tone} /></View>
-                      <View style={[styles.rowCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
-                        <View style={[styles.rowTitleLine, { flexDirection: isRTL ? 'row' : 'row-reverse' }]}><Text style={[styles.rowTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{item.title}</Text>{!isRead ? <View style={[styles.unreadDot, { backgroundColor: colors.teal }]} /> : null}</View>
-                        <Text style={[styles.rowBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{item.body}</Text>
-                        <Text style={[styles.rowTime, { color: colors.mutedForeground }]}>{item.time}</Text>
+                      <View style={styles.noticeRowMain}>
+                        <View style={[styles.rowIcon, { backgroundColor: background }]}><Icon name={safeNotificationIcon(item.icon)} size={17} color={tone} /></View>
+                        <View style={[styles.rowCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+                          <View style={[styles.rowTitleLine, { flexDirection: isRTL ? 'row' : 'row-reverse' }]}><Text style={[styles.rowTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{item.title}</Text>{!isRead ? <View style={[styles.unreadDot, { backgroundColor: colors.teal }]} /> : null}</View>
+                          <Text style={[styles.rowBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{item.body}</Text>
+                          <Text style={[styles.rowTime, { color: colors.mutedForeground }]}>{item.time}</Text>
+                        </View>
                       </View>
+                      {item.imageUrl ? (
+                        <ExpoImage
+                          source={{ uri: item.imageUrl }}
+                          style={[styles.noticeImage, { backgroundColor: colors.muted }]}
+                          contentFit="contain"
+                          cachePolicy="memory-disk"
+                          transition={160}
+                          accessibilityLabel={t('صورة مرفقة بالإشعار', 'Image attached to the notification')}
+                        />
+                      ) : null}
                     </Pressable>
                   );
                 })}
@@ -247,7 +261,8 @@ const styles = StyleSheet.create({
   groupHeaderCopy: { flex: 1 },
   groupTitle: { fontSize: 13, fontFamily: 'Inter_700Bold' },
   groupCount: { fontSize: 9, marginTop: 2, fontFamily: 'Inter_400Regular' },
-  noticeRow: { minHeight: 103, borderRadius: 18, borderWidth: 1, padding: 13, flexDirection: 'row', alignItems: 'flex-start', gap: 11, marginBottom: 10 },
+  noticeRow: { minHeight: 103, borderRadius: 18, borderWidth: 1, padding: 13, marginBottom: 10 },
+  noticeRowMain: { flexDirection: 'row', alignItems: 'flex-start', gap: 11 },
   rowIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   rowCopy: { flex: 1, alignItems: 'flex-end' },
   rowTitleLine: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
@@ -255,5 +270,6 @@ const styles = StyleSheet.create({
   unreadDot: { width: 7, height: 7, borderRadius: 4 },
   rowBody: { width: '100%', textAlign: 'right', fontSize: 10, lineHeight: 17, marginTop: 5, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
   rowTime: { width: '100%', textAlign: 'right', fontSize: 9, marginTop: 7, fontFamily: 'Inter_500Medium' },
+  noticeImage: { width: '100%', height: 190, borderRadius: 13, marginTop: 11 },
   pressed: { opacity: 0.72 },
 });

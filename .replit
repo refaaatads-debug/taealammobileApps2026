@@ -27,6 +27,7 @@ packages = ["glib", "nss", "dbus", "atk", "gtk3", "cairo", "pango", "gdk-pixbuf"
 
 [userenv.shared]
 EXPO_PUBLIC_SUPABASE_URL = "https://ajyalalmaerifa.com"
+EXPO_PUBLIC_API_DOMAIN = "api.ajyalalmaerifa.com"
 
 [[ports]]
 localPort = 8081
