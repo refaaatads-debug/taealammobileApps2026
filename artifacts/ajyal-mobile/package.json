@@ -93,6 +93,7 @@
     "expo-video": "~57.0.5",
     "react": "19.2.3",
     "react-native": "0.86.3",
+    "react-native-agora": "4.6.4",
     "react-native-blob-util": "^0.25.1",
     "react-native-callkeep": "4.3.16",
     "react-native-pdf": "^7.0.5",

@@ -10,6 +10,8 @@ type SessionVideoProps = {
   fit?: 'contain' | 'cover';
   scale?: number;
   fill?: boolean;
+  agoraRemoteUid?: number | null;
+  agoraSurfaceView?: any;
 };
 
 export function SessionVideo({
@@ -21,10 +23,13 @@ export function SessionVideo({
   fit = 'cover',
   scale = 1,
   fill = false,
+  agoraRemoteUid = null,
+  agoraSurfaceView,
 }: SessionVideoProps) {
   const videoRef = useRef<any>(null);
   const videoTracks = stream?.getVideoTracks?.() ?? [];
   const hasLiveVideo = videoTracks.some((track: any) => track?.readyState !== 'ended');
+  const hasAgoraVideo = Platform.OS !== 'web' && agoraSurfaceView && agoraRemoteUid !== null;
   const videoTrackSignature = videoTracks
     .map((track: any) => `${track?.id ?? 'video'}:${track?.readyState ?? 'unknown'}:${track?.enabled !== false}`)
     .join('|');
@@ -34,6 +39,17 @@ export function SessionVideo({
     videoRef.current.srcObject = stream ?? null;
     if (stream) void videoRef.current.play?.().catch(() => undefined);
   }, [stream, videoTrackSignature]);
+
+  if (hasAgoraVideo) {
+    return (
+      <View style={[styles.frame, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { transform: [{ scale }] }]}>
+        {React.createElement(agoraSurfaceView, {
+          canvas: { uid: agoraRemoteUid },
+          style: styles.video,
+        })}
+      </View>
+    );
+  }
 
   if (!stream || !hasLiveVideo) {
     return (

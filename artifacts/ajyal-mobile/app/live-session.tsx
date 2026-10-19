@@ -269,7 +269,8 @@ export default function LiveSessionScreen() {
     ) {
       setWhiteboardVisible(true);
     } else if (
-      messageType === 'screen-share-start'
+      (messageType === 'screen-share-status' && enabled)
+      || messageType === 'screen-share-start'
       || messageType === 'screen-share'
       || messageType === 'screen-share-state'
       || messageType === 'screen-share-toggle'
@@ -555,14 +556,14 @@ export default function LiveSessionScreen() {
           <Icon name={rtc.connectionState === 'connected' || isSessionCallActive ? 'phone' : 'video'} size={26} color={colors.teal} />
         </View>
         <Text style={[styles.heroTitle, { color: colors.primaryForeground }]}>{rtc.connectionState === 'connected' ? 'الجلسة جارية الآن' : role === 'teacher' ? 'الجلسة تبدأ من الكمبيوتر' : canStudentJoin ? 'المعلم بدأ الجلسة' : 'بانتظار بدء المعلم'}</Text>
-        <Text style={[styles.heroBody, { color: colors.tint }]}>{rtc.connectionState === 'connected' ? 'الصوت متصل بالطرف الآخر عبر WebRTC.' : role === 'teacher' ? 'لا يمكن بدء جلسة المعلم من الهاتف أو الجهاز اللوحي.' : isSessionCallActive ? `أنت متصل مع ${call?.callerName ?? 'المعلم'}` : canStudentJoin ? 'اضغط على الانضمام للدخول إلى غرفة الشرح.' : session ? `${session.subject} · ${session.duration}` : 'ستظهر تفاصيل الجلسة هنا عند فتحها.'}</Text>
+        <Text style={[styles.heroBody, { color: colors.tint }]}>{rtc.connectionState === 'connected' ? `الصوت متصل بالطرف الآخر عبر ${rtc.transportProvider === 'agora' ? 'Agora' : 'WebRTC'}.` : role === 'teacher' ? 'لا يمكن بدء جلسة المعلم من الهاتف أو الجهاز اللوحي.' : isSessionCallActive ? `أنت متصل مع ${call?.callerName ?? 'المعلم'}` : canStudentJoin ? 'اضغط على الانضمام للدخول إلى غرفة الشرح.' : session ? `${session.subject} · ${session.duration}` : 'ستظهر تفاصيل الجلسة هنا عند فتحها.'}</Text>
       </View>
 
       <View style={[styles.roomCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={[styles.statusDot, { backgroundColor: rtc.connectionState === 'connected' ? colors.teal : lifecycle.status === 'in_progress' ? colors.accent : colors.mutedForeground }]} />
         <View style={styles.roomCopy}>
           <Text style={[styles.roomTitle, { color: colors.foreground }]}>{rtc.connectionState === 'connected' ? 'الاتصال الصوتي متصل' : session?.title ?? 'جلسة أجيال المعرفة'}</Text>
-          <Text style={[styles.roomBody, { color: colors.mutedForeground }]}>{rtc.connectionState === 'connected' ? 'تم إنشاء اتصال WebRTC آمن.' : lifecycle.status === 'in_progress' ? 'بدأ المعلم الجلسة من الكمبيوتر.' : session ? `${session.date} · ${session.time}` : 'تم قبول الجلسة ويمكنك العودة إليها من الحجوزات.'}</Text>
+          <Text style={[styles.roomBody, { color: colors.mutedForeground }]}>{rtc.connectionState === 'connected' ? `تم إنشاء اتصال ${rtc.transportProvider === 'agora' ? 'Agora' : 'WebRTC'} آمن.` : lifecycle.status === 'in_progress' ? 'بدأ المعلم الجلسة من الكمبيوتر.' : session ? `${session.date} · ${session.time}` : 'تم قبول الجلسة ويمكنك العودة إليها من الحجوزات.'}</Text>
         </View>
       </View>
 
@@ -573,6 +574,8 @@ export default function LiveSessionScreen() {
             <SessionVideo
               stream={rtc.remoteStream}
               nativeView={rtc.rtcView}
+              agoraRemoteUid={rtc.agoraRemoteUid}
+              agoraSurfaceView={rtc.agoraSurfaceView}
               label="بانتظار عرض المعلم"
               height={360}
               fit="contain"
@@ -619,6 +622,18 @@ export default function LiveSessionScreen() {
               <Icon name={rtc.muted ? 'mic-off' : 'mic'} size={17} color={rtc.muted ? colors.destructive : colors.teal} />
               <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.muted ? 'إلغاء الكتم' : 'كتم الصوت'}</Text>
             </Pressable>
+            {Platform.OS === 'android' && rtc.transportProvider === 'agora' ? (
+              <Pressable
+                testID="toggle-session-screen-share"
+                accessibilityRole="button"
+                accessibilityLabel={rtc.screenSharing ? 'إيقاف مشاركة الشاشة' : 'مشاركة الشاشة'}
+                onPress={() => void rtc.toggleScreenShare()}
+                style={[styles.sessionControl, { backgroundColor: rtc.screenSharing ? colors.tealSoft : colors.card, borderColor: rtc.screenSharing ? colors.teal : colors.border }]}
+              >
+                <Icon name="monitor" size={17} color={rtc.screenSharing ? colors.teal : colors.foreground} />
+                <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.screenSharing ? 'إيقاف المشاركة' : 'مشاركة الشاشة'}</Text>
+              </Pressable>
+            ) : null}
             {Platform.OS !== 'web' ? (
               <Pressable
                 testID="toggle-session-speaker"
@@ -649,6 +664,8 @@ export default function LiveSessionScreen() {
             <SessionVideo
               stream={rtc.remoteStream}
               nativeView={rtc.rtcView}
+              agoraRemoteUid={rtc.agoraRemoteUid}
+              agoraSurfaceView={rtc.agoraSurfaceView}
               label="بانتظار عرض المعلم"
               fit="cover"
               scale={displayScale}
@@ -806,6 +823,14 @@ export default function LiveSessionScreen() {
         <View style={[styles.infoCard, { backgroundColor: colors.goldSoft, borderColor: colors.accent }]}>
           <Icon name="info" size={17} color={colors.accent} />
           <Text style={[styles.infoText, { color: colors.foreground }]}>{rtc.mediaWarning}</Text>
+        </View>
+      ) : null}
+      {Platform.OS === 'ios' && rtc.transportProvider === 'agora' ? (
+        <View style={[styles.infoCard, { backgroundColor: colors.muted, borderColor: colors.border }]}>
+          <Icon name="info" size={17} color={colors.teal} />
+          <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
+            مشاركة شاشة iOS تحتاج إلى ReplayKit Broadcast Extension أصلي؛ غير مفعّلة في هذا الإصدار.
+          </Text>
         </View>
       ) : null}
       {lifecycleError || rtc.error ? (
