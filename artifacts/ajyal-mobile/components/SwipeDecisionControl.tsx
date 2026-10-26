@@ -2,6 +2,8 @@ import React, { useMemo } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
+  Extrapolation,
+  interpolate,
   interpolateColor,
   ReduceMotion,
   useAnimatedStyle,
@@ -11,6 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import * as Haptics from 'expo-haptics';
+import { Feather } from '@expo/vector-icons';
 import { BRAND_ICON } from '@/components/AjyalUI';
 import { useColors } from '@/hooks/useColors';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
@@ -23,10 +26,21 @@ type Props = {
 
 const HANDLE_SIZE = 48;
 
+function withOpacity(color: string, opacity: number) {
+  const normalized = color.replace('#', '');
+  if (normalized.length !== 6) return color;
+  const red = Number.parseInt(normalized.slice(0, 2), 16);
+  const green = Number.parseInt(normalized.slice(2, 4), 16);
+  const blue = Number.parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
+}
+
 export default function SwipeDecisionControl({ disabled = false, onDecision }: Props) {
   const colors = useColors();
   const { t, direction } = useAppPreferences();
   const reducedMotion = useReducedMotion();
+  const declineTint = withOpacity(colors.destructive, 0.13);
+  const acceptTint = withOpacity(colors.teal, 0.13);
   const translateX = useSharedValue(0);
   const width = useSharedValue(0);
   const threshold = useSharedValue(72);
@@ -65,9 +79,20 @@ export default function SwipeDecisionControl({ disabled = false, onDecision }: P
     backgroundColor: interpolateColor(
       translateX.get(),
       [-threshold.get(), 0, threshold.get()],
-      [colors.destructive, colors.muted, colors.teal],
+      [declineTint, colors.muted, acceptTint],
     ),
-  }), [colors.destructive, colors.muted, colors.teal]);
+    borderColor: interpolateColor(
+      translateX.get(),
+      [-threshold.get(), 0, threshold.get()],
+      [colors.destructive, colors.border, colors.teal],
+    ),
+  }), [acceptTint, colors.border, colors.destructive, colors.muted, declineTint, colors.teal]);
+  const declineLabelStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateX.get(), [-threshold.get(), 0, threshold.get()], [1, 0.82, 0.52], Extrapolation.CLAMP),
+  }));
+  const acceptLabelStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateX.get(), [-threshold.get(), 0, threshold.get()], [0.52, 0.82, 1], Extrapolation.CLAMP),
+  }));
   const handleStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.get() }],
   }));
@@ -96,16 +121,25 @@ export default function SwipeDecisionControl({ disabled = false, onDecision }: P
         ]}
         onAccessibilityAction={handleAccessibilityAction}
         onLayout={updateWidth}
-        style={[styles.track, { borderColor: colors.border, opacity: disabled ? 0.62 : 1 }, trackStyle]}
+        style={[styles.track, { opacity: disabled ? 0.62 : 1 }, trackStyle]}
       >
         <View pointerEvents="none" style={styles.trackLabels}>
-          <Text style={[styles.declineLabel, { color: colors.destructive, writingDirection: direction }]}>{t('اسحب للرفض', 'Swipe to decline')}</Text>
-          <Text style={[styles.acceptLabel, { color: colors.teal, writingDirection: direction }]}>{t('اسحب للقبول', 'Swipe to accept')}</Text>
+          <Animated.View style={[styles.labelGroup, declineLabelStyle]}>
+            <Feather name="arrow-left" size={16} color={colors.destructive} />
+            <Text style={[styles.declineLabel, { color: colors.destructive, writingDirection: direction }]}>{t('اسحب للرفض', 'Swipe to decline')}</Text>
+          </Animated.View>
+          <Animated.View style={[styles.labelGroup, acceptLabelStyle]}>
+            <Text style={[styles.acceptLabel, { color: colors.teal, writingDirection: direction }]}>{t('اسحب للقبول', 'Swipe to accept')}</Text>
+            <Feather name="arrow-right" size={16} color={colors.teal} />
+          </Animated.View>
         </View>
         <Animated.View style={[styles.handle, { borderColor: colors.border, backgroundColor: colors.card }, handleStyle]}>
           <Image source={BRAND_ICON} resizeMode="contain" style={styles.logo} />
-          <View style={[styles.dot, styles.dotLeft, { backgroundColor: colors.teal }]} />
-          <View style={[styles.dot, styles.dotRight, { backgroundColor: colors.destructive }]} />
+          <View style={styles.brandDots}>
+            <View style={[styles.dot, { backgroundColor: colors.teal }]} />
+            <View style={[styles.dot, { backgroundColor: colors.primary }]} />
+            <View style={[styles.dot, { backgroundColor: colors.accent }]} />
+          </View>
         </Animated.View>
       </Animated.View>
     </GestureDetector>
@@ -114,36 +148,40 @@ export default function SwipeDecisionControl({ disabled = false, onDecision }: P
 
 const styles = StyleSheet.create({
   track: {
-    height: 58,
-    borderWidth: 1,
-    borderRadius: 18,
+    height: 72,
+    borderWidth: 1.5,
+    borderRadius: 21,
     justifyContent: 'center',
     overflow: 'hidden',
-    marginTop: 4,
+    marginTop: 8,
   },
   trackLabels: {
     ...StyleSheet.absoluteFill,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 15,
+    paddingHorizontal: 14,
   },
-  declineLabel: { fontSize: 11, fontWeight: '700' },
-  acceptLabel: { fontSize: 11, fontWeight: '700' },
+  labelGroup: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 44 },
+  declineLabel: { fontSize: 13, lineHeight: 18, fontFamily: 'Inter_700Bold', fontWeight: '700' },
+  acceptLabel: { fontSize: 13, lineHeight: 18, fontFamily: 'Inter_700Bold', fontWeight: '700' },
   handle: {
     position: 'absolute',
     left: '50%',
-    marginLeft: -HANDLE_SIZE / 2,
-    width: HANDLE_SIZE,
-    height: HANDLE_SIZE,
+    marginLeft: -27,
+    width: 54,
+    height: 54,
     borderWidth: 1,
-    borderRadius: 16,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 2,
+    elevation: 4,
+    shadowColor: '#10243E',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
   },
-  logo: { width: 30, height: 30, borderRadius: 9 },
-  dot: { position: 'absolute', top: 20, width: 4, height: 4, borderRadius: 2 },
-  dotLeft: { left: -8 },
-  dotRight: { right: -8 },
+  logo: { width: 29, height: 29, borderRadius: 8, marginTop: -5 },
+  brandDots: { position: 'absolute', bottom: 6, flexDirection: 'row', gap: 3 },
+  dot: { width: 3.5, height: 3.5, borderRadius: 2 },
 });
