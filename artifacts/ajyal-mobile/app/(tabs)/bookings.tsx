@@ -11,7 +11,7 @@ import type { Session } from '@/constants/localData';
 import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
+import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, canStudentCancelInPersonRequest, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
 import { getTeacherInPersonDecisionOutcome, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
 import SwipeDecisionControl from '@/components/SwipeDecisionControl';
 import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
@@ -49,6 +49,8 @@ export default function BookingsScreen() {
   const [historyExpanded, setHistoryExpanded] = useState(true);
   const [cancelTarget, setCancelTarget] = useState<{ id: string; title: string } | null>(null);
   const [cancelRequestTarget, setCancelRequestTarget] = useState<BookingRequest | null>(null);
+  const [cancelInPersonTarget, setCancelInPersonTarget] = useState<{ groupId: string; subject: string } | null>(null);
+  const [cancelInPersonBusy, setCancelInPersonBusy] = useState(false);
   const [deleteRequestTarget, setDeleteRequestTarget] = useState<BookingRequest | null>(null);
   const [rejectRequestTarget, setRejectRequestTarget] = useState<{ request: BookingRequest; groupCount: number } | null>(null);
   const [cancelReason, setCancelReason] = useState('');
@@ -397,6 +399,37 @@ export default function BookingsScreen() {
     if (!cancelRequestTarget) return;
     cancelRequestMutation.mutate({ id: cancelRequestTarget.id });
   };
+  const confirmInPersonRequestCancel = async () => {
+    if (!supabase || !cancelInPersonTarget || cancelInPersonBusy) return;
+    setCancelInPersonBusy(true);
+    try {
+      const { data, error } = await supabase.rpc('cancel_in_person_request_group' as any, {
+        p_request_group_id: cancelInPersonTarget.groupId,
+      });
+      if (error) throw error;
+      const restoredMinutes = Number(data);
+      setCancelInPersonTarget(null);
+      await Promise.all([
+        inPersonRequestsQuery.refetch(),
+        requestQuery.refetch(),
+        sessionsQuery.refetch(),
+        historyQuery.refetch(),
+      ]);
+      Alert.alert(
+        t('تم إلغاء الطلب', 'Request cancelled'),
+        Number.isFinite(restoredMinutes) && restoredMinutes > 0
+          ? t(`أُلغي الطلب وأُعيد ${restoredMinutes} دقيقة إلى رصيدك.`, `${restoredMinutes} reserved minutes were returned to your balance.`)
+          : t('تم إلغاء الطلب وإعادة الرصيد المحجوز إلى المتاح.', 'The request was cancelled and reserved minutes are available again.'),
+      );
+    } catch (error) {
+      Alert.alert(
+        t('تعذر إلغاء الطلب', 'Could not cancel request'),
+        error instanceof Error ? error.message : t('تحقق من الاتصال ثم حاول مرة أخرى.', 'Check your connection and try again.'),
+      );
+    } finally {
+      setCancelInPersonBusy(false);
+    }
+  };
   const requestBookingDelete = (request: BookingRequest) => {
     setDeleteRequestTarget(request);
   };
@@ -653,7 +686,22 @@ export default function BookingsScreen() {
         ) : selectedStudentRequestRows.length || selectedInPersonRequestRows.length ? (
           <View style={styles.requests}>
             {requestQuery.isError || inPersonRequestsQuery.isError ? <Text style={[styles.requestMeta, { color: colors.destructive, writingDirection: direction }]}>{t('تعذر تحديث بعض الطلبات؛ المعروض أدناه هو آخر محتوى متاح.', 'Some requests could not be refreshed; showing the latest available data below.')}</Text> : null}
-            {selectedInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`student-in-person-${String(item.request_group_id ?? index)}`} item={item} role="student" onConfirmed={() => { void Promise.all([inPersonRequestsQuery.refetch(), sessionsQuery.refetch(), historyQuery.refetch()]); }} />)}
+            {selectedInPersonRequestRows.map((item, index) => {
+              const groupId = typeof item.request_group_id === 'string' ? item.request_group_id : '';
+              return (
+                <InPersonRequestCard
+                  key={`student-in-person-${groupId || index}`}
+                  item={item}
+                  role="student"
+                  onCancel={groupId ? () => setCancelInPersonTarget({
+                    groupId,
+                    subject: String(item.subject_name ?? t('طلب حضوري', 'In-person request')),
+                  }) : undefined}
+                  cancelling={cancelInPersonBusy && cancelInPersonTarget?.groupId === groupId}
+                  onConfirmed={() => { void Promise.all([inPersonRequestsQuery.refetch(), sessionsQuery.refetch(), historyQuery.refetch()]); }}
+                />
+              );
+            })}
             {selectedStudentRequestRows.map(({ request, count, items }) => (
               <BookingRequestCard
                 key={`${selectedStudentRequest.key}-${request.groupId || request.id}-${request.id}`}
@@ -777,6 +825,18 @@ export default function BookingsScreen() {
               <View style={styles.modalActions}>
                 <Pressable onPress={() => setCancelRequestTarget(null)} style={[styles.modalButton, { borderColor: colors.border }]}><Text style={[styles.modalButtonText, { color: colors.mutedForeground }]}>{t('تراجع', 'Go back')}</Text></Pressable>
                 <Pressable disabled={cancelRequestMutation.isPending} onPress={confirmRequestCancel} style={[styles.modalButton, { backgroundColor: cancelRequestMutation.isPending ? colors.muted : colors.destructive }]}><Text style={[styles.modalButtonText, { color: colors.destructiveForeground }]}>{cancelRequestMutation.isPending ? t('جارٍ الإلغاء…', 'Cancelling…') : t('إلغاء الطلب', 'Cancel request')}</Text></Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+        <Modal visible={Boolean(cancelInPersonTarget)} transparent animationType="fade" onRequestClose={() => { if (!cancelInPersonBusy) setCancelInPersonTarget(null); }}>
+          <View style={styles.modalBackdrop}>
+            <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.modalTitle, { color: colors.foreground, writingDirection: direction }]}>{t('إلغاء الطلب الحضوري؟', 'Cancel in-person request?')}</Text>
+              <Text style={[styles.modalBody, { color: colors.mutedForeground, writingDirection: direction }]}>{cancelInPersonTarget?.subject} · {t('سيُغلق الطلب لجميع المعلمين وتعود الدقائق المحجوزة إلى رصيدك. لا يمكن التراجع بعد التأكيد.', 'This closes the request for all teachers and returns reserved minutes to your balance. This cannot be undone.')}</Text>
+              <View style={styles.modalActions}>
+                <Pressable disabled={cancelInPersonBusy} onPress={() => setCancelInPersonTarget(null)} style={[styles.modalButton, { borderColor: colors.border }]}><Text style={[styles.modalButtonText, { color: colors.mutedForeground }]}>{t('تراجع', 'Go back')}</Text></Pressable>
+                <Pressable disabled={cancelInPersonBusy} onPress={() => void confirmInPersonRequestCancel()} style={[styles.modalButton, { backgroundColor: cancelInPersonBusy ? colors.muted : colors.destructive }]}><Text style={[styles.modalButtonText, { color: colors.destructiveForeground }]}>{cancelInPersonBusy ? t('جارٍ الإلغاء…', 'Cancelling…') : t('إلغاء الطلب', 'Cancel request')}</Text></Pressable>
               </View>
             </View>
           </View>
@@ -1063,7 +1123,7 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
   );
 }
 
-function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete }: { item: Record<string, unknown>; role: 'teacher' | 'student'; onConfirmed?: () => void; onDecisionComplete?: () => void }) {
+function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete, onCancel, cancelling }: { item: Record<string, unknown>; role: 'teacher' | 'student'; onConfirmed?: () => void; onDecisionComplete?: () => void; onCancel?: () => void; cancelling?: boolean }) {
   const colors = useColors();
   const { t, locale, direction } = useAppPreferences();
   const [codeModalOpen, setCodeModalOpen] = useState(false);
@@ -1159,6 +1219,18 @@ function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete }: { 
         <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{bookingId ? t('يظهر إدخال الكود في بطاقة الحصة القادمة عند موعدها، ويظل متاحاً لمدة 15 دقيقة.', 'Code entry appears on the upcoming lesson card at the scheduled time and remains available for 15 minutes.') : t('بانتظار إنشاء موعد الحصة بعد قبول المعلم.', 'Waiting for the teacher to accept and create the lesson.')}</Text>
       ) : null}
       {role === 'student' && isOpen && !personLabel ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{t('الطلب متاح للمعلمين؛ يظهر اسم المعلم بعد القبول.', 'The request is available to teachers; the teacher’s name appears after acceptance.')}</Text> : null}
+      {canStudentCancelInPersonRequest(role, status) && onCancel ? (
+        <Pressable
+          testID={`cancel-in-person-request-${String(item.request_group_id ?? '')}`}
+          accessibilityRole="button"
+          disabled={cancelling}
+          onPress={onCancel}
+          style={({ pressed }) => [styles.requestCancelButton, { borderColor: colors.destructive, opacity: cancelling ? 0.55 : 1 }, pressed && styles.pressed]}
+        >
+          <Icon name="x-circle" size={14} color={colors.destructive} />
+          <Text style={[styles.requestCancelText, { color: colors.destructive }]}>{cancelling ? t('جارٍ الإلغاء…', 'Cancelling…') : t('إلغاء الطلب', 'Cancel request')}</Text>
+        </Pressable>
+      ) : null}
       {role === 'teacher' && isOpen ? (
         <SwipeDecisionControl disabled={decisionBusy} onDecision={(decision) => void decideRequest(decision)} />
       ) : null}
