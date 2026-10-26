@@ -6,6 +6,7 @@ import type { Session } from '@/constants/localData';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { inPersonAttendanceAction } from '@/lib/inPersonScheduling';
 import { supabase } from '@/lib/supabase';
+import TeacherInPersonCode from '@/components/TeacherInPersonCode';
 
 type ScheduleMode = 'week' | 'month';
 
@@ -250,14 +251,21 @@ export default function BookingsSchedule({
                  <Text style={[styles.eventDuration, { color: colors.mutedForeground, writingDirection: direction }]}>{session.duration}</Text>
               </View>
               <View style={styles.eventCopy}>
-                 <Text style={[styles.eventTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{session.subject || session.title}</Text>
+                  <View style={styles.eventTitleRow}>
+                    <Text style={[styles.eventTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{session.subject || session.title}</Text>
+                    <Text style={[styles.eventMode, { color: session.deliveryMode === 'in_person' ? colors.accentForeground : colors.primary, backgroundColor: session.deliveryMode === 'in_person' ? colors.goldSoft : colors.navySoft }]}>
+                      {session.deliveryMode === 'in_person' ? t('حضوري', 'In person') : session.deliveryMode === 'online' ? t('أونلاين', 'Online') : t('نوع غير محدد', 'Type unavailable')}
+                    </Text>
+                  </View>
                  <Text style={[styles.eventPerson, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{session.person}</Text>
               </View>
                <View style={styles.eventStatus}>
                   <Text style={[styles.eventStatusText, { color: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal, writingDirection: direction }]}>{sessionStatusLabel(session, t)}</Text>
                   <View style={[styles.statusDot, { backgroundColor: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal }]} />
                </View>
-                 {role === 'student' && (session.status === 'upcoming' || session.status === 'expired') && session.deliveryMode === 'in_person' ? (() => {
+                  {role === 'teacher' && session.deliveryMode === 'in_person' ? (
+                    <TeacherInPersonCode bookingId={session.id} />
+                  ) : role === 'student' && (session.status === 'upcoming' || session.status === 'expired') && session.deliveryMode === 'in_person' ? (() => {
                    const action = inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs);
                    if (action === 'enter_code') return (
                      <Pressable
@@ -394,7 +402,9 @@ const styles = StyleSheet.create({
   eventTimeText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   eventDuration: { fontSize: 8, marginTop: 2, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
   eventCopy: { flex: 1, alignItems: 'flex-end' },
+  eventTitleRow: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'flex-start', gap: 5 },
   eventTitle: { fontSize: 11, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  eventMode: { overflow: 'hidden', borderRadius: 7, paddingHorizontal: 5, paddingVertical: 3, fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   eventPerson: { fontSize: 9, marginTop: 3, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   eventStatus: { alignItems: 'center', gap: 4 },
