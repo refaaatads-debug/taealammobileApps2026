@@ -125,11 +125,8 @@ function planFeatures(plan: Row): string[] {
 function subscriptionStatus(row: Row | null): "فعال" | "منتهي" | "موقوف" | "غير مشترك" {
   if (!row) return "غير مشترك";
   if (isSubscriptionActive(row)) return "فعال";
-  const endsAt = text(row, "ends_at");
-  const endsAtMs = endsAt ? new Date(endsAt).getTime() : Number.NaN;
-  const hasExpired = Boolean(endsAt) && (!Number.isFinite(endsAtMs) || endsAtMs <= Date.now());
   const depleted = (number(row, "remaining_minutes") ?? 0) <= 0;
-  if (hasExpired || depleted) return "منتهي";
+  if (depleted) return "منتهي";
   if (boolean(row, "is_active") === false) return "موقوف";
   return "غير مشترك";
 }
@@ -507,7 +504,7 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
       </View>
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
          <View style={styles.cardTop}><Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{activePlan ? text(activePlan, "name", "name_en", "name_ar") ?? t("الاشتراك الحالي", "Current plan") : query.data ? t("لا يوجد اشتراك فعال", "No active plan") : t("جارٍ تحميل بيانات الاشتراك…", "Loading subscription…")}</Text>{overallStatus ? <Text style={[styles.badge, statusStyle(overallStatus, colors)]}>{t(overallStatus, overallStatus === "فعال" ? "Active" : overallStatus === "منتهي" ? "Ended" : overallStatus === "موقوف" ? "Paused" : "Not subscribed")}</Text> : <Text style={[styles.badge, { color: colors.mutedForeground, backgroundColor: colors.background }]}>{t("جارٍ التحميل…", "Loading…")}</Text>}</View>
-         {activeRows.length ? <><ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(aggregateRemainingSessions)} ${t("جلسة", "sessions")}`} /><ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(aggregateRemainingMinutes)} ${t("دقيقة", "min")}`} /><ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(active, "starts_at", "created_at"), locale)} /><ValueRow label={t("تاريخ الانتهاء", "End date")} value={dateLabel(text(active, "ends_at"), locale)} /></> : query.data ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("يمكنك اختيار إحدى الباقات المتاحة للبدء في حجز الجلسات.", "Choose one of the available plans to start booking sessions.")}</Text> : null}
+          {activeRows.length ? <><ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(aggregateRemainingSessions)} ${t("جلسة", "sessions")}`} /><ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(aggregateRemainingMinutes)} ${t("دقيقة", "min")}`} /><ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(active, "starts_at", "created_at"), locale)} /><ValueRow label={t("صلاحية الدقائق", "Minute validity")} value={t("مفتوحة ما دام الرصيد متاحًا", "Open while balance remains")} /></> : query.data ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("يمكنك اختيار إحدى الباقات المتاحة للبدء في حجز الجلسات.", "Choose one of the available plans to start booking sessions.")}</Text> : null}
       </View>
       {detail && query.data && activeRows.length ? (
         <View style={[styles.usageCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -625,7 +622,7 @@ function SubscriptionRow({ subscription, plan, locale, t, formatNumber }: {
     <ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(number(subscription, "sessions_remaining") ?? 0)} ${t("جلسة", "sessions")}`} />
     <ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(number(subscription, "remaining_minutes") ?? 0)} ${t("دقيقة", "min")}`} />
     <ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(subscription, "starts_at", "created_at"), locale)} />
-    <ValueRow label={t("تاريخ الانتهاء", "End date")} value={dateLabel(text(subscription, "ends_at"), locale)} />
+    <ValueRow label={t("صلاحية الدقائق", "Minute validity")} value={t("مفتوحة ما دام الرصيد متاحًا", "Open while balance remains")} />
   </View>;
 }
 
@@ -715,24 +712,27 @@ function WalletScreen() {
   const { t, direction, locale, formatNumber } = useAppPreferences();
   const query = useRemoteData(["wallet", user?.id, role], async () => {
     if (role !== "teacher" || !supabase || !user) return { wallet: null, transactions: [], earnings: [], earningsSummary: null, earningsBalanceError: null };
-    const [walletResult, transactionsResult, earningsResult, breakdownResult] = await Promise.all([
+    const [walletResult, transactionsResult, earningsResult, withdrawalSummaryResult] = await Promise.all([
       supabase.from("wallets").select("*").eq("user_id", user.id).maybeSingle(),
       supabase.from("wallet_transactions").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
       supabase.from("teacher_earnings").select("*").eq("teacher_id", user.id).order("created_at", { ascending: false }),
-      supabase.rpc("get_teacher_earnings_breakdown", { _teacher_id: user.id }),
+      supabase.rpc("get_teacher_withdrawal_summary" as any, { _teacher_id: user.id }),
     ]);
     if (walletResult.error) throw walletResult.error;
     if (transactionsResult.error) throw transactionsResult.error;
     if (earningsResult.error) throw earningsResult.error;
-    const earningsSummary = Array.isArray(breakdownResult.data)
-      ? (breakdownResult.data[0] as Row | undefined) ?? null
-      : breakdownResult.data as Row | null;
+    const withdrawalSummary = Array.isArray(withdrawalSummaryResult.data)
+      ? (withdrawalSummaryResult.data[0] as Row | undefined) ?? null
+      : withdrawalSummaryResult.data as Row | null;
+    const earningsSummary = withdrawalSummary
+      ? { available_balance: withdrawalSummary.online_available }
+      : null;
     return {
       wallet: walletResult.data as Row | null,
       transactions: (transactionsResult.data ?? []) as Row[],
       earnings: (earningsResult.data ?? []) as Row[],
       earningsSummary,
-      earningsBalanceError: breakdownResult.error?.message ?? null,
+      earningsBalanceError: withdrawalSummaryResult.error?.message ?? null,
     };
   });
   if (role !== "teacher") {

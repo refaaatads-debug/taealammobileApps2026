@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { useAjyal } from "@/hooks/useAjyal";
 import { supabase } from "@/lib/supabase";
 import { customFetch } from "@workspace/api-client-react";
+import { getSaudiMonthKey, getTeacherMonthlyEarningsSplit, getTeacherWithdrawalAmountError, groupTeacherEarningsByMonthAndType } from "@/lib/teacherFinance";
 
 type Row = Record<string, unknown>;
 type PickedAttachment = { name: string; uri: string; mimeType?: string | null };
@@ -30,6 +31,24 @@ function dateTime(value: unknown): string {
 function errorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return error.message;
   return fallback;
+}
+
+function earningTypeLabel(type: string): string {
+  if (type === "bonus") return "مكافأة";
+  if (type === "deduction") return "خصم";
+  return "تحويل شهري";
+}
+
+function earningStatusLabel(statuses: Set<string>): string {
+  if (statuses.size !== 1) return statuses.size > 1 ? "حالات متعددة" : "—";
+  const status = [...statuses][0];
+  const labels: Record<string, string> = {
+    confirmed: "مؤكدة",
+    pending: "قيد المراجعة",
+    paid: "مدفوعة",
+    rejected: "مرفوضة",
+  };
+  return labels[status] ?? status;
 }
 
 function storagePath(value: string): string | null {
@@ -56,116 +75,166 @@ function WithdrawalStatus({ status }: { status: unknown }) {
   const map: Record<string, { label: string; color: string; background: string }> = {
     pending: { label: "قيد المراجعة", color: colors.accentForeground, background: colors.goldSoft },
     approved: { label: "تمت الموافقة", color: colors.teal, background: colors.tealSoft },
-    processing: { label: "قيد المعالجة", color: colors.accentForeground, background: colors.goldSoft },
+    processing: { label: "قيد الصرف", color: colors.accentForeground, background: colors.goldSoft },
     paid: { label: "تم الدفع", color: colors.primaryForeground, background: colors.primary },
     rejected: { label: "مرفوض", color: colors.destructive, background: colors.background },
+    cancelled: { label: "ملغي", color: colors.mutedForeground, background: colors.muted },
   };
   const item = map[value] ?? map.pending;
   return <Text style={[styles.badge, { color: item.color, backgroundColor: item.background }]}>{item.label}</Text>;
 }
 
-export function TeacherWithdrawalsScreen() {
+export function TeacherWithdrawalsScreen({ title = "سحب الأرباح" }: { title?: string } = {}) {
   const colors = useColors();
   const { user } = useAuth();
   const { profile, role } = useAjyal();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [earningsLoadError, setEarningsLoadError] = useState<string | null>(null);
+  const [earningsLoadWarning, setEarningsLoadWarning] = useState<string | null>(null);
+  const [paymentsLoadError, setPaymentsLoadError] = useState<string | null>(null);
+  const [cancellingWithdrawalId, setCancellingWithdrawalId] = useState<string | null>(null);
   const [available, setAvailable] = useState(0);
-  const [paidTotal, setPaidTotal] = useState(0);
+  const [paid, setPaid] = useState(0);
   const [monthNet, setMonthNet] = useState(0);
+  const [monthOnline, setMonthOnline] = useState(0);
+  const [monthInPerson, setMonthInPerson] = useState(0);
+  const [monthCompensation, setMonthCompensation] = useState(0);
   const [minimum, setMinimum] = useState(100);
   const [withdrawals, setWithdrawals] = useState<Row[]>([]);
   const [earnings, setEarnings] = useState<Row[]>([]);
   const [payments, setPayments] = useState<Row[]>([]);
-  const [paymentsLoadError, setPaymentsLoadError] = useState<string | null>(null);
+  const [withdrawalSummary, setWithdrawalSummary] = useState({
+    pendingTotal: 0,
+    reservedTotal: 0,
+    adjustmentTotal: 0,
+  });
+  const [withdrawalAmount, setWithdrawalAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [attachment, setAttachment] = useState<PickedAttachment | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!supabase || !user || role !== "teacher") return;
-    setLoading(true);
-    setLoadError(null);
-    const month = new Date().toISOString().slice(0, 7);
-    const [breakdown, settings, earningsResult, withdrawalsResult, paymentsResult, monthResult] = await Promise.all([
+    if (!silent) {
+      setLoading(true);
+      setLoadError(null);
+    }
+    const month = getSaudiMonthKey();
+    const earningsPromise = (async () => {
+      const fields = "amount,month,hours,created_at,status,earning_type,rollover_source_month";
+      const result = await supabase.from("teacher_earnings" as any).select(fields).eq("teacher_id", user.id).order("created_at", { ascending: false });
+      const issue = result.error as { message?: string; code?: string } | null;
+      if (!issue || !`${issue.message ?? ""} ${issue.code ?? ""}`.includes("rollover_source_month")) {
+        return { ...result, rolloverFieldUnavailable: false };
+      }
+      const fallback = await supabase.from("teacher_earnings" as any).select("amount,month,hours,created_at,status,earning_type").eq("teacher_id", user.id).order("created_at", { ascending: false });
+      return { ...fallback, rolloverFieldUnavailable: !fallback.error };
+    })();
+    const [breakdown, settings, earningsResult, withdrawalsResult, paymentsResult, monthResult, withdrawalSummaryResult] = await Promise.all([
       supabase.rpc("get_teacher_earnings_breakdown", { _teacher_id: user.id }),
       supabase.from("financial_settings").select("min_withdrawal_amount").maybeSingle(),
-      supabase.from("teacher_earnings").select("amount,month,hours,created_at,status,earning_type").eq("teacher_id", user.id).order("created_at", { ascending: false }),
+      earningsPromise,
       supabase.from("withdrawal_requests").select("*").eq("teacher_id", user.id).order("created_at", { ascending: false }).limit(10),
       supabase.from("teacher_payments" as any).select("id,amount,created_at").eq("teacher_id", user.id).order("created_at", { ascending: false }).limit(20),
-      supabase.rpc("get_teacher_net_summary", { _teacher_id: user.id, _month: month }),
+      supabase.rpc("get_teacher_month_earnings_split", { _teacher_id: user.id, _month: month }),
+      supabase.rpc("get_teacher_withdrawal_summary" as any, { _teacher_id: user.id }),
     ]);
-    const firstError = breakdown.error ?? settings.error ?? earningsResult.error ?? withdrawalsResult.error ?? monthResult.error;
+    const firstError = breakdown.error ?? settings.error ?? withdrawalsResult.error ?? monthResult.error ?? withdrawalSummaryResult.error;
     if (firstError) {
-      setLoadError(errorMessage(firstError, "تعذر تحميل بيانات الأرباح."));
+      const message = errorMessage(firstError, "تعذر تحميل بيانات الأرباح.");
+      if (silent) setRefreshError(message);
+      else setLoadError(message);
       setLoading(false);
       return;
     }
+    setRefreshError(null);
     const summary = Array.isArray(breakdown.data) ? (breakdown.data[0] as Row | undefined) : breakdown.data as Row | null;
     const currentMonth = Array.isArray(monthResult.data) ? (monthResult.data[0] as Row | undefined) : monthResult.data as Row | null;
-    setAvailable(numeric(summary?.available_balance));
-    setPaidTotal(numeric(summary?.paid_total));
-    setMonthNet(numeric(currentMonth?.net_total));
+    const withdrawalSummaryRow = Array.isArray(withdrawalSummaryResult.data)
+      ? (withdrawalSummaryResult.data[0] as Row | undefined)
+      : withdrawalSummaryResult.data as Row | null;
+    const availableBalance = numeric(withdrawalSummaryRow?.online_available);
+    setAvailable(availableBalance);
+    setWithdrawalAmount((current) => {
+      const currentAmount = Number(current);
+      return !current || !Number.isFinite(currentAmount) || currentAmount > availableBalance + 0.01
+        ? availableBalance > 0 ? availableBalance.toFixed(2) : ""
+        : current;
+    });
+    setPaid(numeric(withdrawalSummaryRow?.paid_total ?? summary?.paid_total));
+    setWithdrawalSummary({
+      pendingTotal: numeric(withdrawalSummaryRow?.pending_total),
+      reservedTotal: numeric(withdrawalSummaryRow?.reserved_total),
+      adjustmentTotal: numeric(withdrawalSummaryRow?.adjustment_total),
+    });
+    const monthlySplit = getTeacherMonthlyEarningsSplit(currentMonth);
+    setMonthNet(monthlySplit.total);
+    setMonthOnline(monthlySplit.online);
+    setMonthInPerson(monthlySplit.inPerson);
+    setMonthCompensation(monthlySplit.compensation);
     setMinimum(numeric((settings.data as Row | null)?.min_withdrawal_amount) || 100);
     setEarnings((earningsResult.data ?? []) as Row[]);
     setWithdrawals((withdrawalsResult.data ?? []) as Row[]);
     setPayments((paymentsResult.data ?? []) as Row[]);
+    setEarningsLoadError(earningsResult.error ? errorMessage(earningsResult.error, "تعذر تحميل سجل الأرباح.") : null);
+    setEarningsLoadWarning(earningsResult.rolloverFieldUnavailable ? "مصدر الترحيل الشهري غير متاح في قاعدة البيانات الحالية؛ عُرض سجل الأرباح الأساسي." : null);
     setPaymentsLoadError(paymentsResult.error ? errorMessage(paymentsResult.error, "تعذر تحميل سجل المدفوعات.") : null);
     setLoading(false);
   }, [role, user]);
 
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
-
-  useFocusEffect(useCallback(() => {
+  const cancelWithdrawal = (withdrawalId: string) => {
     const client = supabase;
-    if (!client || !user || role !== "teacher") return undefined;
+    if (!client || cancellingWithdrawalId) return;
+    Alert.alert("إلغاء طلب السحب؟", "سيُحرر المبلغ المحجوز ويعود إلى رصيدك المتاح.", [
+      { text: "تراجع", style: "cancel" },
+      {
+        text: "إلغاء الطلب",
+        style: "destructive",
+        onPress: () => void (async () => {
+          setCancellingWithdrawalId(withdrawalId);
+          try {
+            const result = await client.rpc("cancel_own_withdrawal_request" as any, { _withdrawal_id: withdrawalId });
+            if (result.error) throw result.error;
+            await load();
+          } catch (error) {
+            Alert.alert("تعذر إلغاء الطلب", errorMessage(error, "تحقق من الاتصال وحاول مرة أخرى."));
+          } finally {
+            setCancellingWithdrawalId(null);
+          }
+        })(),
+      },
+    ]);
+  };
 
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  const financeChannelId = useId().replace(/:/g, "");
+  useEffect(() => {
+    if (!supabase || !user || role !== "teacher") return;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => { void load(); }, 150);
+      refreshTimer = setTimeout(() => { void load({ silent: true }); }, 250);
     };
-    const topic = `teacher-financial-mobile-${user.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    let channel: ReturnType<typeof client.channel> | null = null;
-    try {
-      channel = client
-        .channel(topic)
-        .on("postgres_changes", { event: "*", schema: "public", table: "teacher_earnings", filter: `teacher_id=eq.${user.id}` }, refresh)
-        .on("postgres_changes", { event: "*", schema: "public", table: "withdrawal_requests", filter: `teacher_id=eq.${user.id}` }, refresh)
-        .on("postgres_changes", { event: "*", schema: "public", table: "teacher_payments", filter: `teacher_id=eq.${user.id}` }, refresh)
-        .subscribe((status) => {
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-            console.warn(`[teacher-withdrawals] Realtime channel ${status.toLowerCase()}; using focus refresh instead.`);
-          }
-        });
-    } catch (error) {
-      console.warn("[teacher-withdrawals] Could not create realtime channel:", error);
+    const channel = supabase.channel(`teacher-finance-mobile-${user.id}-${financeChannelId}`);
+    for (const table of ["teacher_earnings", "withdrawal_requests", "teacher_payments"] as const) {
+      channel.on("postgres_changes", {
+        event: "*",
+        schema: "public",
+        table,
+        filter: `teacher_id=eq.${user.id}`,
+      }, refresh);
     }
-
+    channel.subscribe();
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer);
-      if (channel) {
-        void client.removeChannel(channel).catch((error) => {
-          console.warn("[teacher-withdrawals] Could not remove realtime channel:", error);
-        });
-      }
+      void supabase?.removeChannel(channel);
     };
-  }, [load, role, user]));
+  }, [financeChannelId, load, role, user]);
 
-  const monthlyEarnings = useMemo(() => {
-    const grouped = new Map<string, { month: string; earningType: string; amount: number; hours: number; statuses: Set<string> }>();
-    earnings.forEach((row) => {
-      const month = typeof row.month === "string" ? row.month : "—";
-      const earningType = typeof row.earning_type === "string" ? row.earning_type : "monthly_transfer";
-      const key = `${month}:${earningType}`;
-      const item = grouped.get(key) ?? { month, earningType, amount: 0, hours: 0, statuses: new Set<string>() };
-      item.amount += numeric(row.amount);
-      item.hours += numeric(row.hours);
-      if (typeof row.status === "string") item.statuses.add(row.status);
-      grouped.set(key, item);
-    });
-    return [...grouped.values()].sort((a, b) => b.month.localeCompare(a.month) || a.earningType.localeCompare(b.earningType));
-  }, [earnings]);
+  const monthlyEarnings = useMemo(() => groupTeacherEarningsByMonthAndType(earnings), [earnings]);
+  const withdrawalAmountError = getTeacherWithdrawalAmountError(withdrawalAmount, minimum, available);
 
   const pickAttachment = async () => {
     const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false });
@@ -177,6 +246,17 @@ export function TeacherWithdrawalsScreen() {
 
   const submit = async () => {
     if (!supabase || !user || submitting) return;
+    const amountError = getTeacherWithdrawalAmountError(withdrawalAmount, minimum, available);
+    if (amountError) {
+      const message = amountError === "below_minimum"
+        ? `الحد الأدنى للسحب هو ${money(minimum)}.`
+        : amountError === "exceeds_available"
+          ? `مبلغ السحب أكبر من الرصيد المتاح (${money(available)}).`
+          : "أدخل مبلغاً صحيحاً للسحب.";
+      Alert.alert("تحقق من مبلغ السحب", message);
+      return;
+    }
+    const amount = Number(withdrawalAmount);
     if (available <= 0) {
       Alert.alert("لا يوجد رصيد متاح", "لا يوجد رصيد أرباح قابل للسحب حالياً.");
       return;
@@ -205,7 +285,7 @@ export function TeacherWithdrawalsScreen() {
       }
       const created = await supabase.from("withdrawal_requests").insert({
         teacher_id: user.id,
-        amount: available,
+        amount,
         teacher_notes: notes.trim() || null,
         attachment_url: attachmentUrl,
         attachment_name: attachmentName,
@@ -214,7 +294,7 @@ export function TeacherWithdrawalsScreen() {
       const notificationInsert = await supabase.from("notifications").insert({
         user_id: user.id,
         title: "تم إرسال طلب سحب أرباح",
-        body: `تم إرسال طلب سحب بمبلغ ${money(available)} وسيتم مراجعته من قبل الإدارة.`,
+        body: `تم إرسال طلب سحب بمبلغ ${money(amount)} وسيتم مراجعته من قبل الإدارة.`,
         type: "withdrawal",
       });
       if (notificationInsert.error) {
@@ -223,12 +303,13 @@ export function TeacherWithdrawalsScreen() {
           body: JSON.stringify({
             recipientId: user.id,
             title: "تم إرسال طلب سحب أرباح",
-            body: `تم إرسال طلب سحب بمبلغ ${money(available)} وسيتم مراجعته من قبل الإدارة.`,
+            body: `تم إرسال طلب سحب بمبلغ ${money(amount)} وسيتم مراجعته من قبل الإدارة.`,
             type: "withdrawal",
             route: "/notifications",
           }),
         }).catch(() => undefined);
       }
+      setWithdrawalAmount("");
       setNotes("");
       setAttachment(null);
       Alert.alert("تم إرسال الطلب", "سيظهر تحديث الطلب هنا بعد مراجعته من الإدارة.");
@@ -241,43 +322,72 @@ export function TeacherWithdrawalsScreen() {
   };
 
   if (role !== "teacher") {
-    return <Screen><Header title="سحب الأرباح" onBack={() => router.back()} avatarText={profile?.displayName?.slice(0, 1)} /><EmptyState icon="shield" title="هذا القسم للمعلم" body="سحب الأرباح متاح لحسابات المعلمين فقط." /></Screen>;
+    return <Screen><Header title={title} onBack={() => router.back()} avatarText={profile?.displayName?.slice(0, 1)} /><EmptyState icon="shield" title="هذا القسم للمعلم" body="سحب الأرباح متاح لحسابات المعلمين فقط." /></Screen>;
   }
 
   return (
     <Screen>
-      <Header title="سحب الأرباح" eyebrow="أرباح التدريس" onBack={() => router.back()} avatarText={profile?.displayName?.slice(0, 1)} />
+      <Header title={title} eyebrow="أرباح التدريس" onBack={() => router.back()} avatarText={profile?.displayName?.slice(0, 1)} />
       {loading ? <View style={styles.center}><ActivityIndicator color={colors.teal} /><Text style={[styles.muted, { color: colors.mutedForeground }]}>جارٍ تحميل الأرباح...</Text></View> : loadError ? <EmptyState icon="alert-circle" title="تعذر تحميل الأرباح" body={loadError} action="إعادة المحاولة" onAction={() => void load()} /> : (
         <>
+          {refreshError ? <Text accessibilityRole="alert" style={[styles.hint, { color: colors.destructive }]}>{`تعذر تحديث البيانات تلقائيًا: ${refreshError}`}</Text> : null}
           <View style={styles.metricGrid}>
-            <MetricCard label="إجمالي الأرباح المدفوعة" value={money(paidTotal)} tone="navy" />
+            <MetricCard label="إجمالي الأرباح المدفوعة" value={money(paid)} tone="navy" />
             <MetricCard label="الرصيد المتاح للسحب" value={money(available)} tone="teal" />
             <MetricCard label="إجمالي ربح هذا الشهر" value={money(monthNet)} tone="gold" />
+            <MetricCard label="أرباح أونلاين هذا الشهر" value={money(monthOnline)} tone="navy" />
+            <MetricCard label="أرباح الحضوري هذا الشهر" value={money(monthInPerson)} tone="teal" />
+            <MetricCard label="تعويضات الحضوري هذا الشهر" value={money(monthCompensation)} tone="gold" />
+          </View>
+          <View style={styles.summaryGrid}>
+            <MetricCard label="قيد المراجعة" value={money(withdrawalSummary.pendingTotal)} tone="gold" />
+            <MetricCard label="محجوز لطلبات السحب" value={money(withdrawalSummary.reservedTotal)} tone="navy" />
+            <MetricCard label="التعديلات والمكافآت والخصومات" value={money(withdrawalSummary.adjustmentTotal)} tone="teal" />
           </View>
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <TextInput
+              testID="withdrawal-amount"
+              value={withdrawalAmount}
+              onChangeText={setWithdrawalAmount}
+              keyboardType="decimal-pad"
+              editable={!submitting && available > 0}
+              placeholder="مبلغ السحب"
+              placeholderTextColor={colors.mutedForeground}
+              textAlign="right"
+              style={[styles.notes, { minHeight: 48, color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]}
+              accessibilityLabel="مبلغ السحب بالريال السعودي"
+            />
+            <Text style={[styles.hint, { color: withdrawalAmountError ? colors.destructive : colors.mutedForeground }]}>
+              {withdrawalAmountError === "below_minimum"
+                ? `الحد الأدنى للسحب ${money(minimum)}.`
+                : withdrawalAmountError === "exceeds_available"
+                  ? `المبلغ يتجاوز الرصيد المتاح ${money(available)}.`
+                  : `الحد الأدنى ${money(minimum)} · المتاح ${money(available)} · يمكنك طلب جزء من الرصيد.`}
+            </Text>
             <TextInput value={notes} onChangeText={setNotes} multiline textAlign="right" placeholder="أضف ملاحظات مع طلب السحب (اختياري)" placeholderTextColor={colors.mutedForeground} style={[styles.notes, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]} />
             <Pressable testID="withdrawal-attachment" onPress={() => void pickAttachment()} style={[styles.secondaryButton, { borderColor: colors.border }]}>
               <Icon name="paperclip" size={16} color={colors.teal} /><Text style={[styles.secondaryText, { color: colors.foreground }]}>{attachment?.name ?? "إرفاق ملف"}</Text>
             </Pressable>
-            <Text style={[styles.hint, { color: colors.mutedForeground }]}>الحد الأدنى للسحب: {money(minimum)}</Text>
             <Pressable testID="submit-withdrawal" disabled={submitting || available < minimum} onPress={() => void submit()} style={[styles.primaryButton, { backgroundColor: submitting || available < minimum ? colors.muted : colors.teal }]}>
               {submitting ? <ActivityIndicator color={colors.primaryForeground} /> : <><Icon name="send" size={16} color={colors.primaryForeground} /><Text style={[styles.primaryText, { color: colors.primaryForeground }]}>طلب سحب الأرباح</Text></>}
             </Pressable>
           </View>
-          <SectionHeading title="سجل الأرباح المضافة" />
-          {!monthlyEarnings.length ? <EmptyState icon="briefcase" title="لا توجد إضافات أرباح" body="ستظهر التحويلات والمكافآت التي أضافتها الإدارة هنا." /> : monthlyEarnings.map((item) => {
-            const typeLabel = item.earningType === "bonus" ? "مكافأة إضافية" : item.earningType === "deduction" ? "خصم" : "تحويل من أرباح الشهر";
-            const statusLabel = item.statuses.has("paid") && item.statuses.size === 1 ? "مدفوعة" : item.statuses.has("confirmed") ? "مسجلة" : "قيد المراجعة";
-            return (
-              <View key={`${item.month}:${item.earningType}`} style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Text style={[styles.rowValue, { color: colors.foreground }]}>{money(item.amount)}</Text>
-                <View style={styles.rowCopy}>
-                  <Text style={[styles.rowTitle, { color: colors.foreground }]}>{item.month}</Text>
-                  <Text style={[styles.muted, { color: colors.mutedForeground }]}>{typeLabel} · {item.hours.toFixed(1)} ساعة · {statusLabel}</Text>
-                </View>
+          <SectionHeading title="الأرباح حسب الشهر" />
+          {earningsLoadWarning ? <Text style={[styles.hint, { color: colors.accentForeground }]}>{earningsLoadWarning}</Text> : null}
+          {earningsLoadError ? <EmptyState icon="alert-circle" title="تعذر تحميل سجل الأرباح" body={earningsLoadError} /> : !monthlyEarnings.length ? <EmptyState icon="briefcase" title="لا توجد أرباح مسجلة" body="ستظهر التحويلات الشهرية والمكافآت والخصومات المسجلة على حسابك هنا." /> : monthlyEarnings.map((item) => (
+            <View key={`${item.month}:${item.earningType}:${item.rolloverSourceMonth ?? ""}`} style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.rowValue, { color: colors.foreground }]}>{money(item.amount)}</Text>
+              <View style={styles.rowCopy}>
+                <Text style={[styles.rowTitle, { color: colors.foreground }]}>
+                  {item.month} · {item.rolloverSourceMonth ? `ترحيل تلقائي من ${item.rolloverSourceMonth}` : earningTypeLabel(item.earningType)}
+                </Text>
+                <Text style={[styles.muted, { color: colors.mutedForeground }]}>
+                  {item.hours > 0 ? `${item.hours.toFixed(1)} ساعة · ` : ""}
+                  {earningStatusLabel(item.statuses)}
+                </Text>
               </View>
-            );
-          })}
+            </View>
+          ))}
           <SectionHeading title="سجل طلبات السحب" />
           {!withdrawals.length ? <EmptyState icon="file-text" title="لا توجد طلبات سحب" body="ستظهر طلباتك السابقة وحالتها هنا." /> : withdrawals.map((row) => (
             <View key={String(row.id)} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -286,6 +396,7 @@ export function TeacherWithdrawalsScreen() {
               {typeof row.teacher_notes === "string" && row.teacher_notes ? <Text style={[styles.body, { color: colors.foreground }]}>{row.teacher_notes}</Text> : null}
               {typeof row.admin_notes === "string" && row.admin_notes ? <Text style={[styles.adminNote, { color: colors.primary, backgroundColor: colors.navySoft }]}>رد الإدارة: {row.admin_notes}</Text> : null}
               {typeof row.attachment_url === "string" && row.attachment_url ? <Pressable onPress={() => void openWithdrawalAttachment(row.attachment_url as string, typeof row.attachment_name === "string" ? row.attachment_name : "المرفق")}><Text style={[styles.link, { color: colors.teal }]}>{typeof row.attachment_name === "string" ? row.attachment_name : "فتح المرفق"}</Text></Pressable> : null}
+              {row.status === "pending" ? <Pressable disabled={cancellingWithdrawalId === String(row.id)} onPress={() => cancelWithdrawal(String(row.id))} style={[styles.secondaryButton, { borderColor: colors.destructive, opacity: cancellingWithdrawalId === String(row.id) ? 0.55 : 1 }]}><Text style={[styles.secondaryText, { color: colors.destructive }]}>{cancellingWithdrawalId === String(row.id) ? "جارٍ الإلغاء..." : "إلغاء الطلب"}</Text></Pressable> : null}
             </View>
           ))}
           <SectionHeading title="المدفوعات المكتملة" />
@@ -411,6 +522,7 @@ function MetricCard({ label, value, tone }: { label: string; value: string; tone
 const styles = StyleSheet.create({
   center: { minHeight: 180, alignItems: "center", justifyContent: "center", gap: 10 },
   metricGrid: { gap: 9, marginBottom: 14 },
+  summaryGrid: { gap: 8, marginBottom: 14 },
   metric: { minHeight: 86, borderWidth: 1, borderRadius: 18, padding: 14, alignItems: "flex-end", justifyContent: "center" },
   metricLabel: { fontSize: 11, fontFamily: "Inter_500Medium", writingDirection: "rtl" },
   metricValue: { fontSize: 20, fontFamily: "Inter_700Bold", marginTop: 7 },
