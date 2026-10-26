@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canConfirmInPersonAttendance, firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, getApprovedStageSubjectIds, inPersonAttendanceAction, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
+import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, getApprovedStageSubjectIds, inPersonAttendanceAction, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
 
 test("round-trips local schedule input without converting it to UTC text", () => {
   const date = new Date(2026, 9, 26, 18, 45);
@@ -37,6 +37,13 @@ test("only permits in-person code entry from the scheduled time through 15 minut
   assert.equal(canConfirmInPersonAttendance(scheduled, startsAt), true);
   assert.equal(canConfirmInPersonAttendance(scheduled, startsAt + 14 * 60_000 + 59_999), true);
   assert.equal(canConfirmInPersonAttendance(scheduled, startsAt + 15 * 60_000), false);
+});
+
+test("only reveals the teacher attendance code from one hour before the lesson through 15 minutes after", () => {
+  const start = new Date("2026-10-26T10:00:00.000Z").getTime();
+  assert.equal(canRevealInPersonAttendanceCode("2026-10-26T10:00:00.000Z", start - 60 * 60_000), true);
+  assert.equal(canRevealInPersonAttendanceCode("2026-10-26T10:00:00.000Z", start - 60 * 60_000 - 1), false);
+  assert.equal(canRevealInPersonAttendanceCode("2026-10-26T10:00:00.000Z", start + 15 * 60_000), false);
 });
 
 test("shows the in-person attendance action only during its valid window", () => {
