@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, getApprovedStageSubjectIds, inPersonAttendanceAction, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
+import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, canStudentCancelInPersonRequest, firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, getApprovedStageSubjectIds, inPersonAttendanceAction, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
 
 test("round-trips local schedule input without converting it to UTC text", () => {
   const date = new Date(2026, 9, 26, 18, 45);
@@ -44,6 +44,13 @@ test("only reveals the teacher attendance code from one hour before the lesson t
   assert.equal(canRevealInPersonAttendanceCode("2026-10-26T10:00:00.000Z", start - 60 * 60_000), true);
   assert.equal(canRevealInPersonAttendanceCode("2026-10-26T10:00:00.000Z", start - 60 * 60_000 - 1), false);
   assert.equal(canRevealInPersonAttendanceCode("2026-10-26T10:00:00.000Z", start + 15 * 60_000), false);
+});
+
+test("only shows in-person request cancellation to the student while the request is open", () => {
+  assert.equal(canStudentCancelInPersonRequest("student", "open"), true);
+  assert.equal(canStudentCancelInPersonRequest("teacher", "open"), false);
+  assert.equal(canStudentCancelInPersonRequest("student", "accepted"), false);
+  assert.equal(canStudentCancelInPersonRequest("student", "cancelled"), false);
 });
 
 test("shows the in-person attendance action only during its valid window", () => {
