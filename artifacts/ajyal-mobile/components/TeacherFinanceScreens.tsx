@@ -22,6 +22,10 @@ function money(value: number): string {
   return `${value.toFixed(2)} ر.س`;
 }
 
+function displayMoney(value: number): string {
+  return `${value.toLocaleString("en-US", { maximumFractionDigits: 2 })} ر.س`;
+}
+
 function dateTime(value: unknown): string {
   if (typeof value !== "string") return "—";
   const date = new Date(value);
@@ -34,16 +38,16 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 function earningTypeLabel(type: string): string {
-  if (type === "bonus") return "مكافأة";
+  if (type === "bonus") return "مكافأة إضافية";
   if (type === "deduction") return "خصم";
-  return "تحويل شهري";
+  return "تحويل من أرباح الشهر";
 }
 
 function earningStatusLabel(statuses: Set<string>): string {
   if (statuses.size !== 1) return statuses.size > 1 ? "حالات متعددة" : "—";
   const status = [...statuses][0];
   const labels: Record<string, string> = {
-    confirmed: "مؤكدة",
+    confirmed: "مسجلة",
     pending: "قيد المراجعة",
     paid: "مدفوعة",
     rejected: "مرفوضة",
@@ -332,17 +336,19 @@ export function TeacherWithdrawalsScreen({ title = "سحب الأرباح" }: { 
         <>
           {refreshError ? <Text accessibilityRole="alert" style={[styles.hint, { color: colors.destructive }]}>{`تعذر تحديث البيانات تلقائيًا: ${refreshError}`}</Text> : null}
           <View style={styles.metricGrid}>
-            <MetricCard label="إجمالي الأرباح المدفوعة" value={money(paid)} tone="navy" />
-            <MetricCard label="الرصيد المتاح للسحب" value={money(available)} tone="teal" />
-            <MetricCard label="إجمالي ربح هذا الشهر" value={money(monthNet)} tone="gold" />
-            <MetricCard label="أرباح أونلاين هذا الشهر" value={money(monthOnline)} tone="navy" />
-            <MetricCard label="أرباح الحضوري هذا الشهر" value={money(monthInPerson)} tone="teal" />
-            <MetricCard label="تعويضات الحضوري هذا الشهر" value={money(monthCompensation)} tone="gold" />
+            <MetricCard label="إجمالي الأرباح المدفوعة" value={displayMoney(paid)} tone="navy" />
+            <MetricCard label="الرصيد المتاح للسحب" value={displayMoney(available)} tone="teal" />
+            <MetricCard
+              label="إجمالي أرباح هذا الشهر"
+              value={displayMoney(monthNet)}
+              detail={`أونلاين ${displayMoney(monthOnline)} · حضوري ${displayMoney(monthInPerson)}${monthCompensation ? ` · تعويضات ${displayMoney(monthCompensation)}` : ""}`}
+              tone="gold"
+            />
           </View>
           <View style={styles.summaryGrid}>
-            <MetricCard label="قيد المراجعة" value={money(withdrawalSummary.pendingTotal)} tone="gold" />
-            <MetricCard label="محجوز لطلبات السحب" value={money(withdrawalSummary.reservedTotal)} tone="navy" />
-            <MetricCard label="التعديلات والمكافآت والخصومات" value={money(withdrawalSummary.adjustmentTotal)} tone="teal" />
+            <MetricCard compact label="قيد المراجعة" value={displayMoney(withdrawalSummary.pendingTotal)} tone="gold" />
+            <MetricCard compact label="محجوز لطلبات السحب" value={displayMoney(withdrawalSummary.reservedTotal)} tone="navy" />
+            <MetricCard compact label="التعديلات والمكافآت والخصومات" value={displayMoney(withdrawalSummary.adjustmentTotal)} tone="teal" />
           </View>
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <TextInput
@@ -372,7 +378,7 @@ export function TeacherWithdrawalsScreen({ title = "سحب الأرباح" }: { 
               {submitting ? <ActivityIndicator color={colors.primaryForeground} /> : <><Icon name="send" size={16} color={colors.primaryForeground} /><Text style={[styles.primaryText, { color: colors.primaryForeground }]}>طلب سحب الأرباح</Text></>}
             </Pressable>
           </View>
-          <SectionHeading title="الأرباح حسب الشهر" />
+          <SectionHeading title="سجل الأرباح المضافة" />
           {earningsLoadWarning ? <Text style={[styles.hint, { color: colors.accentForeground }]}>{earningsLoadWarning}</Text> : null}
           {earningsLoadError ? <EmptyState icon="alert-circle" title="تعذر تحميل سجل الأرباح" body={earningsLoadError} /> : !monthlyEarnings.length ? <EmptyState icon="briefcase" title="لا توجد أرباح مسجلة" body="ستظهر التحويلات الشهرية والمكافآت والخصومات المسجلة على حسابك هنا." /> : monthlyEarnings.map((item) => (
             <View key={`${item.month}:${item.earningType}:${item.rolloverSourceMonth ?? ""}`} style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -382,7 +388,7 @@ export function TeacherWithdrawalsScreen({ title = "سحب الأرباح" }: { 
                   {item.month} · {item.rolloverSourceMonth ? `ترحيل تلقائي من ${item.rolloverSourceMonth}` : earningTypeLabel(item.earningType)}
                 </Text>
                 <Text style={[styles.muted, { color: colors.mutedForeground }]}>
-                  {item.hours > 0 ? `${item.hours.toFixed(1)} ساعة · ` : ""}
+                  {`${item.hours.toFixed(1)} ساعة · `}
                   {earningStatusLabel(item.statuses)}
                 </Text>
               </View>
@@ -512,20 +518,24 @@ export function CallWalletScreen() {
   );
 }
 
-function MetricCard({ label, value, tone }: { label: string; value: string; tone: "navy" | "teal" | "gold" }) {
+function MetricCard({ label, value, tone, detail, compact = false }: { label: string; value: string; tone: "navy" | "teal" | "gold"; detail?: string; compact?: boolean }) {
   const colors = useColors();
   const color = tone === "navy" ? colors.primary : tone === "teal" ? colors.teal : colors.accentForeground;
   const background = tone === "navy" ? colors.navySoft : tone === "teal" ? colors.tealSoft : colors.goldSoft;
-  return <View style={[styles.metric, { backgroundColor: background, borderColor: colors.border }]}><Text style={[styles.metricLabel, { color: colors.mutedForeground }]}>{label}</Text><Text style={[styles.metricValue, { color }]}>{value}</Text></View>;
+  return <View style={[styles.metric, compact && styles.summaryMetric, { backgroundColor: background, borderColor: colors.border }]}><Text style={[styles.metricLabel, compact && styles.summaryLabel, { color: colors.mutedForeground }]}>{label}</Text><Text style={[styles.metricValue, compact && styles.summaryValue, { color }]}>{value}</Text>{detail ? <Text style={[styles.metricDetail, { color: colors.mutedForeground }]}>{detail}</Text> : null}</View>;
 }
 
 const styles = StyleSheet.create({
   center: { minHeight: 180, alignItems: "center", justifyContent: "center", gap: 10 },
-  metricGrid: { gap: 9, marginBottom: 14 },
-  summaryGrid: { gap: 8, marginBottom: 14 },
-  metric: { minHeight: 86, borderWidth: 1, borderRadius: 18, padding: 14, alignItems: "flex-end", justifyContent: "center" },
-  metricLabel: { fontSize: 11, fontFamily: "Inter_500Medium", writingDirection: "rtl" },
-  metricValue: { fontSize: 20, fontFamily: "Inter_700Bold", marginTop: 7 },
+  metricGrid: { flexDirection: "row", gap: 7, marginBottom: 8 },
+  summaryGrid: { flexDirection: "row", gap: 7, marginBottom: 14 },
+  metric: { flex: 1, minHeight: 91, borderWidth: 1, borderRadius: 15, padding: 9, alignItems: "flex-end", justifyContent: "center" },
+  summaryMetric: { minHeight: 65, padding: 7 },
+  metricLabel: { fontSize: 9, lineHeight: 13, fontFamily: "Inter_500Medium", writingDirection: "rtl", textAlign: "right" },
+  summaryLabel: { fontSize: 8, lineHeight: 11 },
+  metricValue: { fontSize: 15, fontFamily: "Inter_700Bold", marginTop: 4, textAlign: "right" },
+  summaryValue: { fontSize: 13, marginTop: 3 },
+  metricDetail: { fontSize: 7, lineHeight: 11, fontFamily: "Inter_400Regular", marginTop: 3, textAlign: "right", writingDirection: "rtl" },
   card: { borderWidth: 1, borderRadius: 18, padding: 15, marginBottom: 13 },
   cardTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 7 },
   cardTitle: { fontSize: 15, fontFamily: "Inter_700Bold", textAlign: "right", writingDirection: "rtl" },

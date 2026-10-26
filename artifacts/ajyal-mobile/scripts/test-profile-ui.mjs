@@ -505,6 +505,24 @@ async function saveAndReload(role, expectedValues, simulateFailure = false) {
 async function testStudentProfile(baseUrl) {
   console.log("Testing student account edits and reload...");
   await navigate(`${baseUrl}/profile-test?role=student`);
+  await waitFor(
+    "standalone sign-out action at the bottom of the account page",
+    `Boolean(document.querySelector('[data-testid="profile-sign-out"]'))`,
+  );
+  const signOutStructure = await evaluateInPage(`(() => {
+    const section = document.querySelector('[data-testid="profile-sign-out-section"]');
+    const button = document.querySelector('[data-testid="profile-sign-out"]');
+    return {
+      sectionExists: Boolean(section),
+      buttonInsideSection: Boolean(section && button && section.contains(button)),
+      sectionHasExpandableControl: Boolean(section?.querySelector('[aria-expanded]')),
+      duplicateSignOutLabels: section?.innerText.match(/تسجيل الخروج/g)?.length ?? 0,
+    };
+  })()`);
+  assert.equal(signOutStructure.sectionExists, true, "The account page has no dedicated sign-out section");
+  assert.equal(signOutStructure.buttonInsideSection, true, "The sign-out action is not in its standalone section");
+  assert.equal(signOutStructure.sectionHasExpandableControl, false, "Sign out must not be inside a collapsible profile section");
+  assert.equal(signOutStructure.duplicateSignOutLabels, 1, "The account page should show the sign-out action only once");
   await fillTestId("profile-full-name", "طالبة واجهة الاختبار");
   await fillTestId("profile-phone", "0551234567");
   await clickTestId("student-stage-الثانوية");
