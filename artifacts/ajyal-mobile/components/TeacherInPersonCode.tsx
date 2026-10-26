@@ -49,7 +49,7 @@ export default function TeacherInPersonCode({
     .filter(Boolean)
     .join(" · ");
   const canReveal = canRevealInPersonAttendanceCode(
-    typeof details?.scheduled_at === "string" ? details.scheduled_at : "",
+    typeof bookingDetails?.scheduled_at === "string" ? bookingDetails.scheduled_at : "",
     nowMs,
   );
 
@@ -60,7 +60,7 @@ export default function TeacherInPersonCode({
     try {
       const result = await supabase.rpc("get_in_person_attendance_code", { p_booking_id: bookingId });
       if (result.error || typeof result.data !== "string") {
-        setError(result.error?.message || t("سيظهر الرمز قبل الموعد بساعة.", "The code is available one hour before the lesson."));
+        setError(result.error?.message || t("تعذر إظهار الرمز لهذه الحصة الآن.", "The code is not available for this lesson right now."));
         return;
       }
       setCode(result.data);
@@ -91,7 +91,7 @@ export default function TeacherInPersonCode({
         </Pressable>
       ) : (
         <Text style={[styles.hint, { color: colors.mutedForeground, writingDirection: direction }]}>
-          {t("يظهر كود الحضور قبل موعد الحصة بساعة.", "The attendance code appears one hour before the lesson.")}
+          {t("يمكن إظهار الكود فور قبول الحصة وحتى 15 دقيقة بعد موعدها.", "The code is available as soon as the lesson is accepted and until 15 minutes after its scheduled time.")}
         </Text>
       )}
       {code ? <Text selectable accessibilityLabel={t("كود الحضور", "Attendance code")} style={[styles.code, { color: colors.primary }]}>{code}</Text> : null}
