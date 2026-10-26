@@ -15,6 +15,7 @@ import { getInPersonBookingSnapshot } from "@/lib/inPersonBookingSnapshot";
 import { selectSavedAddress } from "@/lib/inPersonAddressSelection";
 import { TEACHING_STAGES } from "@/constants/education";
 import { getListTeachersQueryKey, useListTeachers } from "@workspace/api-client-react";
+import { OptionDropdown } from "@/components/OptionDropdown";
 
 type Row = Record<string, any>;
 type City = { id: string; name_ar: string; name_en: string | null; in_person_enabled: boolean };
@@ -22,8 +23,17 @@ type Address = { id: string; city_id: string; street_address: string; district: 
 type Teacher = { teacher_id: string; full_name: string; avg_rating: number; distance_km: number; service_radius_km: number };
 
 function errorText(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return error.message;
+  if (error && typeof error === "object") {
+    const details = error as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown };
+    const parts = [details.message, details.details, details.hint]
+      .filter((part): part is string => typeof part === "string" && !!part.trim());
+    if (parts.length) return parts.join(" · ");
+  }
   return fallback;
+}
+
+function normalizeSubjectName(value: unknown) {
+  return String(value ?? "").normalize("NFKC").trim().replace(/\s+/gu, " ");
 }
 
 function records(data: unknown): Row[] {
@@ -43,6 +53,7 @@ export default function InPersonScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [requestSent, setRequestSent] = useState(false);
   const [cities, setCities] = useState<City[]>([]);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [subjects, setSubjects] = useState<Array<{ id: string; name: string }>>([]);
@@ -75,11 +86,8 @@ export default function InPersonScreen() {
   const selectedAddress = addresses.find((address) => address.id === addressId) ?? null;
   const stageSubjectNames = useMemo(() => new Set(directoryTeachers
     .filter((teacher) => teacher.teachingStages?.includes(teachingStage))
-    .flatMap((teacher) => teacher.subjects ?? [])), [directoryTeachers, teachingStage]);
-  const stageSubjects = useMemo(() => subjects.filter((subject) => stageSubjectNames.has(subject.name)), [stageSubjectNames, subjects]);
-  const eligibleTeacherIds = useMemo(() => new Set(directoryTeachers
-    .filter((teacher) => teacher.teachingStages?.includes(teachingStage) && teacher.subjects?.includes(subjects.find((subject) => subject.id === subjectId)?.name ?? ""))
-    .map((teacher) => teacher.id)), [directoryTeachers, subjectId, subjects, teachingStage]);
+    .flatMap((teacher) => (teacher.subjects ?? []).map(normalizeSubjectName))), [directoryTeachers, teachingStage]);
+  const stageSubjects = useMemo(() => subjects.filter((subject) => stageSubjectNames.has(normalizeSubjectName(subject.name))), [stageSubjectNames, subjects]);
   const dateOptions = useMemo(() => Array.from({ length: 7 }, (_, offset) => {
     const date = new Date();
     date.setHours(0, 0, 0, 0);
@@ -205,7 +213,7 @@ export default function InPersonScreen() {
       setError(t("اختر المرحلة والمدينة والعنوان والمادة المرتبطة بها وموعداً بعد ساعتين على الأقل.", "Choose a stage, city, address, its related subject, and a time at least two hours ahead."));
       return;
     }
-    setSaving(true); setError(""); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
+    setSaving(true); setError(""); setRequestSent(false); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
     const result = await supabase.rpc("search_in_person_teachers", {
       p_city_id: cityId, p_subject_id: subjectId, p_address_id: addressId, p_scheduled_at: date.toISOString(),
     });
@@ -214,7 +222,18 @@ export default function InPersonScreen() {
       setError(errorText(result.error, t("تعذر البحث عن المعلمين.", "Teacher search failed.")));
       return;
     }
-    setTeachers((records(result.data) as Teacher[]).filter((teacher) => eligibleTeacherIds.has(teacher.teacher_id)));
+    // The RPC is authoritative for in-person approval, city and radius. Apply stage matching when
+    // the general directory has a teacher record, but do not discard in-person-only teachers absent there.
+    const subjectName = stageSubjects.find((subject) => subject.id === subjectId)?.name ?? "";
+    const matchesStageWhenKnown = (candidate: Teacher) => {
+      const directoryTeacher = directoryTeachers.find((teacher) => String(teacher.id) === candidate.teacher_id);
+      if (!directoryTeacher) return true;
+      const stages = directoryTeacher.teachingStages ?? [];
+      const teacherSubjects = directoryTeacher.subjects ?? [];
+      return (!stages.length || stages.includes(teachingStage))
+        && (!teacherSubjects.length || teacherSubjects.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subjectName)));
+    };
+    setTeachers((records(result.data) as Teacher[]).filter(matchesStageWhenKnown));
     setSearchPerformed(true);
   };
 
@@ -224,7 +243,7 @@ export default function InPersonScreen() {
       setError(t("اختر معلماً واحداً على الأقل قبل إرسال الطلب.", "Select at least one teacher before sending the request."));
       return;
     }
-    setSaving(true); setError("");
+    setSaving(true); setError(""); setRequestSent(false);
     const result = await supabase.rpc("create_in_person_request", {
       p_subject_id: subjectId, p_scheduled_at: date.toISOString(), p_city_id: cityId,
       p_address_id: addressId, p_teacher_ids: selectedTeachers, p_idempotency_key: Crypto.randomUUID(),
@@ -234,8 +253,8 @@ export default function InPersonScreen() {
       setError(errorText(result.error, t("تعذر إنشاء طلب الحضوري.", "Could not create the in-person request.")));
       return;
     }
+    setRequestSent(true);
     setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
-    await load();
   };
 
   const runTeacherDecision = async (groupId: string, decision: "accept" | "reject") => {
@@ -288,6 +307,7 @@ export default function InPersonScreen() {
                   disabled={!city.in_person_enabled}
                   onPress={() => {
                     setCityId(city.id);
+                     setRequestSent(false);
                     const cityAddress = addresses.find((address) => address.city_id === city.id && address.is_primary)
                       ?? addresses.find((address) => address.city_id === city.id);
                     setAddressId(cityAddress?.id ?? "");
@@ -314,7 +334,7 @@ export default function InPersonScreen() {
             </View>
             {addresses.filter((address) => !cityId || address.city_id === cityId).map((address) => {
               const selected = addressId === address.id;
-              return <Pressable key={address.id} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setAddressId(address.id); setCityId(address.city_id); }} style={({ pressed }) => [styles.addressOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: pressed ? 0.82 : 1 }]}>
+              return <Pressable key={address.id} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setAddressId(address.id); setCityId(address.city_id); setRequestSent(false); }} style={({ pressed }) => [styles.addressOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: pressed ? 0.82 : 1 }]}>
                 <View style={styles.addressOptionTop}>
                   <View style={styles.addressOptionTitle}>
                     <View style={[styles.addressIcon, { backgroundColor: selected ? colors.card : colors.muted }]}><Icon name="map-pin" size={15} color={colors.teal} /></View>
@@ -344,24 +364,33 @@ export default function InPersonScreen() {
               </View>
               <Text style={[styles.stepNumber, { color: colors.teal, backgroundColor: colors.tealSoft }]}>02</Text>
             </View>
-            <Text style={[styles.fieldLabel, textStyle]}>{t("المرحلة الدراسية", "Education stage")}</Text>
-            <View style={styles.subjectGrid}>{TEACHING_STAGES.map((stage) => {
-              const selected = teachingStage === stage;
-              return <Pressable key={stage} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setTeachingStage(stage); setSubjectId(""); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false); }} style={({ pressed }) => [styles.subjectOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: pressed ? 0.8 : 1 }]}>
-                <Icon name={selected ? "check-circle" : "book-open"} size={16} color={selected ? colors.teal : colors.mutedForeground} />
-                <Text style={[styles.subjectName, textStyle, { color: selected ? colors.teal : colors.foreground }]}>{stage}</Text>
-              </Pressable>;
-            })}</View>
-            <Text style={[styles.fieldLabel, textStyle]}>{t("المادة المرتبطة بالمرحلة", "Subject for this stage")}</Text>
+            <OptionDropdown
+              label={t("المرحلة الدراسية", "Education stage")}
+              value={teachingStage}
+              placeholder={t("اختر المرحلة الدراسية", "Choose an education stage")}
+              options={[...TEACHING_STAGES]}
+              onChange={(stage) => { setTeachingStage(stage); setSubjectId(""); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false); setRequestSent(false); }}
+              testID="in-person-stage-dropdown"
+            />
+            <OptionDropdown
+              label={t("المادة المرتبطة بالمرحلة", "Subject for this stage")}
+              value={subjects.find((subject) => subject.id === subjectId)?.name ?? ""}
+              placeholder={teachingStage ? t("اختر المادة", "Choose a subject") : t("اختر المرحلة أولاً", "Choose a stage first")}
+              options={stageSubjects.map((subject) => subject.name)}
+              onChange={(name) => {
+                const subject = stageSubjects.find((item) => normalizeSubjectName(item.name) === normalizeSubjectName(name));
+                setSubjectId(subject?.id ?? "");
+                setTeachers([]);
+                setSelectedTeachers([]);
+                setSearchPerformed(false);
+                setRequestSent(false);
+              }}
+              testID="in-person-subject-dropdown"
+              loading={teacherDirectoryQuery.isLoading}
+              disabled={!teachingStage || teacherDirectoryQuery.isError}
+            />
             {teacherDirectoryQuery.isLoading ? <Text style={mutedStyle}>{t("جارٍ تحميل المواد المناسبة للمرحلة...", "Loading subjects for this stage...")}</Text> : null}
             {!teacherDirectoryQuery.isLoading && teacherDirectoryQuery.isError ? <Text accessibilityRole="alert" style={{ color: colors.destructive }}>{t("تعذر تحميل المواد المرتبطة بالمرحلة.", "Could not load subjects for this stage.")}</Text> : null}
-            <View style={styles.subjectGrid}>{stageSubjects.map((subject) => {
-              const selected = subjectId === subject.id;
-              return <Pressable key={subject.id} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setSubjectId(subject.id); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false); }} style={({ pressed }) => [styles.subjectOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: pressed ? 0.8 : 1 }]}>
-                <Icon name={selected ? "check-circle" : "book-open"} size={16} color={selected ? colors.teal : colors.mutedForeground} />
-                <Text style={[styles.subjectName, textStyle, { color: selected ? colors.teal : colors.foreground }]}>{subject.name}</Text>
-              </Pressable>;
-            })}</View>
             {!teacherDirectoryQuery.isLoading && !teacherDirectoryQuery.isError && teachingStage && !stageSubjects.length ? <Text style={mutedStyle}>{t("لا توجد مواد مرتبطة بهذه المرحلة حالياً.", "No subjects are linked to this stage yet.")}</Text> : null}
             <Text style={[styles.fieldLabel, textStyle]}>{t("موعد الحصة", "Lesson date and time")}</Text>
             <Text style={[styles.scheduleLabel, { color: colors.mutedForeground }]}>{t("اختر اليوم", "Choose a day")}</Text>
@@ -370,6 +399,7 @@ export default function InPersonScreen() {
               return <Pressable key={option.key} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => {
                 const time = timeOptions.includes(scheduleTime) ? scheduleTime : timeOptions[0] ?? "08:00";
                 setScheduledAt(`${option.key}T${time}`);
+                 setRequestSent(false);
               }} style={[styles.dateOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card }]}>
                 <Text style={[styles.dateDay, { color: selected ? colors.teal : colors.mutedForeground }]}>{option.day}</Text>
                 <Text style={[styles.dateValue, { color: selected ? colors.teal : colors.foreground }]}>{option.label}</Text>
@@ -378,7 +408,7 @@ export default function InPersonScreen() {
             <Text style={[styles.scheduleLabel, { color: colors.mutedForeground }]}>{t("اختر الوقت", "Choose a time")}</Text>
             <View style={styles.subjectGrid}>{timeOptions.map((time) => {
               const selected = scheduleTime === time;
-              return <Pressable key={time} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => setScheduledAt(`${scheduleDate}T${time}`)} style={[styles.timeOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card }]}>
+              return <Pressable key={time} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setScheduledAt(`${scheduleDate}T${time}`); setRequestSent(false); }} style={[styles.timeOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card }]}>
                 <Icon name="clock" size={13} color={selected ? colors.teal : colors.mutedForeground} />
                 <Text style={{ color: selected ? colors.teal : colors.foreground, fontSize: 11, fontFamily: "Inter_600SemiBold" }}>{time}</Text>
               </Pressable>;
@@ -400,7 +430,9 @@ export default function InPersonScreen() {
                 {selected ? <Icon name="check-circle" size={18} color={colors.teal} /> : null}
               </Pressable>;
             })}
-            {teachers.length ? <Pressable disabled={saving || !selectedTeachers.length} onPress={() => void createRequest()} style={[styles.primary, actionStyle, (!selectedTeachers.length || saving) && styles.disabled]}><Icon name="send" size={15} color="#fff" /><Text style={styles.primaryText}>{t("إرسال الطلب للمعلمين المحددين", "Send request to selected teachers")}</Text></Pressable> : null}
+            {teachers.length ? <Text style={[styles.selectionHint, { color: colors.mutedForeground }]}>{t("اضغط على بطاقة المعلم لتحديده قبل الإرسال", "Tap a teacher card to select them before sending")}</Text> : null}
+            {teachers.length ? <Pressable accessibilityRole="button" disabled={saving || !selectedTeachers.length} onPress={() => void createRequest()} style={[styles.primary, actionStyle, (!selectedTeachers.length || saving) && styles.disabled]}>{saving ? <ActivityIndicator color="#fff" /> : <Icon name="send" size={15} color="#fff" />}<Text style={styles.primaryText}>{saving ? t("جارٍ إرسال الطلب...", "Sending request...") : selectedTeachers.length ? `${t("إرسال الطلب إلى", "Send request to")} ${selectedTeachers.length} ${t("معلم", "teachers")}` : t("حدد معلماً أولاً", "Select a teacher first")}</Text></Pressable> : null}
+            {requestSent ? <View accessibilityLiveRegion="polite" style={[styles.successBanner, { backgroundColor: colors.tealSoft, borderColor: colors.teal }]}><Icon name="check-circle" size={17} color={colors.teal} /><Text style={[styles.successText, { color: colors.teal }]}>{t("تم إرسال الطلب بنجاح. يمكنك متابعة حالته من صفحة الحجوزات.", "Request sent. You can track its status in Bookings.")}</Text></View> : null}
           </View>
         </>
       ) : role === "teacher" ? (
@@ -450,10 +482,10 @@ export default function InPersonScreen() {
 }
 
 const styles = StyleSheet.create({
-  loading: { alignItems: "center", padding: 24, gap: 10 },
-  error: { padding: 12, textAlign: "right", writingDirection: "rtl" },
-  sectionTitle: { fontSize: 18, fontWeight: "800", textAlign: "right", marginTop: 14, marginBottom: 8 },
-  card: { borderWidth: 1, borderRadius: 20, padding: 16, marginBottom: 12, gap: 12, shadowColor: "#10264A", shadowOpacity: 0.05, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  loading: { alignItems: "center", padding: 16, gap: 8 },
+  error: { padding: 7, textAlign: "right", writingDirection: "rtl", fontSize: 11, lineHeight: 16 },
+  sectionTitle: { fontSize: 16, fontWeight: "800", textAlign: "right", marginTop: 10, marginBottom: 6 },
+  card: { borderWidth: 1, borderRadius: 16, padding: 11, marginBottom: 8, gap: 8, shadowColor: "#10264A", shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
   cardTitle: { fontSize: 15, lineHeight: 21, fontFamily: "Inter_700Bold", textAlign: "right" },
   input: { minHeight: 46, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, textAlign: "right", writingDirection: "rtl" },
   row: { flexDirection: "row", gap: 8, alignItems: "center" },
@@ -465,19 +497,19 @@ const styles = StyleSheet.create({
   secondary: { minHeight: 42, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center", paddingHorizontal: 12, flexDirection: "row", gap: 8 },
   disabled: { opacity: 0.5 },
   pressed: { transform: [{ scale: 0.99 }] },
-  stepHeading: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 2 },
-  stepIcon: { width: 42, height: 42, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  stepCopy: { flex: 1, gap: 3 },
-  stepNumber: { fontSize: 10, fontFamily: "Inter_700Bold", paddingHorizontal: 9, paddingVertical: 6, borderRadius: 10, overflow: "hidden" },
-  fieldLabel: { fontSize: 12, lineHeight: 17, fontFamily: "Inter_700Bold", marginTop: 3 },
-  cityGrid: { flexDirection: "row", flexWrap: "wrap", gap: 9 },
-  cityOption: { minHeight: 58, width: "48%", flexGrow: 1, borderWidth: 1, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 9, flexDirection: "row", alignItems: "center", gap: 9 },
-  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
-  cityOptionCopy: { flex: 1, gap: 3 },
-  cityName: { fontSize: 11, fontFamily: "Inter_700Bold" },
-  cityStatus: { fontSize: 9, fontFamily: "Inter_500Medium" },
-  addressHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 2 },
-  editAddressButton: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 8 },
+  stepHeading: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 0 },
+  stepIcon: { width: 34, height: 34, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  stepCopy: { flex: 1, gap: 2 },
+  stepNumber: { fontSize: 9, fontFamily: "Inter_700Bold", paddingHorizontal: 7, paddingVertical: 5, borderRadius: 8, overflow: "hidden" },
+  fieldLabel: { fontSize: 11, lineHeight: 15, fontFamily: "Inter_700Bold", marginTop: 1 },
+  cityGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  cityOption: { minHeight: 42, width: "48%", flexGrow: 1, borderWidth: 1, borderRadius: 12, paddingHorizontal: 8, paddingVertical: 6, flexDirection: "row", alignItems: "center", gap: 7 },
+  radio: { width: 17, height: 17, borderRadius: 9, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
+  cityOptionCopy: { flex: 1, gap: 1 },
+  cityName: { fontSize: 10, fontFamily: "Inter_700Bold" },
+  cityStatus: { fontSize: 8, fontFamily: "Inter_500Medium" },
+  addressHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 0 },
+  editAddressButton: { minHeight: 30, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 7 },
   editAddressText: { fontSize: 10, fontFamily: "Inter_600SemiBold" },
   addressOption: { borderWidth: 1, borderRadius: 16, padding: 12, gap: 9 },
   addressOptionTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
@@ -499,6 +531,9 @@ const styles = StyleSheet.create({
   dateDay: { fontSize: 9, fontFamily: "Inter_500Medium" },
   dateValue: { fontSize: 11, fontFamily: "Inter_700Bold" },
   timeOption: { minHeight: 42, flexGrow: 1, flexBasis: "21%", borderWidth: 1, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
+  selectionHint: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", textAlign: "right", writingDirection: "rtl" },
+  successBanner: { minHeight: 42, borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 7, flexDirection: "row", alignItems: "center", gap: 8 },
+  successText: { flex: 1, fontSize: 11, lineHeight: 16, fontFamily: "Inter_600SemiBold", textAlign: "right", writingDirection: "rtl" },
   teacherOption: { minHeight: 64, borderWidth: 1, borderRadius: 16, padding: 11, flexDirection: "row", alignItems: "center", gap: 10 },
   teacherAvatar: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   teacherName: { fontSize: 12, fontFamily: "Inter_700Bold" },
