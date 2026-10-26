@@ -442,7 +442,7 @@ export default function BookingsScreen() {
     const sessionWithMode = session as SessionWithMode;
     const scheduledAt = String(session.scheduledAt);
     const showInPersonDetails = sessionWithMode.deliveryMode === 'in_person'
-      && (session.status === 'upcoming' || (session.status === 'expired' && inPersonAttendanceAction(scheduledAt, sessionWithMode.sessionStatus) === 'enter_code'));
+      && (session.status === 'upcoming' || session.status === 'expired');
     return (
     <SessionCard
       key={session.id}
@@ -1041,7 +1041,8 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
   const confirmed = sessionStatus === 'in_progress' || Boolean(details?.attendance_confirmed_at);
   const attendanceAction = inPersonAttendanceAction(scheduledAt, confirmed ? 'in_progress' : sessionStatus, nowMs);
   const teacherCanRevealCode = canRevealInPersonAttendanceCode(scheduledAt, nowMs);
-  const showStudentCode = role === 'student' && !confirmed && attendanceAction === 'enter_code';
+  const showStudentCode = role === 'student' && !confirmed;
+  const studentCodeEnabled = attendanceAction === 'enter_code';
   const revealCode = async () => {
     if (!supabase || busy) return;
     setBusy(true);
@@ -1102,9 +1103,25 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
         </>
       ) : showStudentCode ? (
         <>
-          <Pressable onPress={(event) => { event.stopPropagation(); setError(''); setModalOpen(true); }} style={[styles.requestCancelButton, { borderColor: colors.teal }]}>
-            <Icon name="key" size={14} color={colors.teal} />
-            <Text style={[styles.requestCancelText, { color: colors.teal }]}>{t('إدخال كود الحضور وبدء الجلسة', 'Enter attendance code and start')}</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !studentCodeEnabled || busy }}
+            disabled={!studentCodeEnabled || busy}
+            onPress={(event) => { event.stopPropagation(); setError(''); setModalOpen(true); }}
+            style={[styles.requestCancelButton, {
+              borderColor: studentCodeEnabled ? colors.teal : colors.border,
+              backgroundColor: studentCodeEnabled ? colors.tealSoft : colors.muted,
+              opacity: studentCodeEnabled ? 1 : 0.72,
+            }]}
+          >
+            <Icon name={studentCodeEnabled ? 'key' : attendanceAction === 'expired' ? 'x-circle' : 'clock'} size={14} color={studentCodeEnabled ? colors.teal : colors.mutedForeground} />
+            <Text style={[styles.requestCancelText, { color: studentCodeEnabled ? colors.teal : colors.mutedForeground }]}>
+              {studentCodeEnabled
+                ? t('إدخال كود الحضور', 'Enter attendance code')
+                : attendanceAction === 'expired'
+                  ? t('انتهت مهلة إدخال الكود', 'Code entry period ended')
+                  : t('إدخال الكود عند بدء الحصة', 'Enter code when the lesson starts')}
+            </Text>
           </Pressable>
           <Modal visible={modalOpen} transparent animationType="fade" onRequestClose={() => setModalOpen(false)}>
             <View style={styles.codeModalBackdrop}>
