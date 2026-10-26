@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/auth';
 import { getReadChatMessageIds } from '@/lib/localChatReadState';
 import { getStudentUnreadChatMessageCount } from '@/lib/studentUnreadMessages';
 import { getAvailableTeacherBalance } from '@/lib/teacherFinance';
+import { getTeacherInPersonRequestCountQueryKey } from '@/lib/teacherBookingTaskSync';
 import { supabase } from '@/lib/supabase';
 import { isAssignmentComplete } from '@/constants/localData';
 import { summarizePendingTeacherSubmissions } from '@/lib/teacherAssignmentTasks';
@@ -100,7 +101,7 @@ export default function HomeScreen() {
     },
   );
   const teacherInPersonRequestsQuery = useQuery({
-    queryKey: ['teacher-in-person-request-count', user?.id],
+    queryKey: getTeacherInPersonRequestCountQueryKey(user?.id),
     enabled: canLoadRoleData && isTeacher && Boolean(user?.id) && Boolean(supabase),
     queryFn: async () => {
       if (!supabase) throw new Error('In-person requests are unavailable.');
