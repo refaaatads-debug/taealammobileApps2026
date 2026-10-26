@@ -10,7 +10,7 @@ import type { BookingRequest } from '@workspace/api-client-react';
 import type { Session } from '@/constants/localData';
 import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 type StudentRequestSection = 'pending' | 'accepted' | 'completed';
 
@@ -63,6 +63,18 @@ export default function BookingsScreen() {
       },
     },
   );
+  const inPersonRequestsQuery = useQuery({
+    queryKey: ['in-person-request-groups', role, profile?.id],
+    enabled: roleResolved && Boolean(profile?.id) && Boolean(supabase),
+    staleTime: 15_000,
+    refetchInterval: roleResolved ? (role === 'teacher' ? 20_000 : 60_000) : false,
+    queryFn: async () => {
+      if (!supabase) return [];
+      const result = await supabase.rpc(role === 'teacher' ? 'list_teacher_in_person_requests_priced' : 'list_my_in_person_request_groups');
+      if (result.error) throw result.error;
+      return Array.isArray(result.data) ? result.data as Array<Record<string, unknown>> : [];
+    },
+  });
   const decisionMutation = useDecideBookingRequest({
     mutation: {
       onSuccess: async (_data, variables) => {
@@ -183,6 +195,9 @@ export default function BookingsScreen() {
     () => displayedRequests.filter(({ request }) => request.status === 'open'),
     [displayedRequests],
   );
+  const inPersonRequestRows = inPersonRequestsQuery.data ?? [];
+  const pendingInPersonRequestRows = inPersonRequestRows.filter((item) => String(item.status ?? 'open') === 'open');
+  const acceptedInPersonRequestRows = inPersonRequestRows.filter((item) => String(item.status ?? '') === 'accepted');
   const acceptedRequestRows = useMemo(
     () => displayedRequests.filter(({ request }) => request.status === 'accepted'),
     [displayedRequests],
@@ -197,7 +212,7 @@ export default function BookingsScreen() {
     () => visibleSessions.filter((session) => localDayKey(new Date(session.scheduledAt)) === todayKey && session.status === 'upcoming'),
     [todayKey, visibleSessions],
   );
-  const pendingRequestCount = role === 'teacher' ? incomingRequestRows.length : displayedRequests.filter(({ request }) => request.status === 'open').length;
+  const pendingRequestCount = (role === 'teacher' ? incomingRequestRows.length : displayedRequests.filter(({ request }) => request.status === 'open').length) + pendingInPersonRequestRows.length;
   const activeSessionCount = visibleSessions.filter((session) => session.status === 'upcoming' || session.sessionStatus === 'in_progress').length;
 
   useEffect(() => {
@@ -389,14 +404,15 @@ export default function BookingsScreen() {
           <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{role === 'teacher' ? t('طلبات الطلاب الواردة بانتظار قرارك.', 'Incoming student requests waiting for your decision.') : t('طلباتك التي تنتظر قبول المعلم.', 'Your requests waiting for teacher acceptance.')}</Text>
         </View>
         <View style={[styles.sectionLeadCount, { backgroundColor: colors.tealSoft }]}>
-          <Text style={[styles.sectionLeadCountText, { color: colors.teal }]}>{formatNumber(incomingRequestRows.length)}</Text>
+          <Text style={[styles.sectionLeadCountText, { color: colors.teal }]}>{formatNumber(incomingRequestRows.length + pendingInPersonRequestRows.length)}</Text>
           <Text style={[styles.sectionLeadCountLabel, { color: colors.teal }]}>{t('طلب', 'requests')}</Text>
         </View>
       </View>
-      {requestQuery.isError ? (
-        <EmptyState icon="alert-circle" title={t('تعذر تحميل طلبات الحصص', 'Unable to load lesson requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); }} />
-      ) : incomingRequestRows.length ? (
+      {(requestQuery.isError || inPersonRequestsQuery.isError) && !incomingRequestRows.length && !pendingInPersonRequestRows.length ? (
+        <EmptyState icon="alert-circle" title={t('تعذر تحميل طلبات الحصص', 'Unable to load lesson requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); void inPersonRequestsQuery.refetch(); }} />
+      ) : incomingRequestRows.length || pendingInPersonRequestRows.length ? (
         <View style={styles.requests}>
+          {pendingInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`teacher-in-person-${String(item.request_group_id ?? index)}`} item={item} role="teacher" onPress={() => router.push('/in-person')} />)}
           {incomingRequestRows.map(({ request, count, items }, index) => (
             <BookingRequestCard
               key={`upcoming-request-${request.groupId || request.id}-${request.id}-${index}`}
@@ -492,9 +508,12 @@ export default function BookingsScreen() {
   const selectedStudentRequestRows = selectedStudentRequest.key === 'pending'
     ? displayedRequests.filter(({ request }) => request.status === 'open')
     : acceptedRequestRows;
+  const selectedInPersonRequestRows = selectedStudentRequest.key === 'pending'
+    ? pendingInPersonRequestRows
+    : selectedStudentRequest.key === 'accepted' ? acceptedInPersonRequestRows : [];
   const selectedStudentRequestCount = selectedStudentRequest.key === 'completed'
     ? completedSessions.length
-    : selectedStudentRequestRows.length;
+    : selectedStudentRequestRows.length + selectedInPersonRequestRows.length;
   const studentRequestSections = (
     <View style={[styles.studentRequestCard, { backgroundColor: colors.card, borderColor: colors.border }]} testID="student-request-sections">
       <View style={styles.studentRequestHeader}>
@@ -506,7 +525,7 @@ export default function BookingsScreen() {
           <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.studentRequestHeaderBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t('اختر القسم لعرض تفاصيله دون شغل مساحة إضافية.', 'Choose a section to view its details without taking extra space.')}</Text>
         </View>
         <View style={[styles.studentRequestTotal, { backgroundColor: colors.navySoft }]}>
-          <Text style={[styles.studentRequestTotalValue, { color: colors.primary }]}>{formatNumber(displayedRequests.length + completedSessions.length)}</Text>
+          <Text style={[styles.studentRequestTotalValue, { color: colors.primary }]}>{formatNumber(displayedRequests.length + completedSessions.length + inPersonRequestRows.length)}</Text>
           <Text style={[styles.studentRequestTotalLabel, { color: colors.primary }]}>{t('الإجمالي', 'Total')}</Text>
         </View>
       </View>
@@ -516,8 +535,8 @@ export default function BookingsScreen() {
           const count = option.key === 'completed'
             ? completedSessions.length
             : option.key === 'pending'
-              ? displayedRequests.filter(({ request }) => request.status === 'open').length
-              : acceptedRequestRows.length;
+              ? displayedRequests.filter(({ request }) => request.status === 'open').length + pendingInPersonRequestRows.length
+              : acceptedRequestRows.length + acceptedInPersonRequestRows.length;
           return (
             <Pressable
               key={option.key}
@@ -561,10 +580,12 @@ export default function BookingsScreen() {
           ) : (
             <EmptyState icon="check-circle" title={t('لا توجد حصص مكتملة', 'No completed lessons')} body={t('ستظهر الحصص هنا بعد انتهائها.', 'Lessons will appear here after they end.')} />
           )
-        ) : requestQuery.isError ? (
-          <EmptyState icon="alert-circle" title={t('تعذر تحميل الطلبات', 'Unable to load requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); }} />
-        ) : selectedStudentRequestRows.length ? (
+  ) : (requestQuery.isError || inPersonRequestsQuery.isError) && !selectedInPersonRequestRows.length && !selectedStudentRequestRows.length ? (
+          <EmptyState icon="alert-circle" title={t('تعذر تحميل الطلبات', 'Unable to load requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); void inPersonRequestsQuery.refetch(); }} />
+        ) : selectedStudentRequestRows.length || selectedInPersonRequestRows.length ? (
           <View style={styles.requests}>
+            {requestQuery.isError || inPersonRequestsQuery.isError ? <Text style={[styles.requestMeta, { color: colors.destructive, writingDirection: direction }]}>{t('تعذر تحديث بعض الطلبات؛ المعروض أدناه هو آخر محتوى متاح.', 'Some requests could not be refreshed; showing the latest available data below.')}</Text> : null}
+            {selectedInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`student-in-person-${String(item.request_group_id ?? index)}`} item={item} role="student" onPress={() => router.push('/in-person')} />)}
             {selectedStudentRequestRows.map(({ request, count, items }) => (
               <BookingRequestCard
                 key={`${selectedStudentRequest.key}-${request.groupId || request.id}-${request.id}`}
@@ -826,7 +847,8 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], b
       <View style={styles.requestTop}>
         <Pressable onPress={() => setExpanded((value) => !value)} style={styles.requestTopToggle}>
           <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.mutedForeground} />
-          <View style={[styles.requestStatus, { backgroundColor: statusBackground }]}><Text style={[styles.requestStatusText, { color: statusColor }]}>{status}</Text></View>
+            <View style={[styles.requestStatus, { backgroundColor: colors.navySoft }]}><Text style={[styles.requestStatusText, { color: colors.primary }]}>{t('عن بُعد', 'Online')}</Text></View>
+            <View style={[styles.requestStatus, { backgroundColor: statusBackground }]}><Text style={[styles.requestStatusText, { color: statusColor }]}>{status}</Text></View>
            <Text style={[styles.requestSubject, { color: colors.foreground, writingDirection: direction }]}>{request.subject}</Text>
         </Pressable>
         {onDelete ? <Pressable
@@ -867,6 +889,39 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], b
          onPress={() => onDecision('accepted')}
          style={({ pressed }) => [styles.requestButton, { backgroundColor: busy ? colors.muted : colors.teal }, pressed && styles.pressed]}
        ><Text style={[styles.requestButtonText, { color: colors.primaryForeground }]}>{busy ? t('جارٍ التحديث…', 'Updating…') : t('قبول الطلب', 'Accept request')}</Text></Pressable></View> : null}</> : null}
+    </View>
+  );
+}
+
+function InPersonRequestCard({ item, role, onPress }: { item: Record<string, unknown>; role: 'teacher' | 'student'; onPress: () => void }) {
+  const colors = useColors();
+  const { t, locale, direction } = useAppPreferences();
+  const status = String(item.status ?? 'open');
+  const isOpen = status === 'open';
+  const time = typeof item.scheduled_at === 'string' ? new Date(item.scheduled_at) : null;
+  const dateLabel = time && !Number.isNaN(time.getTime())
+    ? `${time.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' })} · ${time.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })}`
+    : t('موعد غير محدد', 'Time not specified');
+  const title = String(item.subject_name ?? t('حصة حضورية', 'In-person lesson'));
+  const person = role === 'teacher' ? item.student_name : item.teacher_name;
+  const personLabel = typeof person === 'string' && person.trim() ? person : '';
+  const location = typeof item.city_name === 'string' ? item.city_name : '';
+  return (
+    <View style={[styles.requestCard, { backgroundColor: colors.card, borderColor: colors.border, borderRightColor: colors.teal }]}>
+      <View style={styles.requestTop}>
+        <View style={styles.requestTopToggle}>
+          <View style={[styles.requestStatus, { backgroundColor: colors.tealSoft }]}><Text style={[styles.requestStatusText, { color: colors.teal }]}>{t('حضوري', 'In person')}</Text></View>
+          <View style={[styles.requestStatus, { backgroundColor: isOpen ? colors.goldSoft : colors.navySoft }]}><Text style={[styles.requestStatusText, { color: isOpen ? colors.accentForeground : colors.primary }]}>{isOpen ? t('طلب جديد', 'New request') : t('مقبول', 'Accepted')}</Text></View>
+          <Text style={[styles.requestSubject, { color: colors.foreground, writingDirection: direction }]}>{title}</Text>
+        </View>
+      </View>
+      <Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{[personLabel, dateLabel, location].filter(Boolean).join(' · ')}</Text>
+      {role === 'teacher' ? (
+        <Pressable onPress={onPress} style={[styles.requestCancelButton, { borderColor: colors.teal }]}>
+          <Icon name="map-pin" size={14} color={colors.teal} />
+          <Text style={[styles.requestCancelText, { color: colors.teal }]}>{t('إدارة طلب الحضوري', 'Manage in-person request')}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }

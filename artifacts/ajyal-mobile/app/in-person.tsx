@@ -1,8 +1,8 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Crypto from "expo-crypto";
 import * as Location from "expo-location";
-import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Header, Icon, Screen } from "@/components/AjyalUI";
 import LocationPicker from "@/components/InPersonLocationPicker";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
@@ -10,9 +10,11 @@ import { useAjyal } from "@/hooks/useAjyal";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
-import { formatLocalDateTimeInput, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "@/lib/inPersonScheduling";
+import { firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "@/lib/inPersonScheduling";
 import { getInPersonBookingSnapshot } from "@/lib/inPersonBookingSnapshot";
 import { selectSavedAddress } from "@/lib/inPersonAddressSelection";
+import { TEACHING_STAGES } from "@/constants/education";
+import { getListTeachersQueryKey, useListTeachers } from "@workspace/api-client-react";
 
 type Row = Record<string, any>;
 type City = { id: string; name_ar: string; name_en: string | null; in_person_enabled: boolean };
@@ -34,8 +36,6 @@ function localLabel(value: unknown, locale: string) {
 }
 
 export default function InPersonScreen() {
-  const routeParams = useLocalSearchParams<{ booking?: string }>();
-  const focusedBookingId = typeof routeParams.booking === "string" ? routeParams.booking : "";
   const colors = useColors();
   const { t, locale, direction } = useAppPreferences();
   const { profile, role } = useAjyal();
@@ -47,13 +47,14 @@ export default function InPersonScreen() {
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [subjects, setSubjects] = useState<Array<{ id: string; name: string }>>([]);
   const [groups, setGroups] = useState<Row[]>([]);
-  const [studentBookings, setStudentBookings] = useState<Row[]>([]);
   const [teacherBookings, setTeacherBookings] = useState<Row[]>([]);
   const [settings, setSettings] = useState<Row | null>(null);
   const [cityId, setCityId] = useState("");
   const [addressId, setAddressId] = useState("");
+  const [teachingStage, setTeachingStage] = useState("");
   const [subjectId, setSubjectId] = useState("");
-  const [scheduledAt, setScheduledAt] = useState(() => formatLocalDateTimeInput(new Date(Date.now() + 3 * 60 * 60 * 1000)));
+  const [scheduledAt, setScheduledAt] = useState(firstAvailableInPersonSchedule);
+  const [scheduleDate = "", scheduleTime = ""] = scheduledAt.split("T");
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [searchPerformed, setSearchPerformed] = useState(false);
   const [selectedTeachers, setSelectedTeachers] = useState<string[]>([]);
@@ -63,7 +64,8 @@ export default function InPersonScreen() {
   const [teacherLongitude, setTeacherLongitude] = useState("");
   const [teacherRadius, setTeacherRadius] = useState("10");
   const [attendanceCodes, setAttendanceCodes] = useState<Record<string, string>>({});
-  const [studentCodes, setStudentCodes] = useState<Record<string, string>>({});
+  const teacherDirectoryQuery = useListTeachers(undefined, { query: { enabled: role === "student", queryKey: getListTeachersQueryKey(undefined), staleTime: 30_000 } });
+  const directoryTeachers = teacherDirectoryQuery.data ?? [];
   const addressIdRef = useRef(addressId);
   addressIdRef.current = addressId;
 
@@ -71,6 +73,24 @@ export default function InPersonScreen() {
   const cityOptions = useMemo(() => cities, [cities]);
   const selectedCity = cities.find((city) => city.id === cityId) ?? null;
   const selectedAddress = addresses.find((address) => address.id === addressId) ?? null;
+  const stageSubjectNames = useMemo(() => new Set(directoryTeachers
+    .filter((teacher) => teacher.teachingStages?.includes(teachingStage))
+    .flatMap((teacher) => teacher.subjects ?? [])), [directoryTeachers, teachingStage]);
+  const stageSubjects = useMemo(() => subjects.filter((subject) => stageSubjectNames.has(subject.name)), [stageSubjectNames, subjects]);
+  const eligibleTeacherIds = useMemo(() => new Set(directoryTeachers
+    .filter((teacher) => teacher.teachingStages?.includes(teachingStage) && teacher.subjects?.includes(subjects.find((subject) => subject.id === subjectId)?.name ?? ""))
+    .map((teacher) => teacher.id)), [directoryTeachers, subjectId, subjects, teachingStage]);
+  const dateOptions = useMemo(() => Array.from({ length: 7 }, (_, offset) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() + offset);
+    return { key: formatLocalDateTimeInput(date).slice(0, 10), day: date.toLocaleDateString(locale, { weekday: "short" }), label: date.toLocaleDateString(locale, { day: "numeric", month: "short" }) };
+  }), [locale]);
+  const timeOptions = useMemo(() => getInPersonAppointmentTimes(scheduleDate), [scheduleDate]);
+
+  useEffect(() => {
+    if (!teachingStage && profile?.teachingStage) setTeachingStage(profile.teachingStage);
+  }, [profile?.teachingStage, teachingStage]);
   const load = useCallback(async () => {
     if (!supabase || !user?.id || (role !== "student" && role !== "teacher")) {
       setLoading(false);
@@ -82,8 +102,6 @@ export default function InPersonScreen() {
     setCities([]);
     setAddresses([]);
     setSubjects([]);
-    setGroups([]);
-    setStudentBookings([]);
     setTeacherBookings([]);
     setSettings(null);
     setTeachers([]);
@@ -106,14 +124,6 @@ export default function InPersonScreen() {
       setAddresses(addressRows);
       setSubjects(records(subjectResult.data).map((item) => ({ id: String(item.id), name: String(item.name ?? "") })));
       if (role === "student") {
-        const [groupsResult, studentBookingsResult] = await Promise.all([
-          supabase.rpc("list_my_in_person_request_groups"),
-          supabase.from("bookings").select("id,scheduled_at,instruction_duration_minutes,balance_cost_minutes,status,session_status,attendance_confirmed_at").eq("student_id", user.id).eq("delivery_mode", "in_person").order("scheduled_at", { ascending: false }).limit(20),
-        ]);
-        if (groupsResult.error) throw groupsResult.error;
-        if (studentBookingsResult.error) throw studentBookingsResult.error;
-        setGroups(records(groupsResult.data));
-        setStudentBookings(records(studentBookingsResult.data));
         const selected = selectSavedAddress(addressRows, addressIdRef.current);
         setAddressId(selected?.id ?? "");
         setCityId(selected?.city_id ?? "");
@@ -191,8 +201,8 @@ export default function InPersonScreen() {
 
   const searchTeachers = async () => {
     const date = parseFutureInPersonDateTime(scheduledAt);
-    if (!supabase || !selectedCity?.in_person_enabled || !selectedAddress || selectedAddress.city_id !== cityId || !subjectId || !date) {
-      setError(t("اختر مدينة مفعّلة وعنواناً ومادة وموعداً بعد ساعتين على الأقل.", "Choose an enabled city, address, subject, and a time at least two hours ahead."));
+    if (!supabase || !selectedCity?.in_person_enabled || !selectedAddress || selectedAddress.city_id !== cityId || !teachingStage || !stageSubjects.some((subject) => subject.id === subjectId) || !date) {
+      setError(t("اختر المرحلة والمدينة والعنوان والمادة المرتبطة بها وموعداً بعد ساعتين على الأقل.", "Choose a stage, city, address, its related subject, and a time at least two hours ahead."));
       return;
     }
     setSaving(true); setError(""); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
@@ -204,13 +214,13 @@ export default function InPersonScreen() {
       setError(errorText(result.error, t("تعذر البحث عن المعلمين.", "Teacher search failed.")));
       return;
     }
-    setTeachers(records(result.data) as Teacher[]);
+    setTeachers((records(result.data) as Teacher[]).filter((teacher) => eligibleTeacherIds.has(teacher.teacher_id)));
     setSearchPerformed(true);
   };
 
   const createRequest = async () => {
     const date = parseFutureInPersonDateTime(scheduledAt);
-    if (!supabase || !selectedCity?.in_person_enabled || !selectedAddress || selectedAddress.city_id !== cityId || !subjectId || !date || !selectedTeachers.length) {
+    if (!supabase || !selectedCity?.in_person_enabled || !selectedAddress || selectedAddress.city_id !== cityId || !teachingStage || !stageSubjects.some((subject) => subject.id === subjectId) || !date || !selectedTeachers.length) {
       setError(t("اختر معلماً واحداً على الأقل قبل إرسال الطلب.", "Select at least one teacher before sending the request."));
       return;
     }
@@ -230,19 +240,11 @@ export default function InPersonScreen() {
 
   const runTeacherDecision = async (groupId: string, decision: "accept" | "reject") => {
     if (!supabase) return;
-    setSaving(true); setError("");
+    setSaving(true);
+    setError("");
     const result = await supabase.rpc(decision === "accept" ? "accept_in_person_request" : "reject_in_person_request", { p_request_group_id: groupId });
     setSaving(false);
     if (result.error) setError(errorText(result.error, t("تعذر تحديث الطلب.", "Could not update the request.")));
-    else await load();
-  };
-
-  const cancelGroup = async (groupId: string) => {
-    if (!supabase) return;
-    setSaving(true); setError("");
-    const result = await supabase.rpc("cancel_in_person_request_group", { p_request_group_id: groupId });
-    setSaving(false);
-    if (result.error) setError(errorText(result.error, t("تعذر إلغاء الطلب.", "Could not cancel the request.")));
     else await load();
   };
 
@@ -253,27 +255,11 @@ export default function InPersonScreen() {
     else setAttendanceCodes((current) => ({ ...current, [bookingId]: String(result.data ?? "") }));
   };
 
-  const confirmStudentCode = async (bookingId: string) => {
-    if (!supabase) return;
-    const code = studentCodes[bookingId]?.trim() ?? "";
-    if (!code) { setError(t("أدخل كود الحضور أولاً.", "Enter the attendance code first.")); return; }
-    setSaving(true); setError("");
-    const result = await supabase.rpc("confirm_in_person_attendance_code", { p_booking_id: bookingId, p_code: code });
-    setSaving(false);
-    if (result.error) setError(errorText(result.error, t("تعذر تأكيد الحضور.", "Could not confirm attendance.")));
-    else await load();
-  };
-
   const cardStyle = [styles.card, { backgroundColor: colors.card, borderColor: colors.border }];
   const textStyle = { color: colors.foreground, writingDirection: direction } as const;
   const mutedStyle = { color: colors.mutedForeground, writingDirection: direction } as const;
   const actionStyle = { backgroundColor: colors.teal };
   const cityLabel = (city: City) => locale.startsWith("ar") ? city.name_ar : city.name_en ?? city.name_ar;
-  const [scheduleDate = "", scheduleTime = ""] = scheduledAt.split("T");
-  const updateSchedulePart = (part: "date" | "time", value: string) => {
-    const [currentDate = "", currentTime = ""] = scheduledAt.split("T");
-    setScheduledAt(`${part === "date" ? value : currentDate}T${part === "time" ? value : currentTime}`);
-  };
 
   return (
     <Screen>
@@ -358,27 +344,47 @@ export default function InPersonScreen() {
               </View>
               <Text style={[styles.stepNumber, { color: colors.teal, backgroundColor: colors.tealSoft }]}>02</Text>
             </View>
-            <Text style={[styles.fieldLabel, textStyle]}>{t("المادة", "Subject")}</Text>
-            <View style={styles.subjectGrid}>{subjects.map((subject) => {
+            <Text style={[styles.fieldLabel, textStyle]}>{t("المرحلة الدراسية", "Education stage")}</Text>
+            <View style={styles.subjectGrid}>{TEACHING_STAGES.map((stage) => {
+              const selected = teachingStage === stage;
+              return <Pressable key={stage} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setTeachingStage(stage); setSubjectId(""); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false); }} style={({ pressed }) => [styles.subjectOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: pressed ? 0.8 : 1 }]}>
+                <Icon name={selected ? "check-circle" : "book-open"} size={16} color={selected ? colors.teal : colors.mutedForeground} />
+                <Text style={[styles.subjectName, textStyle, { color: selected ? colors.teal : colors.foreground }]}>{stage}</Text>
+              </Pressable>;
+            })}</View>
+            <Text style={[styles.fieldLabel, textStyle]}>{t("المادة المرتبطة بالمرحلة", "Subject for this stage")}</Text>
+            {teacherDirectoryQuery.isLoading ? <Text style={mutedStyle}>{t("جارٍ تحميل المواد المناسبة للمرحلة...", "Loading subjects for this stage...")}</Text> : null}
+            {!teacherDirectoryQuery.isLoading && teacherDirectoryQuery.isError ? <Text accessibilityRole="alert" style={{ color: colors.destructive }}>{t("تعذر تحميل المواد المرتبطة بالمرحلة.", "Could not load subjects for this stage.")}</Text> : null}
+            <View style={styles.subjectGrid}>{stageSubjects.map((subject) => {
               const selected = subjectId === subject.id;
-              return <Pressable key={subject.id} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => setSubjectId(subject.id)} style={({ pressed }) => [styles.subjectOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: pressed ? 0.8 : 1 }]}>
+              return <Pressable key={subject.id} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setSubjectId(subject.id); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false); }} style={({ pressed }) => [styles.subjectOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: pressed ? 0.8 : 1 }]}>
                 <Icon name={selected ? "check-circle" : "book-open"} size={16} color={selected ? colors.teal : colors.mutedForeground} />
                 <Text style={[styles.subjectName, textStyle, { color: selected ? colors.teal : colors.foreground }]}>{subject.name}</Text>
               </Pressable>;
             })}</View>
+            {!teacherDirectoryQuery.isLoading && !teacherDirectoryQuery.isError && teachingStage && !stageSubjects.length ? <Text style={mutedStyle}>{t("لا توجد مواد مرتبطة بهذه المرحلة حالياً.", "No subjects are linked to this stage yet.")}</Text> : null}
             <Text style={[styles.fieldLabel, textStyle]}>{t("موعد الحصة", "Lesson date and time")}</Text>
-            <View style={styles.scheduleRow}>
-              <View style={[styles.scheduleField, { borderColor: colors.border, backgroundColor: colors.card }]}>
-                <Text style={[styles.scheduleLabel, { color: colors.mutedForeground }]}>{t("التاريخ", "Date")}</Text>
-                <TextInput testID="in-person-date" value={scheduleDate} onChangeText={(value) => updateSchedulePart("date", value)} placeholder="YYYY-MM-DD" keyboardType="numbers-and-punctuation" autoCapitalize="none" placeholderTextColor={colors.mutedForeground} style={[styles.scheduleInput, { color: colors.foreground, writingDirection: "ltr" }]} />
-              </View>
-              <View style={[styles.scheduleField, { borderColor: colors.border, backgroundColor: colors.card }]}>
-                <Text style={[styles.scheduleLabel, { color: colors.mutedForeground }]}>{t("الوقت", "Time")}</Text>
-                <TextInput testID="in-person-time" value={scheduleTime} onChangeText={(value) => updateSchedulePart("time", value)} placeholder="HH:mm" keyboardType="numbers-and-punctuation" autoCapitalize="none" placeholderTextColor={colors.mutedForeground} style={[styles.scheduleInput, { color: colors.foreground, writingDirection: "ltr" }]} />
-              </View>
-            </View>
-            <Text style={mutedStyle}>{t("بالتوقيت المحلي؛ يجب أن يسبق الموعد الحجز بساعتين على الأقل.", "Local time; schedule at least two hours ahead.")}</Text>
-            <Pressable testID="in-person-search-teachers" disabled={saving || !selectedAddress || !selectedCity?.in_person_enabled || !subjects.length} onPress={() => void searchTeachers()} style={({ pressed }) => [styles.primary, actionStyle, (saving || !selectedAddress || !selectedCity?.in_person_enabled || !subjects.length) && styles.disabled, pressed && !saving && styles.pressed]}>
+            <Text style={[styles.scheduleLabel, { color: colors.mutedForeground }]}>{t("اختر اليوم", "Choose a day")}</Text>
+            <View style={styles.subjectGrid}>{dateOptions.map((option) => {
+              const selected = scheduleDate === option.key;
+              return <Pressable key={option.key} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => {
+                const time = timeOptions.includes(scheduleTime) ? scheduleTime : timeOptions[0] ?? "08:00";
+                setScheduledAt(`${option.key}T${time}`);
+              }} style={[styles.dateOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card }]}>
+                <Text style={[styles.dateDay, { color: selected ? colors.teal : colors.mutedForeground }]}>{option.day}</Text>
+                <Text style={[styles.dateValue, { color: selected ? colors.teal : colors.foreground }]}>{option.label}</Text>
+              </Pressable>;
+            })}</View>
+            <Text style={[styles.scheduleLabel, { color: colors.mutedForeground }]}>{t("اختر الوقت", "Choose a time")}</Text>
+            <View style={styles.subjectGrid}>{timeOptions.map((time) => {
+              const selected = scheduleTime === time;
+              return <Pressable key={time} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => setScheduledAt(`${scheduleDate}T${time}`)} style={[styles.timeOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card }]}>
+                <Icon name="clock" size={13} color={selected ? colors.teal : colors.mutedForeground} />
+                <Text style={{ color: selected ? colors.teal : colors.foreground, fontSize: 11, fontFamily: "Inter_600SemiBold" }}>{time}</Text>
+              </Pressable>;
+            })}</View>
+            <Text style={mutedStyle}>{t("بالتوقيت المحلي. اختر موعداً بعد ساعتين على الأقل من الآن.", "Local time. Choose a time at least two hours from now.")}</Text>
+            <Pressable testID="in-person-search-teachers" disabled={saving || !selectedAddress || !selectedCity?.in_person_enabled || !stageSubjects.length || teacherDirectoryQuery.isLoading || teacherDirectoryQuery.isError} onPress={() => void searchTeachers()} style={({ pressed }) => [styles.primary, actionStyle, (saving || !selectedAddress || !selectedCity?.in_person_enabled || !stageSubjects.length) && styles.disabled, pressed && !saving && styles.pressed]}>
               {saving ? <ActivityIndicator color="#fff" /> : <><Icon name="search" size={16} color="#fff" /><Text style={styles.primaryText}>{t("ابحث عن المعلمين", "Find available teachers")}</Text></>}
             </Pressable>
             {searchPerformed && !teachers.length && selectedCity?.in_person_enabled && !saving ? <Text style={mutedStyle}>{t("لا توجد نتائج مطابقة لهذا الموعد والعنوان والمادة.", "No teachers match this time, address, and subject.")}</Text> : null}
@@ -396,26 +402,6 @@ export default function InPersonScreen() {
             })}
             {teachers.length ? <Pressable disabled={saving || !selectedTeachers.length} onPress={() => void createRequest()} style={[styles.primary, actionStyle, (!selectedTeachers.length || saving) && styles.disabled]}><Icon name="send" size={15} color="#fff" /><Text style={styles.primaryText}>{t("إرسال الطلب للمعلمين المحددين", "Send request to selected teachers")}</Text></Pressable> : null}
           </View>
-          <Text style={[styles.sectionTitle, textStyle]}>{t("طلباتي الحضورية", "My in-person requests")}</Text>
-          {!groups.length && !loading ? <Text style={mutedStyle}>{t("لا توجد طلبات حضورية بعد.", "No in-person requests yet.")}</Text> : null}
-          {groups.map((group) => <View key={String(group.request_group_id)} style={[cardStyle, focusedBookingId && String(group.booking_id ?? "") === focusedBookingId && { borderColor: colors.teal, borderWidth: 2 }]}>
-            <Text style={styles.cardTitle}>{group.subject_name ?? t("حصة حضورية", "In-person lesson")}</Text>
-            <Text style={mutedStyle}>{localLabel(group.scheduled_at, locale)} · {inPersonRequestStatusLabel(group.status, locale.startsWith("ar") ? "ar" : "en")}</Text>
-            {group.booking_id ? (() => {
-              const booking = studentBookings.find((item) => String(item.id) === String(group.booking_id));
-              if (!booking) return null;
-              const snapshot = getInPersonBookingSnapshot(booking);
-              const facts = [
-                snapshot.instructionMinutes === null ? null : `${snapshot.instructionMinutes} ${t("دقيقة تدريس", "teaching minutes")}`,
-                snapshot.packageMinutes === null ? null : `${snapshot.packageMinutes} ${t("دقيقة من الباقة", "package minutes")}`,
-                snapshot.studentValueSar === null ? null : `${snapshot.studentValueSar} ${t("ر.س قيمة الحصة", "SAR lesson value")}`,
-              ].filter(Boolean);
-              return <Text style={mutedStyle}>{[...facts, inPersonRequestStatusLabel(booking.session_status, locale.startsWith("ar") ? "ar" : "en")].join(" · ")}</Text>;
-            })() : null}
-            {group.status === "open" ? <Pressable onPress={() => void cancelGroup(String(group.request_group_id))} style={[styles.secondary, { borderColor: colors.destructive }]}><Text style={{ color: colors.destructive }}>{t("إلغاء الطلب", "Cancel request")}</Text></Pressable> : null}
-            {group.booking_id && !group.attendance_confirmed_at ? <><TextInput value={studentCodes[String(group.booking_id)] ?? ""} onChangeText={(value) => setStudentCodes((current) => ({ ...current, [String(group.booking_id)]: value }))} placeholder={t("أدخل كود المعلم", "Enter teacher code")} placeholderTextColor={colors.mutedForeground} style={[styles.input, { color: colors.foreground, borderColor: colors.border }]} /><Pressable onPress={() => void confirmStudentCode(String(group.booking_id))} style={[styles.primary, actionStyle]}><Text style={styles.primaryText}>{t("تأكيد الحضور", "Confirm attendance")}</Text></Pressable></> : null}
-            {group.booking_id && group.attendance_confirmed_at ? <Pressable onPress={() => router.push({ pathname: "/live-session", params: { booking: String(group.booking_id) } })} style={[styles.primary, actionStyle]}><Text style={styles.primaryText}>{t("فتح الجلسة", "Open session")}</Text></Pressable> : null}
-          </View>)}
         </>
       ) : role === "teacher" ? (
         <>
@@ -434,11 +420,18 @@ export default function InPersonScreen() {
             <TextInput value={teacherRadius} onChangeText={setTeacherRadius} placeholder={t("نطاق الخدمة بالكيلومتر", "Service radius in km")} keyboardType="number-pad" placeholderTextColor={colors.mutedForeground} style={[styles.input, { color: colors.foreground, borderColor: colors.border }]} />
             <Pressable disabled={saving} onPress={() => void saveTeacherLocation()} style={[styles.primary, actionStyle, saving && styles.disabled]}><Text style={styles.primaryText}>{t("حفظ وإرسال للاعتماد", "Save and submit for approval")}</Text></Pressable>
           </View>
-          <Text style={[styles.sectionTitle, textStyle]}>{t("طلبات الحضوري", "In-person requests")}</Text>
+          {groups.length ? <Text style={[styles.sectionTitle, textStyle]}>{t("طلبات الحضوري", "In-person requests")}</Text> : null}
           {groups.map((group) => {
             const snapshot = getInPersonBookingSnapshot(group);
             const rate = snapshot.teacherRateSar === null ? "" : ` · ${snapshot.teacherRateSar} ${t("ر.س للمعلم", "SAR teacher rate")}`;
-            return <View key={String(group.request_group_id)} style={cardStyle}><Text style={styles.cardTitle}>{group.student_name} · {group.subject_name}</Text><Text style={mutedStyle}>{group.city_name} · {localLabel(group.scheduled_at, locale)}{rate}</Text><View style={styles.row}><Pressable disabled={saving} onPress={() => void runTeacherDecision(String(group.request_group_id), "accept")} style={[styles.primary, actionStyle]}><Text style={styles.primaryText}>{t("قبول", "Accept")}</Text></Pressable><Pressable disabled={saving} onPress={() => void runTeacherDecision(String(group.request_group_id), "reject")} style={[styles.secondary, { borderColor: colors.destructive }]}><Text style={{ color: colors.destructive }}>{t("رفض", "Decline")}</Text></Pressable></View></View>;
+            return <View key={String(group.request_group_id)} style={cardStyle}>
+              <Text style={[styles.cardTitle, textStyle]}>{group.student_name} · {group.subject_name}</Text>
+              <Text style={mutedStyle}>{group.city_name} · {localLabel(group.scheduled_at, locale)} · {inPersonRequestStatusLabel(group.status, locale.startsWith("ar") ? "ar" : "en")}{rate}</Text>
+              {group.status === "open" ? <View style={styles.row}>
+                <Pressable disabled={saving} onPress={() => void runTeacherDecision(String(group.request_group_id), "accept")} style={[styles.primary, actionStyle, saving && styles.disabled]}><Text style={styles.primaryText}>{t("قبول", "Accept")}</Text></Pressable>
+                <Pressable disabled={saving} onPress={() => void runTeacherDecision(String(group.request_group_id), "reject")} style={[styles.secondary, { borderColor: colors.destructive }]}><Text style={{ color: colors.destructive }}>{t("رفض", "Decline")}</Text></Pressable>
+              </View> : null}
+            </View>;
           })}
           <Text style={[styles.sectionTitle, textStyle]}>{t("أكواد الحضور", "Attendance codes")}</Text>
           {teacherBookings.map((booking) => {
@@ -502,6 +495,10 @@ const styles = StyleSheet.create({
   scheduleField: { flex: 1, minHeight: 68, borderWidth: 1, borderRadius: 14, paddingHorizontal: 11, paddingVertical: 8, gap: 3 },
   scheduleLabel: { fontSize: 9, fontFamily: "Inter_600SemiBold" },
   scheduleInput: { minHeight: 30, padding: 0, fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  dateOption: { minHeight: 48, flexGrow: 1, flexBasis: "28%", borderWidth: 1, borderRadius: 13, alignItems: "center", justifyContent: "center", gap: 2, paddingHorizontal: 8, paddingVertical: 6 },
+  dateDay: { fontSize: 9, fontFamily: "Inter_500Medium" },
+  dateValue: { fontSize: 11, fontFamily: "Inter_700Bold" },
+  timeOption: { minHeight: 42, flexGrow: 1, flexBasis: "21%", borderWidth: 1, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
   teacherOption: { minHeight: 64, borderWidth: 1, borderRadius: 16, padding: 11, flexDirection: "row", alignItems: "center", gap: 10 },
   teacherAvatar: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   teacherName: { fontSize: 12, fontFamily: "Inter_700Bold" },
