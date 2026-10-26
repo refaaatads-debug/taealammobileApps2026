@@ -16,9 +16,11 @@ import {
   refetchTeacherBookingTaskQueries,
 } from '@/lib/teacherBookingTaskSync';
 import { supabase } from '@/lib/supabase';
+import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
 import { isAssignmentComplete } from '@/constants/localData';
 import { summarizePendingTeacherSubmissions } from '@/lib/teacherAssignmentTasks';
 import { DashboardActions, EmptyState, Header, Icon, IconName, LoadingBlock, Screen, SectionHeading, SessionCard, WelcomeBanner } from '@/components/AjyalUI';
+import TeacherInPersonCode from '@/components/TeacherInPersonCode';
 import { getListBookingRequestsQueryKey, getListMyAssignmentsQueryKey, useGetStudentDashboard, useGetTeacherDashboard, useListBookingRequests, useListMyAssignments } from '@workspace/api-client-react';
 
 type TodayTask = {
@@ -242,7 +244,29 @@ export default function HomeScreen() {
   const inPersonOpenRequests = teacherInPersonRequestsQuery.data ?? 0;
   const openRequestCount = incomingOpenRequests + inPersonOpenRequests;
   const dashboardSessions = isTeacher ? (teacherDashboard?.upcomingSessions ?? []) : (studentDashboard?.upcomingSessions ?? []);
-  const firstSession = dashboardSessions[0];
+  const canonicalDashboardSessions = useCanonicalSessionModes(dashboardSessions, profile?.id);
+  const firstSession = canonicalDashboardSessions[0];
+  const firstSessionDetailsQuery = useQuery({
+    queryKey: ['home-in-person-booking-details', profile?.id, firstSession?.id],
+    enabled: Boolean(
+      isTeacher
+      && profile?.id
+      && firstSession?.id
+      && firstSession.deliveryMode === 'in_person'
+      && supabase,
+    ),
+    staleTime: 30_000,
+    queryFn: async () => {
+      if (!supabase || !firstSession?.id) return null;
+      const { data, error } = await supabase
+        .from('bookings' as any)
+        .select('scheduled_at,visit_address_snapshot,attendance_confirmed_at')
+        .eq('id', firstSession.id)
+        .maybeSingle();
+      if (error) throw error;
+      return data as Record<string, unknown> | null;
+    },
+  });
   const unread = isTeacher ? (teacherDashboard?.unreadNotifications ?? 0) : (studentDashboard?.unreadNotifications ?? 0);
   const dashboardDegradedSections = isTeacher ? (teacherDashboard?.degradedSections ?? []) : (studentDashboard?.degradedSections ?? []);
   const degradedSections = !isTeacher && unreadChatQuery.isError
@@ -514,7 +538,17 @@ export default function HomeScreen() {
 
        {isTeacher ? <>
          <SectionHeading title={t('أقرب جلساتك', 'Upcoming sessions')} action={t('عرض الكل', 'View all')} onAction={() => router.push('/bookings')} />
-         {firstSession ? <SessionCard session={firstSession} role={role} onPress={() => router.push('/bookings')} onJoin={() => router.push({ pathname: '/live-session', params: { booking: firstSession.id } })} /> : <EmptyState icon="calendar" title={t('لا توجد جلسات قادمة', 'No upcoming sessions')} body={t('ستظهر حجوزاتك هنا بعد مزامنتها مع المنصة.', 'Your bookings will appear here after syncing with the platform.')} action={t('عرض الجلسات', 'View sessions')} onAction={() => router.push('/bookings')} />}
+          {firstSession ? (
+            <SessionCard
+              session={firstSession}
+              role={role}
+              footer={firstSession.deliveryMode === 'in_person'
+                ? <TeacherInPersonCode bookingId={firstSession.id} details={firstSessionDetailsQuery.data ?? undefined} />
+                : undefined}
+              onPress={() => router.push('/bookings')}
+              onJoin={() => router.push({ pathname: '/live-session', params: { booking: firstSession.id } })}
+            />
+          ) : <EmptyState icon="calendar" title={t('لا توجد جلسات قادمة', 'No upcoming sessions')} body={t('ستظهر حجوزاتك هنا بعد مزامنتها مع المنصة.', 'Your bookings will appear here after syncing with the platform.')} action={t('عرض الجلسات', 'View sessions')} onAction={() => router.push('/bookings')} />}
          <View style={styles.teacherSummary}>
          <SectionHeading title={t('تنبيهات المعلّم', 'Teacher alerts')} action={t('كل التنبيهات', 'All alerts')} onAction={() => router.push('/notifications')} />
          {teacherDashboard?.warningCount ? <SummaryRow icon="alert-circle" title={t('تحتاج إلى مراجعة التحذيرات', 'Warnings need review')} body={`${formatNumber(teacherDashboard.warningCount)} ${t('تنبيه مرتبط بحسابك', 'alert linked to your account')}`} onPress={() => router.push('/profile')} /> : null}
