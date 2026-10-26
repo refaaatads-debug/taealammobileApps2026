@@ -274,32 +274,40 @@ export default function BookingsSchedule({
                    <TeacherInPersonCode bookingId={session.id} />
                  ) : role === 'student' && (session.status === 'upcoming' || session.status === 'expired') && session.deliveryMode === 'in_person' ? (() => {
                    const action = inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs);
-                   if (action === 'enter_code') return (
+                    if (action === 'confirmed') return null;
+                    const enabled = action === 'enter_code';
+                    const expired = action === 'expired';
+                    return (
                      <Pressable
                        testID={`schedule-attendance-code-${session.id}`}
                        accessibilityRole="button"
                         accessibilityLabel={t('إدخال كود الحضور للحصة الحضورية', 'Enter attendance code for in-person lesson')}
+                        accessibilityState={{ disabled: !enabled }}
+                        disabled={!enabled}
                         onPress={() => {
                          setAttendanceSession(session);
                          setAttendanceError('');
                          setAttendanceCode('');
                        }}
-                       style={({ pressed }) => [styles.scheduleJoinButton, { backgroundColor: colors.teal, borderColor: colors.teal }, pressed && styles.pressed]}
+                        style={({ pressed }) => [
+                          styles.scheduleJoinButton,
+                          {
+                            backgroundColor: enabled ? colors.teal : colors.muted,
+                            borderColor: enabled ? colors.teal : colors.border,
+                            opacity: enabled ? 1 : 0.78,
+                          },
+                          pressed && enabled && styles.pressed,
+                        ]}
                      >
-                       <Icon name="key" size={12} color={colors.primaryForeground} />
-                       <Text style={[styles.scheduleJoinText, { color: colors.primaryForeground, writingDirection: direction }]}>{t('إدخال كود الحضور', 'Enter attendance code')}</Text>
+                        <Icon name={enabled ? 'key' : expired ? 'x-circle' : 'clock'} size={12} color={enabled ? colors.primaryForeground : colors.mutedForeground} />
+                        <Text style={[styles.scheduleJoinText, { color: enabled ? colors.primaryForeground : colors.mutedForeground, writingDirection: direction }]}>
+                          {enabled
+                            ? t('إدخال كود الحضور', 'Enter attendance code')
+                            : expired
+                              ? t('انتهت مهلة إدخال الكود', 'Code entry period ended')
+                              : t('إدخال الكود عند بدء الحصة', 'Enter code when the lesson starts')}
+                        </Text>
                      </Pressable>
-                   );
-                   const statusText = action === 'confirmed'
-                     ? t('تم تأكيد الحضور وبدء الحصة', 'Attendance confirmed; session started')
-                     : action === 'expired'
-                       ? t('انتهت مهلة إدخال الكود', 'Code entry period ended')
-                       : t('بانتظار حضور المعلم للحصة', 'Waiting for the teacher to attend the lesson');
-                   return (
-                     <View style={[styles.scheduleJoinButton, { backgroundColor: action === 'expired' ? 'rgba(234,62,62,0.08)' : colors.muted, borderColor: action === 'expired' ? colors.destructive : colors.border }]}>
-                       <Icon name={action === 'confirmed' ? 'check-circle' : action === 'expired' ? 'x-circle' : 'clock'} size={12} color={action === 'expired' ? colors.destructive : colors.mutedForeground} />
-                       <Text style={[styles.scheduleJoinText, { color: action === 'expired' ? colors.destructive : colors.mutedForeground, writingDirection: direction }]}>{statusText}</Text>
-                     </View>
                    );
                  })() : role === 'student' && session.status === 'upcoming' ? (
                   <Pressable
