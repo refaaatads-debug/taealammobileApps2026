@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { canConfirmInPersonAttendance, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
+import { getTeacherInPersonDecisionOutcome, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
 import SwipeDecisionControl from '@/components/SwipeDecisionControl';
 
 type StudentRequestSection = 'pending' | 'accepted' | 'completed';
@@ -105,6 +106,7 @@ export default function BookingsScreen() {
           requestQuery.refetch(),
           sessionsQuery.refetch(),
           historyQuery.refetch(),
+          ...(profile?.id ? [refreshTeacherBookingTaskCounts(queryClient, profile.id, getListBookingRequestsQueryKey({ view: 'incoming' }))] : []),
           queryClient.invalidateQueries({ queryKey: getListMyNotificationsQueryKey() }),
           queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] }),
         ]);
@@ -116,6 +118,7 @@ export default function BookingsScreen() {
             requestQuery.refetch(),
             sessionsQuery.refetch(),
             historyQuery.refetch(),
+            ...(profile?.id ? [refreshTeacherBookingTaskCounts(queryClient, profile.id, getListBookingRequestsQueryKey({ view: 'incoming' }))] : []),
             queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] }),
           ]);
           return;
@@ -459,7 +462,7 @@ export default function BookingsScreen() {
         <EmptyState icon="alert-circle" title={t('تعذر تحميل طلبات الحصص', 'Unable to load lesson requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); void inPersonRequestsQuery.refetch(); }} />
       ) : incomingRequestRows.length || pendingInPersonRequestRows.length ? (
         <View style={styles.requests}>
-          {pendingInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`teacher-in-person-${String(item.request_group_id ?? index)}`} item={item} role="teacher" onDecisionComplete={() => { void Promise.all([inPersonRequestsQuery.refetch(), sessionsQuery.refetch(), historyQuery.refetch()]); }} />)}
+          {pendingInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`teacher-in-person-${String(item.request_group_id ?? index)}`} item={item} role="teacher" onDecisionComplete={() => { void Promise.all([inPersonRequestsQuery.refetch(), sessionsQuery.refetch(), historyQuery.refetch(), ...(profile?.id ? [refreshTeacherBookingTaskCounts(queryClient, profile.id, getListBookingRequestsQueryKey({ view: 'incoming' }))] : [])]); }} />)}
           {incomingRequestRows.map(({ request, count, items }, index) => (
             <BookingRequestCard
               key={`upcoming-request-${request.groupId || request.id}-${request.id}-${index}`}
@@ -1089,15 +1092,19 @@ function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete }: { 
     setDecisionBusy(true);
     const { data, error } = await supabase.rpc(decision === 'accepted' ? 'accept_in_person_request' : 'reject_in_person_request', { p_request_group_id: groupId });
     setDecisionBusy(false);
-    if (error) {
-      Alert.alert(t('تعذر تحديث الطلب', 'Could not update request'), error.message || t('تحقق من الاتصال وحاول مرة أخرى.', 'Check your connection and try again.'));
+    const outcome = getTeacherInPersonDecisionOutcome(data, error);
+    if (outcome === 'error') {
+      const message = error instanceof Error ? error.message : t('تحقق من الاتصال وحاول مرة أخرى.', 'Check your connection and try again.');
+      Alert.alert(t('تعذر تحديث الطلب', 'Could not update request'), message);
+      onDecisionComplete?.();
       return;
     }
-    if (decision === 'rejected' && data !== true) {
+    if (outcome === 'conflict') {
       Alert.alert(t('تمت معالجة الطلب', 'Request already handled'), t('قد يكون معلم آخر قبله أو انتهت مهلة القبول.', 'Another teacher may have accepted it, or it may have expired.'));
-    } else {
-      Alert.alert(decision === 'accepted' ? t('تم قبول الحصة', 'Lesson accepted') : t('تم رفض الطلب', 'Request declined'));
+      onDecisionComplete?.();
+      return;
     }
+    Alert.alert(decision === 'accepted' ? t('تم قبول الحصة', 'Lesson accepted') : t('تم رفض الطلب', 'Request declined'));
     onDecisionComplete?.();
   };
   return (
