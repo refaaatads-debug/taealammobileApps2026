@@ -25,6 +25,7 @@ import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollV
 import { AppPreferencesProvider, useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { StatusBar } from 'expo-status-bar';
 import { clearRememberedLogin } from '@/lib/rememberedLogin';
+import { shouldAutoOpenStartedSession } from '@/lib/liveSessionRoute';
 import OnboardingScreen from '@/components/OnboardingScreen';
 import TeacherReviewAccessScreen from '@/components/TeacherReviewAccessScreen';
 
@@ -170,7 +171,7 @@ function RootLayoutNav() {
   // update first.
   useEffect(() => {
     const client = supabase;
-    if (!client || !profile?.id || role !== 'student' || pathname === '/live-session') return undefined;
+    if (!client || !homeReady || !profile?.id || role !== 'student' || pathname === '/live-session') return undefined;
     let mounted = true;
     const openStartedBooking = (bookingId: string) => {
       if (!mounted || pathname === '/live-session' || autoOpenedSessionIds.current.has(bookingId)) return;
@@ -191,17 +192,19 @@ function RootLayoutNav() {
       if (lifecycleBookingIds.length) {
         const { data: ownedLifecycleBookings } = await client
           .from('bookings')
-          .select('id')
+          .select('id, status, session_status')
           .eq('student_id', profile.id)
           .in('id', lifecycleBookingIds);
         for (const row of ownedLifecycleBookings ?? []) {
-          if (typeof row.id === 'string') openStartedBooking(row.id);
+          if (typeof row.id === 'string' && shouldAutoOpenStartedSession(row.id, row.status, row.session_status)) {
+            openStartedBooking(row.id);
+          }
         }
       }
 
       const { data } = await client
         .from('bookings')
-        .select('id, session_status, scheduled_at, created_at')
+        .select('id, status, session_status, scheduled_at, created_at')
         .eq('student_id', profile.id)
         .in('session_status', ['waiting_acceptance', 'in_progress']);
       if (!mounted) return;
@@ -210,7 +213,7 @@ function RootLayoutNav() {
         if (row.session_status === 'waiting_acceptance') {
           continue;
         }
-        if (row.session_status === 'in_progress') {
+        if (shouldAutoOpenStartedSession(bookingId, row.status, row.session_status)) {
           openStartedBooking(bookingId);
         }
       }
@@ -227,6 +230,7 @@ function RootLayoutNav() {
       }, (payload) => {
         const updated = payload.new as {
           id?: unknown;
+          status?: unknown;
           session_status?: unknown;
           scheduled_at?: unknown;
           created_at?: unknown;
@@ -236,7 +240,8 @@ function RootLayoutNav() {
         if (updated.session_status === 'waiting_acceptance') {
           return;
         }
-        if (updated.session_status !== 'in_progress') {
+        if (updated.session_status !== 'in_progress'
+          || !shouldAutoOpenStartedSession(bookingId, updated.status, updated.session_status)) {
           return;
         }
         openStartedBooking(bookingId);
@@ -255,12 +260,15 @@ function RootLayoutNav() {
         if (!bookingId || typeof updated.started_at !== 'string' || updated.ended_at) return;
         void client
           .from('bookings')
-          .select('id')
+          .select('id, status, session_status')
           .eq('id', bookingId)
           .eq('student_id', profile.id)
           .maybeSingle()
           .then(({ data }) => {
-            if (data?.id && typeof data.id === 'string') openStartedBooking(data.id);
+            if (data?.id && typeof data.id === 'string'
+              && shouldAutoOpenStartedSession(data.id, data.status, data.session_status)) {
+              openStartedBooking(data.id);
+            }
           });
       })
       .subscribe();
@@ -269,7 +277,7 @@ function RootLayoutNav() {
       mounted = false;
       void client.removeChannel(channel);
     };
-  }, [pathname, profile?.id, role]);
+  }, [homeReady, pathname, profile?.id, role]);
 
   const isPublicRoute = PUBLIC_PATHS.has(pathname);
   let overlay: React.ReactNode = null;
