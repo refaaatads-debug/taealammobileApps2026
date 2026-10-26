@@ -28,6 +28,11 @@ export function canConfirmInPersonAttendance(scheduledAt: string, nowMs = Date.n
   return Number.isFinite(start) && nowMs >= start && nowMs < start + 15 * 60 * 1000;
 }
 
+export function canRevealInPersonAttendanceCode(scheduledAt: string, nowMs = Date.now()): boolean {
+  const start = new Date(scheduledAt).getTime();
+  return Number.isFinite(start) && nowMs >= start - 60 * 60 * 1000 && nowMs < start + 15 * 60 * 1000;
+}
+
 export function inPersonAttendanceAction(
   scheduledAt: string,
   sessionStatus: string | null | undefined,
