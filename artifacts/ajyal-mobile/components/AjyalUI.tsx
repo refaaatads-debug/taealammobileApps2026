@@ -170,6 +170,11 @@ export function SessionCard({ session, role, cancelled, compact = false, footer,
   const isWaitingAcceptance = session.sessionStatus === 'waiting_acceptance';
   const isInProgress = session.sessionStatus === 'in_progress';
   const isInPerson = session.deliveryMode === 'in_person';
+  const modeLabel = isInPerson
+    ? t('حضوري', 'In person')
+    : session.deliveryMode === 'online'
+      ? t('أونلاين', 'Online')
+      : t('نوع الحصة غير محدد', 'Type unavailable');
   const isConfirmedUpcoming = session.status === 'upcoming' && !isWaitingAcceptance;
   const canJoin = role !== 'teacher' && !isInPerson && isConfirmedUpcoming && isInProgress;
   const showJoinControl = !isInPerson && !cancelled && session.status === 'upcoming' && (role === 'student' || isConfirmedUpcoming);
@@ -215,7 +220,7 @@ export function SessionCard({ session, role, cancelled, compact = false, footer,
       <View style={styles.sessionBody}>
         <View style={styles.sessionTopline}>
           <Text style={[styles.sessionSubject, { color: tone }]}>{session.subject}</Text>
-          {isInPerson ? <Text style={[styles.sessionModeTag, { color: colors.accentForeground, backgroundColor: colors.goldSoft }]}>{t('حضوري', 'In person')}</Text> : null}
+          <Text style={[styles.sessionModeTag, { color: isInPerson ? colors.accentForeground : colors.primary, backgroundColor: isInPerson ? colors.goldSoft : colors.navySoft }]}>{modeLabel}</Text>
           <View style={[styles.sessionStatusBadge, { backgroundColor: statusBackground }]}>
             <View style={[styles.sessionStatusDot, { backgroundColor: statusColor }]} />
             <Text style={[styles.sessionStatusText, { color: statusColor }]}>{statusLabel}</Text>
