@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   getTeacherInPersonRequestCountQueryKey,
   getTeacherInPersonDecisionOutcome,
+  countOpenBookingRequestGroups,
   refreshTeacherBookingTaskCounts,
 } from '../teacherBookingTaskSync.ts';
 
@@ -32,4 +33,26 @@ test('a false in-person decision response is a conflict, not a success', () => {
 test('only a confirmed true in-person response is a success', () => {
   assert.equal(getTeacherInPersonDecisionOutcome(true, null), 'success');
   assert.equal(getTeacherInPersonDecisionOutcome(null, new Error('network error')), 'error');
+});
+
+test('an online request group with several appointment rows counts as one decision', () => {
+  const requests = [
+    { id: 'slot-1', groupId: 'group-a', status: 'open' },
+    { id: 'slot-2', groupId: 'group-a', status: 'open' },
+    { id: 'slot-3', groupId: 'group-a', status: 'open' },
+  ];
+
+  assert.equal(countOpenBookingRequestGroups(requests), 1);
+});
+
+test('only distinct open groups count, with standalone requests counted by id', () => {
+  const requests = [
+    { id: 'slot-1', groupId: 'group-a', status: 'open' },
+    { id: 'slot-2', groupId: 'group-a', status: 'open' },
+    { id: 'slot-3', groupId: 'group-b', status: 'accepted' },
+    { id: 'slot-4', status: 'open' },
+    { id: 'slot-5', status: 'open' },
+  ];
+
+  assert.equal(countOpenBookingRequestGroups(requests), 3);
 });
