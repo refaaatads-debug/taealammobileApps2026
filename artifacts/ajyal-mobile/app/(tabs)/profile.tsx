@@ -144,6 +144,8 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [showLogoutConfirmation, setShowLogoutConfirmation] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const [profileRefreshError, setProfileRefreshError] = useState<string | null>(null);
   const [refreshingProfile, setRefreshingProfile] = useState(false);
@@ -227,24 +229,30 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
 
   useEffect(() => { void load(); }, [load]);
 
-  const confirmLogout = () => {
+  const openLogoutConfirmation = () => {
     if (loggingOut) return;
-    Alert.alert(t("تسجيل الخروج", "Sign out"), t("هل تريد تسجيل الخروج من حسابك؟", "Do you want to sign out of your account?"), [
-      { text: t("إلغاء", "Cancel"), style: "cancel" },
-      {
-        text: t("تسجيل الخروج", "Sign out"),
-        style: "destructive",
-        onPress: () => void (async () => {
-          setLoggingOut(true);
-          try {
-            await performLogout();
-          } catch {
-            setLoggingOut(false);
-            Alert.alert(t("تعذر تسجيل الخروج", "Could not sign out"), t("تحقق من الاتصال وحاول مرة أخرى.", "Check your connection and try again."));
-          }
-        })(),
-      },
-    ]);
+    setLogoutError(null);
+    setShowLogoutConfirmation(true);
+  };
+
+  const cancelLogout = () => {
+    if (loggingOut) return;
+    setShowLogoutConfirmation(false);
+    setLogoutError(null);
+  };
+
+  const confirmLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    setLogoutError(null);
+    try {
+      await performLogout();
+      setShowLogoutConfirmation(false);
+      setLoggingOut(false);
+    } catch {
+      setLoggingOut(false);
+      setLogoutError(t("تعذر تسجيل الخروج. تحقق من الاتصال ثم حاول مرة أخرى.", "Could not sign out. Check your connection and retry."));
+    }
   };
 
   const save = async () => {
@@ -623,13 +631,60 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
             <View style={[styles.profileSectionAccent, isRTL ? { right: 0 } : { left: 0 }, { backgroundColor: colors.destructive, pointerEvents: "none" }]} />
             <View style={styles.profileSectionBody}>
               <FormCard>
-                <LinkRow testID="profile-sign-out" icon="log-out" label={loggingOut ? t("جارٍ تسجيل الخروج...", "Signing out...") : t("تسجيل الخروج", "Sign out")} destructive onPress={confirmLogout} />
+                <LinkRow testID="profile-sign-out" icon="log-out" label={loggingOut ? t("جارٍ تسجيل الخروج...", "Signing out...") : t("تسجيل الخروج", "Sign out")} destructive onPress={openLogoutConfirmation} />
               </FormCard>
             </View>
           </View>
         </>
       )}
     </Screen>
+    {showLogoutConfirmation ? (
+      <Modal
+        testID="logout-confirmation"
+        transparent
+        animationType="fade"
+        onRequestClose={cancelLogout}
+      >
+        <View style={styles.logoutOverlay}>
+          <View style={[styles.logoutDialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.logoutDialogIcon, { backgroundColor: `${colors.destructive}18` }]}>
+              <Icon name="log-out" size={20} color={colors.destructive} />
+            </View>
+            <Text accessibilityRole="header" style={[styles.logoutDialogTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+              {t("تسجيل الخروج", "Sign out")}
+            </Text>
+            <Text style={[styles.logoutDialogBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+              {t("هل تريد تسجيل الخروج من حسابك؟", "Do you want to sign out of your account?")}
+            </Text>
+            {logoutError ? (
+              <Text accessibilityRole="alert" style={[styles.logoutDialogError, { color: colors.destructive, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+                {logoutError}
+              </Text>
+            ) : null}
+            <View style={[styles.logoutDialogActions, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+              <Pressable
+                testID="cancel-profile-sign-out"
+                accessibilityRole="button"
+                disabled={loggingOut}
+                onPress={cancelLogout}
+                style={[styles.logoutDialogButton, { backgroundColor: colors.muted, opacity: loggingOut ? 0.6 : 1 }]}
+              >
+                <Text style={[styles.logoutDialogButtonText, { color: colors.foreground }]}>{t("إلغاء", "Cancel")}</Text>
+              </Pressable>
+              <Pressable
+                testID="confirm-profile-sign-out"
+                accessibilityRole="button"
+                disabled={loggingOut}
+                onPress={() => void confirmLogout()}
+                style={[styles.logoutDialogButton, { backgroundColor: colors.destructive, opacity: loggingOut ? 0.7 : 1 }]}
+              >
+                {loggingOut ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Text style={[styles.logoutDialogButtonText, { color: colors.primaryForeground }]}>{t("تسجيل الخروج", "Sign out")}</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    ) : null}
     <Modal
       visible={certificateViewer !== null}
       animationType="fade"
@@ -936,4 +991,13 @@ const styles = StyleSheet.create({
   linkRow: { minHeight: 57, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   linkText: { flex: 1, textAlign: "right", fontSize: 11, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
   linkIcon: { width: 35, height: 35, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  logoutOverlay: { flex: 1, alignItems: "center", justifyContent: "center", padding: 22, backgroundColor: "rgba(8, 18, 38, 0.48)" },
+  logoutDialog: { width: "100%", maxWidth: 360, borderWidth: 1, borderRadius: 22, padding: 20, shadowColor: "#10264A", shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: 9 }, elevation: 8 },
+  logoutDialogIcon: { width: 42, height: 42, borderRadius: 14, alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  logoutDialogTitle: { fontSize: 16, lineHeight: 22, fontFamily: "Inter_700Bold" },
+  logoutDialogBody: { fontSize: 12, lineHeight: 18, fontFamily: "Inter_400Regular", marginTop: 5 },
+  logoutDialogError: { fontSize: 11, lineHeight: 16, fontFamily: "Inter_500Medium", marginTop: 10 },
+  logoutDialogActions: { gap: 9, marginTop: 18 },
+  logoutDialogButton: { flex: 1, minHeight: 44, borderRadius: 12, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 },
+  logoutDialogButtonText: { fontSize: 12, fontFamily: "Inter_700Bold" },
 });

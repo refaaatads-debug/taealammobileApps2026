@@ -523,6 +523,26 @@ async function testStudentProfile(baseUrl) {
   assert.equal(signOutStructure.buttonInsideSection, true, "The sign-out action is not in its standalone section");
   assert.equal(signOutStructure.sectionHasExpandableControl, false, "Sign out must not be inside a collapsible profile section");
   assert.equal(signOutStructure.duplicateSignOutLabels, 1, "The account page should show the sign-out action only once");
+  await clickTestId("profile-sign-out");
+  await waitFor(
+    "cross-platform sign-out confirmation",
+    `Boolean(document.querySelector('[data-testid="logout-confirmation"]'))`,
+  );
+  await clickTestId("cancel-profile-sign-out");
+  await waitFor(
+    "sign-out confirmation to close after cancellation",
+    `!document.querySelector('[data-testid="logout-confirmation"]')`,
+  );
+  await clickTestId("profile-sign-out");
+  await waitFor(
+    "sign-out confirmation to reopen",
+    `Boolean(document.querySelector('[data-testid="logout-confirmation"]'))`,
+  );
+  await clickTestId("confirm-profile-sign-out");
+  await waitFor(
+    "sign-out confirmation to close after confirming",
+    `!document.querySelector('[data-testid="logout-confirmation"]')`,
+  );
   await fillTestId("profile-full-name", "طالبة واجهة الاختبار");
   await fillTestId("profile-phone", "0551234567");
   await clickTestId("student-stage-الثانوية");
