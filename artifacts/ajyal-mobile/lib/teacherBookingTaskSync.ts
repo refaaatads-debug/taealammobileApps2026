@@ -17,6 +17,24 @@ export function countOpenBookingRequestGroups(
   return openGroupKeys.size;
 }
 
+export function isTeacherBookingNotification(notificationType: unknown): boolean {
+  if (typeof notificationType !== 'string') return false;
+  return notificationType.startsWith('booking_')
+    || /in[_-]?person.*request|request.*in[_-]?person/iu.test(notificationType);
+}
+
+export async function refetchTeacherBookingTaskQueries(
+  refetchOnlineRequests: () => Promise<unknown>,
+  refetchInPersonRequests: () => Promise<unknown>,
+  refetchDashboard: () => Promise<unknown>,
+): Promise<void> {
+  await Promise.all([
+    refetchOnlineRequests(),
+    refetchInPersonRequests(),
+    refetchDashboard(),
+  ]);
+}
+
 export function getTeacherInPersonDecisionOutcome(
   data: unknown,
   error: unknown,
