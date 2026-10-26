@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { canConfirmInPersonAttendance, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
+import SwipeDecisionControl from '@/components/SwipeDecisionControl';
 
 type StudentRequestSection = 'pending' | 'accepted' | 'completed';
 type SessionWithMode = Session & {
@@ -923,21 +924,7 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], c
       {request.acceptedBy ? <Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{t('تم القبول بواسطة المعلم', 'Accepted by the teacher')}</Text> : null}
         {onCancel && request.status === 'open' ? <Pressable disabled={cancelling} onPress={onCancel} style={[styles.requestCancelButton, { borderColor: colors.destructive }]}><Icon name="x-circle" size={14} color={colors.destructive} /><Text style={[styles.requestCancelText, { color: colors.destructive }]}>{cancelling ? t('جارٍ الإلغاء…', 'Cancelling…') : t('إلغاء الطلب', 'Cancel request')}</Text></Pressable> : null}
          {onDelete && (request.status === 'accepted' || ['rejected', 'cancelled', 'expired'].includes(request.status)) ? <Pressable disabled={deleting} onPress={onDelete} style={[styles.requestCancelButton, { borderColor: colors.destructive }]}><Icon name="trash-2" size={14} color={colors.destructive} /><Text style={[styles.requestCancelText, { color: colors.destructive }]}>{deleting ? t('جارٍ الحذف…', 'Deleting…') : t('حذف الطلب', 'Delete request')}</Text></Pressable> : null}
-       {onDecision && request.status === 'open' ? <View style={styles.requestActions}><Pressable
-         testID={`reject-booking-request-${request.id}`}
-         accessibilityRole="button"
-         accessibilityLabel={t('رفض طلب الحجز', 'Reject booking request')}
-         disabled={busy}
-         onPress={() => onDecision('rejected')}
-         style={({ pressed }) => [styles.requestButton, { borderColor: colors.border, opacity: busy ? 0.55 : 1 }, pressed && styles.pressed]}
-       ><Text style={[styles.requestButtonText, { color: colors.destructive }]}>{t('رفض', 'Reject')}</Text></Pressable><Pressable
-         testID={`accept-booking-request-${request.id}`}
-         accessibilityRole="button"
-         accessibilityLabel={t('قبول طلب الحجز', 'Accept booking request')}
-         disabled={busy}
-         onPress={() => onDecision('accepted')}
-         style={({ pressed }) => [styles.requestButton, { backgroundColor: busy ? colors.muted : colors.teal }, pressed && styles.pressed]}
-       ><Text style={[styles.requestButtonText, { color: colors.primaryForeground }]}>{busy ? t('جارٍ التحديث…', 'Updating…') : t('قبول الطلب', 'Accept request')}</Text></Pressable></View> : null}</> : null}
+        {onDecision && request.status === 'open' ? <SwipeDecisionControl disabled={busy} onDecision={onDecision} /> : null}</> : null}
     </View>
   );
 }
@@ -1096,20 +1083,20 @@ function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete }: { 
     setAttendanceCode('');
     onConfirmed?.();
   };
-  const decideRequest = async (decision: 'accept' | 'reject') => {
+  const decideRequest = async (decision: 'accepted' | 'rejected') => {
     const groupId = typeof item.request_group_id === 'string' ? item.request_group_id : '';
     if (!supabase || !groupId || decisionBusy) return;
     setDecisionBusy(true);
-    const { data, error } = await supabase.rpc(decision === 'accept' ? 'accept_in_person_request' : 'reject_in_person_request', { p_request_group_id: groupId });
+    const { data, error } = await supabase.rpc(decision === 'accepted' ? 'accept_in_person_request' : 'reject_in_person_request', { p_request_group_id: groupId });
     setDecisionBusy(false);
     if (error) {
       Alert.alert(t('تعذر تحديث الطلب', 'Could not update request'), error.message || t('تحقق من الاتصال وحاول مرة أخرى.', 'Check your connection and try again.'));
       return;
     }
-    if (decision === 'reject' && data !== true) {
+    if (decision === 'rejected' && data !== true) {
       Alert.alert(t('تمت معالجة الطلب', 'Request already handled'), t('قد يكون معلم آخر قبله أو انتهت مهلة القبول.', 'Another teacher may have accepted it, or it may have expired.'));
     } else {
-      Alert.alert(decision === 'accept' ? t('تم قبول الحصة', 'Lesson accepted') : t('تم رفض الطلب', 'Request declined'));
+      Alert.alert(decision === 'accepted' ? t('تم قبول الحصة', 'Lesson accepted') : t('تم رفض الطلب', 'Request declined'));
     }
     onDecisionComplete?.();
   };
@@ -1138,15 +1125,8 @@ function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete }: { 
         <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{bookingId ? t('يظهر إدخال الكود في بطاقة الحصة القادمة عند موعدها، ويظل متاحاً لمدة 15 دقيقة.', 'Code entry appears on the upcoming lesson card at the scheduled time and remains available for 15 minutes.') : t('بانتظار إنشاء موعد الحصة بعد قبول المعلم.', 'Waiting for the teacher to accept and create the lesson.')}</Text>
       ) : null}
       {role === 'student' && isOpen && !personLabel ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{t('الطلب متاح للمعلمين؛ يظهر اسم المعلم بعد القبول.', 'The request is available to teachers; the teacher’s name appears after acceptance.')}</Text> : null}
-      {role === 'teacher' ? (
-        <View style={styles.inPersonDecisionActions}>
-          <Pressable disabled={decisionBusy} onPress={() => void decideRequest('reject')} style={[styles.requestButton, styles.inPersonRejectButton, { borderColor: colors.destructive, opacity: decisionBusy ? 0.55 : 1 }]}>
-            <Text style={[styles.requestButtonText, { color: colors.destructive }]}>{t('رفض الطلب', 'Decline')}</Text>
-          </Pressable>
-          <Pressable disabled={decisionBusy} onPress={() => void decideRequest('accept')} style={[styles.requestButton, { backgroundColor: colors.teal, borderColor: colors.teal, opacity: decisionBusy ? 0.55 : 1 }]}>
-            <Text style={[styles.requestButtonText, { color: colors.primaryForeground }]}>{decisionBusy ? t('جارٍ التحديث…', 'Updating…') : t('قبول الحصة', 'Accept lesson')}</Text>
-          </Pressable>
-        </View>
+      {role === 'teacher' && isOpen ? (
+        <SwipeDecisionControl disabled={decisionBusy} onDecision={(decision) => void decideRequest(decision)} />
       ) : null}
       <Modal visible={codeModalOpen} transparent animationType="fade" onRequestClose={() => setCodeModalOpen(false)}>
         <View style={{ flex: 1, justifyContent: 'center', padding: 22, backgroundColor: 'rgba(10,25,45,0.45)' }}>
@@ -1272,8 +1252,6 @@ const styles = StyleSheet.create({
   inPersonRequestDetails: { gap: 4, paddingVertical: 2 },
   inPersonRequestDetailLine: { flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
   inPersonRequestDetailText: { flex: 1, fontSize: 10, lineHeight: 15, fontFamily: 'Inter_500Medium', textAlign: 'right', writingDirection: 'rtl' },
-  inPersonDecisionActions: { flexDirection: 'row-reverse', gap: 7, marginTop: 3 },
-  inPersonRejectButton: { backgroundColor: 'transparent' },
   inPersonSessionFooter: { gap: 5 },
   inPersonLocation: { minHeight: 30, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
   inPersonLocationText: { flex: 1, fontSize: 10, lineHeight: 14, fontFamily: 'Inter_500Medium', textAlign: 'right' },

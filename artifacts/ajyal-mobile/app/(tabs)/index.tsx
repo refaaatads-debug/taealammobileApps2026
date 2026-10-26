@@ -99,6 +99,25 @@ export default function HomeScreen() {
       },
     },
   );
+  const teacherInPersonRequestsQuery = useQuery({
+    queryKey: ['teacher-in-person-request-count', user?.id],
+    enabled: canLoadRoleData && isTeacher && Boolean(user?.id) && Boolean(supabase),
+    queryFn: async () => {
+      if (!supabase) throw new Error('In-person requests are unavailable.');
+      const { data, error } = await supabase.rpc('list_teacher_in_person_requests_priced');
+      if (error) throw error;
+      const rows = Array.isArray(data) ? data : data ? [data] : [];
+      return rows.filter((item) => {
+        if (!item || typeof item !== 'object') return false;
+        const row = item as Record<string, unknown>;
+        return String(row.status ?? row.request_status ?? '') === 'open';
+      }).length;
+    },
+    staleTime: 15_000,
+    refetchInterval: canLoadRoleData && isTeacher ? 15_000 : false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
   const studentDashboardQuery = useGetStudentDashboard({
     query: {
       queryKey: ['student-dashboard'],
@@ -207,7 +226,8 @@ export default function HomeScreen() {
   const teacherDashboard = teacherDashboardQuery.data;
   const studentDashboard = studentDashboardQuery.data;
   const incomingOpenRequests = incomingRequestsQuery.data?.filter((request) => request.status === 'open').length;
-  const openRequestCount = incomingOpenRequests ?? teacherDashboard?.openRequests ?? 0;
+  const inPersonOpenRequests = teacherInPersonRequestsQuery.data ?? 0;
+  const openRequestCount = (incomingOpenRequests ?? teacherDashboard?.openRequests ?? 0) + inPersonOpenRequests;
   const dashboardSessions = isTeacher ? (teacherDashboard?.upcomingSessions ?? []) : (studentDashboard?.upcomingSessions ?? []);
   const firstSession = dashboardSessions[0];
   const unread = isTeacher ? (teacherDashboard?.unreadNotifications ?? 0) : (studentDashboard?.unreadNotifications ?? 0);
@@ -295,6 +315,16 @@ export default function HomeScreen() {
         teacherTaskSummary.quizzes ? `${formatNumber(teacherTaskSummary.quizzes)} ${t('اختبار', 'quizzes')}` : '',
       ].filter(Boolean).join(' · '),
       onPress: () => router.push('/assignments'),
+    });
+  }
+  if (isTeacher && openRequestCount > 0) {
+    todayTasks.unshift({
+      id: 'teacher-pending-booking-decisions',
+      icon: 'calendar',
+      tone: 'teal',
+      title: `${formatNumber(openRequestCount)} ${t('طلبات حصص بانتظار قرارك', 'lesson requests need your decision')}`,
+      body: `${formatNumber(incomingOpenRequests ?? teacherDashboard?.openRequests ?? 0)} ${t('عن بُعد', 'online')} · ${formatNumber(inPersonOpenRequests)} ${t('حضوري', 'in person')}`,
+      onPress: () => router.push('/bookings'),
     });
   }
   const openDashboardAction = (id: string) => {
