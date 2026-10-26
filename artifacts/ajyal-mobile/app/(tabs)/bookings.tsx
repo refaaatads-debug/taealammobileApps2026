@@ -1049,7 +1049,7 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
     const result = await supabase.rpc('get_in_person_attendance_code', { p_booking_id: bookingId });
     setBusy(false);
     if (result.error || typeof result.data !== 'string') {
-      setError(result.error?.message || t('سيظهر رمز الحضور قبل الموعد بساعة.', 'The attendance code is available one hour before the lesson.'));
+      setError(result.error?.message || t('تعذر إظهار رمز الحضور لهذه الحصة الآن.', 'The code is not available for this lesson right now.'));
       return;
     }
     setCode(result.data);
@@ -1092,9 +1092,9 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
             </Pressable>
           ) : (
             <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>
-              {nowMs < new Date(scheduledAt).getTime() - 60 * 60 * 1000
-                ? t('يظهر كود الحضور قبل الموعد بساعة.', 'The attendance code appears one hour before the lesson.')
-                : t('انتهت مهلة إظهار كود الحضور.', 'The attendance-code window has ended.')}
+              {nowMs >= new Date(scheduledAt).getTime() + 15 * 60 * 1000
+                ? t('انتهت مهلة إظهار كود الحضور.', 'The attendance-code window has ended.')
+                : t('يمكن إظهار الكود فور قبول الحصة وحتى 15 دقيقة بعد موعدها.', 'The code is available as soon as the lesson is accepted and until 15 minutes after its scheduled time.')}
             </Text>
           )}
           {code ? <Text selectable style={[styles.inPersonCode, { color: colors.primary }]}>{code}</Text> : null}
