@@ -33,6 +33,10 @@ export function canRevealInPersonAttendanceCode(scheduledAt: string, nowMs = Dat
   return Number.isFinite(start) && nowMs >= start - 60 * 60 * 1000 && nowMs < start + 15 * 60 * 1000;
 }
 
+export function canStudentCancelInPersonRequest(role: string, status: string): boolean {
+  return role === "student" && status === "open";
+}
+
 export function inPersonAttendanceAction(
   scheduledAt: string,
   sessionStatus: string | null | undefined,
