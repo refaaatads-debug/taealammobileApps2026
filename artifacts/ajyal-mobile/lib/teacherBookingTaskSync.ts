@@ -6,6 +6,17 @@ export function getTeacherInPersonRequestCountQueryKey(teacherId: string | undef
   return ['teacher-in-person-request-count', teacherId] as const;
 }
 
+export function countOpenBookingRequestGroups(
+  requests: readonly { id: string; groupId?: string | null; status: string }[],
+): number {
+  const openGroupKeys = new Set<string>();
+  for (const request of requests) {
+    if (request.status !== 'open') continue;
+    openGroupKeys.add(request.groupId?.trim() || request.id);
+  }
+  return openGroupKeys.size;
+}
+
 export function getTeacherInPersonDecisionOutcome(
   data: unknown,
   error: unknown,
