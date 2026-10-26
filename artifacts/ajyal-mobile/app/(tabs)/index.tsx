@@ -9,7 +9,12 @@ import { useAuth } from '@/lib/auth';
 import { getReadChatMessageIds } from '@/lib/localChatReadState';
 import { getStudentUnreadChatMessageCount } from '@/lib/studentUnreadMessages';
 import { getAvailableTeacherBalance } from '@/lib/teacherFinance';
-import { countOpenBookingRequestGroups, getTeacherInPersonRequestCountQueryKey } from '@/lib/teacherBookingTaskSync';
+import {
+  countOpenBookingRequestGroups,
+  getTeacherInPersonRequestCountQueryKey,
+  isTeacherBookingNotification,
+  refetchTeacherBookingTaskQueries,
+} from '@/lib/teacherBookingTaskSync';
 import { supabase } from '@/lib/supabase';
 import { isAssignmentComplete } from '@/constants/localData';
 import { summarizePendingTeacherSubmissions } from '@/lib/teacherAssignmentTasks';
@@ -179,8 +184,13 @@ export default function HomeScreen() {
     const client = supabase;
     if (!client || !canLoadRoleData || !isTeacher || !profile?.id) return undefined;
     const refreshTeacherBookings = () => {
-      void incomingRequestsQuery.refetch();
-      void teacherDashboardQuery.refetch();
+      void refetchTeacherBookingTaskQueries(
+        () => incomingRequestsQuery.refetch(),
+        () => teacherInPersonRequestsQuery.refetch(),
+        () => teacherDashboardQuery.refetch(),
+      ).catch((error) => {
+        console.warn('[teacher-home] Could not refresh booking task counts:', error);
+      });
     };
     const topic = `teacher-home-bookings-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const channel = client
@@ -197,7 +207,7 @@ export default function HomeScreen() {
         filter: `user_id=eq.${profile.id}`,
       }, (payload) => {
         const notification = payload.new as Record<string, unknown>;
-        if (String(notification.type ?? '').startsWith('booking_')) refreshTeacherBookings();
+        if (isTeacherBookingNotification(notification.type)) refreshTeacherBookings();
       })
       .on('postgres_changes', {
         event: '*',
@@ -217,7 +227,7 @@ export default function HomeScreen() {
         console.warn('[teacher-home] Could not remove realtime channel:', error);
       });
     };
-  }, [assignmentsQuery.refetch, canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch, teacherSubmissionsQuery.refetch]));
+  }, [assignmentsQuery.refetch, canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch, teacherInPersonRequestsQuery.refetch, teacherSubmissionsQuery.refetch]));
   const assignments = assignmentsQuery.data ?? [];
   const pendingAssignments = assignments.filter((assignment) => !isAssignmentComplete(assignment));
   const teacherTaskSummary = summarizePendingTeacherSubmissions(
