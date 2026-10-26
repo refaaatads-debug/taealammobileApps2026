@@ -51,12 +51,14 @@ export default function SwipeDecisionControl({ disabled = false, onDecision }: P
         reduceMotion: ReduceMotion.System,
       }));
     })
-    .onFinalize(() => {
-      translateX.set(withSpring(0, {
-        duration: reducedMotion ? 180 : 400,
-        dampingRatio: 0.8,
-        reduceMotion: ReduceMotion.System,
-      }));
+    .onFinalize((_event, success) => {
+      if (!success) {
+        translateX.set(withSpring(0, {
+          duration: reducedMotion ? 180 : 400,
+          dampingRatio: 0.8,
+          reduceMotion: ReduceMotion.System,
+        }));
+      }
     }), [disabled, onDecision, reducedMotion]);
 
   const trackStyle = useAnimatedStyle(() => ({
