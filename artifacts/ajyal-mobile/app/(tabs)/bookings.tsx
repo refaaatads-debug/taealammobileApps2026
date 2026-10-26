@@ -1071,7 +1071,7 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
   };
   return (
     <View style={styles.inPersonSessionFooter}>
-      {location ? (
+      {role === 'teacher' ? location ? (
         <StudentLocationLink address={location} latitude={snapshot?.latitude} longitude={snapshot?.longitude} />
       ) : (
         <View style={[styles.inPersonLocation, { backgroundColor: colors.muted }]}>
@@ -1080,7 +1080,7 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
             {t('موقع الطالب غير متاح', 'Student location unavailable')}
           </Text>
         </View>
-      )}
+      ) : null}
       {confirmed ? (
         <Text style={[styles.inPersonActionHint, { color: colors.teal }]}>{t('تم تأكيد الحضور — الحصة جارية', 'Attendance confirmed — lesson in progress')}</Text>
       ) : role === 'teacher' ? (
@@ -1122,7 +1122,9 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
           </Modal>
         </>
       ) : (
-        <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{attendanceAction === 'expired' ? t('انتهت مهلة إدخال كود الحضور.', 'The attendance-code window has ended.') : t('يظهر زر إدخال الكود عند موعد الحصة، ويظل متاحاً لمدة 15 دقيقة.', 'Code entry opens at lesson time and remains available for 15 minutes.')}</Text>
+        attendanceAction === 'expired'
+          ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{t('انتهت مهلة إدخال كود الحضور.', 'The attendance-code window has ended.')}</Text>
+          : null
       )}
     </View>
   );
@@ -1211,7 +1213,7 @@ function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete, onCa
       <View style={styles.inPersonRequestDetails}>
         {personLabel ? <View style={styles.inPersonRequestDetailLine}><Icon name="user" size={13} color={colors.mutedForeground} /><Text style={[styles.inPersonRequestDetailText, { color: colors.mutedForeground, writingDirection: direction }]}>{personLabel}</Text></View> : null}
         <View style={styles.inPersonRequestDetailLine}><Icon name="calendar" size={13} color={colors.mutedForeground} /><Text style={[styles.inPersonRequestDetailText, { color: colors.mutedForeground, writingDirection: direction }]}>{dateLabel}</Text></View>
-        {location ? <StudentLocationLink
+        {role === 'teacher' && location ? <StudentLocationLink
           address={location}
           latitude={item.latitude ?? addressSnapshot?.latitude}
           longitude={item.longitude ?? addressSnapshot?.longitude}
