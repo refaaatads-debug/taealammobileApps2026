@@ -11,9 +11,10 @@ import type { Session } from '@/constants/localData';
 import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { canConfirmInPersonAttendance, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
+import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
 import { getTeacherInPersonDecisionOutcome, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
 import SwipeDecisionControl from '@/components/SwipeDecisionControl';
+import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
 
 type StudentRequestSection = 'pending' | 'accepted' | 'completed';
 type SessionWithMode = Session & {
@@ -57,6 +58,23 @@ export default function BookingsScreen() {
   const sessionView = 'upcoming';
   const sessionsQuery = useListMySessions({ view: sessionView }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: sessionView }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
   const historyQuery = useListMySessions({ view: 'past' }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: 'past' }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
+  const rawScheduleSessions = useMemo(
+    () => [...new Map([...(sessionsQuery.data ?? []), ...(historyQuery.data ?? [])].map((session) => [session.id, session])).values()],
+    [historyQuery.data, sessionsQuery.data],
+  );
+  const canonicalScheduleSessions = useCanonicalSessionModes(rawScheduleSessions, profile?.id);
+  const canonicalSessionsById = useMemo(
+    () => new Map(canonicalScheduleSessions.map((session) => [session.id, session])),
+    [canonicalScheduleSessions],
+  );
+  const canonicalUpcomingSessions = useMemo(
+    () => (sessionsQuery.data ?? []).map((session) => canonicalSessionsById.get(session.id) ?? session),
+    [canonicalSessionsById, sessionsQuery.data],
+  );
+  const canonicalHistorySessions = useMemo(
+    () => (historyQuery.data ?? []).map((session) => canonicalSessionsById.get(session.id) ?? session),
+    [canonicalSessionsById, historyQuery.data],
+  );
   const requestQuery = useListBookingRequests(
     { view: requestView },
     {
@@ -83,8 +101,8 @@ export default function BookingsScreen() {
     },
   });
   const inPersonSessionIds = useMemo(
-    () => (sessionsQuery.data ?? []).filter((session) => (session as SessionWithMode).deliveryMode === 'in_person').map((session) => session.id),
-    [sessionsQuery.data],
+    () => canonicalUpcomingSessions.filter((session) => (session as SessionWithMode).deliveryMode === 'in_person').map((session) => session.id),
+    [canonicalUpcomingSessions],
   );
   const inPersonSessionDetailsQuery = useQuery({
     queryKey: ['in-person-session-details', role, inPersonSessionIds.join(',')],
@@ -174,12 +192,12 @@ export default function BookingsScreen() {
       },
     },
   });
-  const visibleSessions = sessionsQuery.data ?? [];
+  const visibleSessions = canonicalUpcomingSessions;
   const scheduleSessions = useMemo(() => {
-    const allSessions = [...visibleSessions, ...(historyQuery.data ?? [])];
+    const allSessions = [...visibleSessions, ...canonicalHistorySessions];
     return [...new Map(allSessions.map((session) => [session.id, session])).values()]
       .sort((left, right) => new Date(left.scheduledAt).getTime() - new Date(right.scheduledAt).getTime());
-  }, [historyQuery.data, role, visibleSessions]);
+  }, [canonicalHistorySessions, visibleSessions]);
   const historyGroups = useMemo(() => {
     if (view !== 'past' || role !== 'teacher') return [];
     const groups = new Map<string, { studentName: string; sessions: typeof visibleSessions }>();
@@ -961,6 +979,7 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
     .join(' · ');
   const confirmed = sessionStatus === 'in_progress' || Boolean(details?.attendance_confirmed_at);
   const attendanceAction = inPersonAttendanceAction(scheduledAt, confirmed ? 'in_progress' : sessionStatus, nowMs);
+  const teacherCanRevealCode = canRevealInPersonAttendanceCode(scheduledAt, nowMs);
   const showStudentCode = role === 'student' && !confirmed && attendanceAction === 'enter_code';
   const revealCode = async () => {
     if (!supabase || busy) return;
@@ -1001,10 +1020,18 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
         <Text style={[styles.inPersonActionHint, { color: colors.teal }]}>{t('تم تأكيد الحضور — الحصة جارية', 'Attendance confirmed — lesson in progress')}</Text>
       ) : role === 'teacher' ? (
         <>
-          <Pressable disabled={busy} onPress={(event) => { event.stopPropagation(); void revealCode(); }} style={[styles.requestCancelButton, { borderColor: colors.teal, opacity: busy ? 0.6 : 1 }]}>
-            <Icon name="key" size={14} color={colors.teal} />
-            <Text style={[styles.requestCancelText, { color: colors.teal }]}>{busy ? t('جارٍ إظهار الرمز…', 'Loading code…') : t('إظهار رمز الحضور', 'Show attendance code')}</Text>
-          </Pressable>
+          {code ? null : teacherCanRevealCode ? (
+            <Pressable disabled={busy} onPress={(event) => { event.stopPropagation(); void revealCode(); }} style={[styles.requestCancelButton, { borderColor: colors.teal, opacity: busy ? 0.6 : 1 }]}>
+              <Icon name="key" size={14} color={colors.teal} />
+              <Text style={[styles.requestCancelText, { color: colors.teal }]}>{busy ? t('جارٍ إظهار الرمز…', 'Loading code…') : t('إظهار كود الحضور', 'Show attendance code')}</Text>
+            </Pressable>
+          ) : (
+            <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>
+              {nowMs < new Date(scheduledAt).getTime() - 60 * 60 * 1000
+                ? t('يظهر كود الحضور قبل الموعد بساعة.', 'The attendance code appears one hour before the lesson.')
+                : t('انتهت مهلة إظهار كود الحضور.', 'The attendance-code window has ended.')}
+            </Text>
+          )}
           {code ? <Text selectable style={[styles.inPersonCode, { color: colors.primary }]}>{code}</Text> : null}
           {error ? <Text accessibilityRole="alert" style={[styles.inPersonActionHint, { color: colors.destructive }]}>{error}</Text> : null}
         </>
