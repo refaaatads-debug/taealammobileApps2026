@@ -4,6 +4,8 @@ import {
   getTeacherInPersonRequestCountQueryKey,
   getTeacherInPersonDecisionOutcome,
   countOpenBookingRequestGroups,
+  isTeacherBookingNotification,
+  refetchTeacherBookingTaskQueries,
   refreshTeacherBookingTaskCounts,
 } from '../teacherBookingTaskSync.ts';
 
@@ -55,4 +57,27 @@ test('only distinct open groups count, with standalone requests counted by id', 
   ];
 
   assert.equal(countOpenBookingRequestGroups(requests), 3);
+});
+
+test('booking realtime refreshes both online and in-person task counts', async () => {
+  const refreshed = [];
+  const refetch = (name) => async () => {
+    refreshed.push(name);
+  };
+
+  await refetchTeacherBookingTaskQueries(
+    refetch('online'),
+    refetch('in-person'),
+    refetch('dashboard'),
+  );
+
+  assert.deepEqual(refreshed.sort(), ['dashboard', 'in-person', 'online']);
+});
+
+test('booking notifications trigger a realtime task refresh but unrelated ones do not', () => {
+  assert.equal(isTeacherBookingNotification('booking_request'), true);
+  assert.equal(isTeacherBookingNotification('booking_cancelled'), true);
+  assert.equal(isTeacherBookingNotification('in_person_request'), true);
+  assert.equal(isTeacherBookingNotification('assignment_created'), false);
+  assert.equal(isTeacherBookingNotification(null), false);
 });
