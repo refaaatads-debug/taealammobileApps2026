@@ -6,6 +6,7 @@ import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { Icon } from "@/components/AjyalUI";
 import { supabase } from "@/lib/supabase";
 import { canRevealInPersonAttendanceCode } from "@/lib/inPersonScheduling";
+import StudentLocationLink from "@/components/StudentLocationLink";
 
 export default function TeacherInPersonCode({
   bookingId,
@@ -73,10 +74,7 @@ export default function TeacherInPersonCode({
   return (
     <View style={styles.container}>
       {location ? (
-        <View style={[styles.location, { backgroundColor: colors.muted }]}>
-          <Icon name="map-pin" size={13} color={colors.teal} />
-          <Text numberOfLines={2} style={[styles.locationText, { color: colors.foreground, writingDirection: direction }]}>{location}</Text>
-        </View>
+        <StudentLocationLink address={location} latitude={snapshot?.latitude} longitude={snapshot?.longitude} />
       ) : null}
       {code || canReveal ? (
         <Pressable
@@ -104,8 +102,6 @@ export default function TeacherInPersonCode({
 
 const styles = StyleSheet.create({
   container: { gap: 6, marginTop: 4 },
-  location: { minHeight: 30, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, flexDirection: "row-reverse", alignItems: "center", gap: 6 },
-  locationText: { flex: 1, fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", textAlign: "right" },
   button: { minHeight: 34, borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6 },
   buttonText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
   hint: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", textAlign: "right" },
