@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Location from "expo-location";
 import { Icon } from "@/components/AjyalUI";
 import LocationPicker from "@/components/InPersonLocationPicker";
@@ -9,7 +9,7 @@ import { useColors } from "@/hooks/useColors";
 import { supabase } from "@/lib/supabase";
 
 type City = { id: string; name_ar: string };
-type Address = { id: string; city_id: string; street_address: string; latitude: number; longitude: number };
+type Address = { id: string; city_id: string; street_address: string; latitude: number; longitude: number; is_primary?: boolean };
 
 export default function ProfileInPersonSection({ number, role, userId }: { number: string; role: "student" | "teacher"; userId: string }) {
   const colors = useColors();
@@ -17,6 +17,8 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deletingAddressId, setDeletingAddressId] = useState<string | null>(null);
+  const [addressToDelete, setAddressToDelete] = useState<Address | null>(null);
+  const [deleteError, setDeleteError] = useState("");
   const [enabled, setEnabled] = useState(role === "student");
   const [cities, setCities] = useState<City[]>([]);
   const [addresses, setAddresses] = useState<Address[]>([]);
@@ -47,7 +49,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
       setCities((cityResult.data ?? []) as City[]);
       if (role === "student") {
         const result = await supabase.from("user_addresses" as any)
-          .select("id,city_id,street_address,latitude,longitude")
+          .select("id,city_id,street_address,latitude,longitude,is_primary")
           .eq("owner_id", userId).order("is_primary", { ascending: false });
         if (result.error) throw result.error;
         const rows = (result.data ?? []) as Address[];
@@ -112,32 +114,33 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
     setCityId(city?.id ?? "");
   };
 
-  const confirmDeleteAddress = (address: Address) => {
-    Alert.alert(
-      t("حذف العنوان؟", "Delete address?"),
-      t("سيُحذف هذا العنوان من حسابك ولن يكون متاحاً لطلبات الحضوري.", "This address will be removed from your account and unavailable for in-person requests."),
-      [
-        { text: t("إلغاء", "Cancel"), style: "cancel" },
-        { text: t("حذف", "Delete"), style: "destructive", onPress: () => void (async () => {
-          if (!supabase) return;
-          setDeletingAddressId(address.id);
-          setError("");
-          const result = await supabase.from("user_addresses" as any).delete().eq("id", address.id).eq("owner_id", userId);
-          setDeletingAddressId(null);
-          if (result.error) {
-            setError(t("تعذر حذف العنوان. حاول مرة أخرى.", "Could not delete the address. Please retry."));
-            return;
-          }
-          setAddresses((current) => current.filter((item) => item.id !== address.id));
-          if (cityId === address.city_id) {
-            setCityId("");
-            setStreet("");
-            setLatitude("");
-            setLongitude("");
-          }
-        })() },
-      ],
-    );
+  const deleteAddress = async () => {
+    const address = addressToDelete;
+    if (!supabase || !address || deletingAddressId) return;
+    setDeletingAddressId(address.id);
+    setDeleteError("");
+    try {
+      const result = await supabase.from("user_addresses" as any).delete().eq("id", address.id).eq("owner_id", userId);
+      if (result.error) {
+        setDeleteError(t("تعذر حذف العنوان. حاول مرة أخرى.", "Could not delete the address. Please retry."));
+        return;
+      }
+      const remaining = addresses.filter((item) => item.id !== address.id);
+      setAddresses(remaining);
+      const currentPrimary = addresses.find((item) => item.is_primary) ?? addresses[0];
+      if (currentPrimary?.id === address.id) {
+        const next = remaining.find((item) => item.is_primary) ?? remaining[0] ?? null;
+        setCityId(next?.city_id ?? "");
+        setStreet(next?.street_address ?? "");
+        setLatitude(next ? String(next.latitude) : "");
+        setLongitude(next ? String(next.longitude) : "");
+      }
+      setAddressToDelete(null);
+    } catch {
+      setDeleteError(t("تعذر حذف العنوان. تحقق من الاتصال ثم حاول مرة أخرى.", "Could not delete the address. Check your connection and retry."));
+    } finally {
+      setDeletingAddressId(null);
+    }
   };
 
   const save = async () => {
@@ -187,14 +190,17 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
         setCityId(savedCityId);
       }
       if (role === "student") {
-        const result = await supabase.from("user_addresses" as any).insert({
-          owner_id: userId,
+        const primary = addresses.find((address) => address.is_primary) ?? addresses[0];
+        const values = {
           city_id: savedCityId,
           street_address: street.trim(),
           latitude: lat,
           longitude: lng,
-          is_primary: addresses.length === 0,
-        });
+          is_primary: true,
+        };
+        const result = primary
+          ? await supabase.from("user_addresses" as any).update(values).eq("id", primary.id).eq("owner_id", userId)
+          : await supabase.from("user_addresses" as any).insert({ ...values, owner_id: userId });
         if (result.error) throw result.error;
       } else {
         const result = await supabase.rpc("save_my_teacher_service_location" as any, {
@@ -231,6 +237,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
   const approvalLabel = approval === "approved" ? t("معتمد", "Approved") : approval === "pending" ? t("قيد المراجعة", "Under review") : approval === "rejected" ? t("مرفوض", "Rejected") : t("لم يُطلب بعد", "Not requested");
 
   return (
+    <>
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <Pressable
         accessibilityRole="button"
@@ -307,7 +314,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
           </View>
           <Text style={[styles.helper, { color: colors.mutedForeground }]}>{t("أدخل نطاقاً من 1 إلى 100 كم.", "Enter a radius from 1 to 100 km.")}</Text>
         </View>}
-        {role === "student" && addresses.map((address) => <View key={address.id} style={[styles.saved, { backgroundColor: colors.muted, borderColor: colors.border }]}><View style={styles.savedRow}><View style={styles.savedCopy}><Text style={[styles.savedTitle, { color: colors.foreground }]}>{cities.find((city) => city.id === address.city_id)?.name_ar ?? t("عنوان محفوظ", "Saved address")}</Text><Text style={[styles.savedText, { color: colors.mutedForeground }]}>{address.street_address}</Text></View><Pressable accessibilityRole="button" accessibilityLabel={t("حذف العنوان", "Delete address")} disabled={deletingAddressId === address.id} onPress={() => confirmDeleteAddress(address)} hitSlop={8} style={[styles.deleteAddress, { backgroundColor: colors.card, borderColor: colors.border }]}>{deletingAddressId === address.id ? <ActivityIndicator size="small" color={colors.destructive} /> : <Icon name="trash-2" size={16} color={colors.destructive} />}</Pressable></View></View>)}
+        {role === "student" && addresses.map((address) => <View key={address.id} style={[styles.saved, { backgroundColor: colors.muted, borderColor: colors.border }]}><View style={styles.savedRow}><View style={styles.savedCopy}><Text style={[styles.savedTitle, { color: colors.foreground }]}>{cities.find((city) => city.id === address.city_id)?.name_ar ?? t("عنوان محفوظ", "Saved address")}</Text><Text style={[styles.savedText, { color: colors.mutedForeground }]}>{address.street_address}</Text></View><Pressable accessibilityRole="button" accessibilityLabel={t("حذف العنوان", "Delete address")} disabled={deletingAddressId === address.id} onPress={() => { setDeleteError(""); setAddressToDelete(address); }} hitSlop={8} style={[styles.deleteAddress, { backgroundColor: colors.card, borderColor: colors.border }]}>{deletingAddressId === address.id ? <ActivityIndicator size="small" color={colors.destructive} /> : <Icon name="trash-2" size={16} color={colors.destructive} />}</Pressable></View></View>)}
         {error ? <Text accessibilityRole="alert" style={[styles.error, { color: colors.destructive }]}>{error}</Text> : null}
         <Pressable disabled={saving} accessibilityRole="button" onPress={() => void save()} style={({ pressed }) => [styles.save, { backgroundColor: colors.primary, opacity: saving ? 0.65 : pressed ? 0.88 : 1 }]}>
           {saving ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.saveText, { color: colors.primaryForeground }]}>{role === "student" ? t("حفظ العنوان", "Save address") : t("حفظ الموقع وإرساله للاعتماد", "Save location and request approval")}</Text>}
@@ -315,6 +322,23 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
       </>}
       </View> : null}
     </View>
+    {addressToDelete ? (
+      <Modal transparent animationType="fade" onRequestClose={() => !deletingAddressId && setAddressToDelete(null)}>
+        <View style={styles.deleteOverlay}>
+          <View style={[styles.deleteDialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.deleteIcon, { backgroundColor: `${colors.destructive}18` }]}><Icon name="trash-2" size={20} color={colors.destructive} /></View>
+            <Text accessibilityRole="header" style={[styles.deleteTitle, { color: colors.foreground, writingDirection: direction, textAlign: direction === "rtl" ? "right" : "left" }]}>{t("حذف العنوان؟", "Delete address?")}</Text>
+            <Text style={[styles.deleteBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: direction === "rtl" ? "right" : "left" }]}>{t("سيُحذف هذا العنوان من حسابك ولن يكون متاحاً لطلبات الحضوري.", "This address will be removed from your account and unavailable for in-person requests.")}</Text>
+            {deleteError ? <Text accessibilityRole="alert" style={[styles.error, { color: colors.destructive }]}>{deleteError}</Text> : null}
+            <View style={styles.deleteActions}>
+              <Pressable accessibilityRole="button" disabled={!!deletingAddressId} onPress={() => setAddressToDelete(null)} style={[styles.deleteAction, { backgroundColor: colors.muted, opacity: deletingAddressId ? 0.6 : 1 }]}><Text style={[styles.deleteActionText, { color: colors.foreground }]}>{t("إلغاء", "Cancel")}</Text></Pressable>
+              <Pressable accessibilityRole="button" disabled={!!deletingAddressId} onPress={() => void deleteAddress()} style={[styles.deleteAction, { backgroundColor: colors.destructive, opacity: deletingAddressId ? 0.7 : 1 }]}>{deletingAddressId ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Text style={[styles.deleteActionText, { color: colors.primaryForeground }]}>{t("حذف العنوان", "Delete address")}</Text>}</Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    ) : null}
+    </>
   );
 }
 
@@ -358,7 +382,15 @@ const styles = StyleSheet.create({
   saved: { borderWidth: 1, borderRadius: 14, padding: 12, marginBottom: 8, gap: 4 },
   savedRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   savedCopy: { flex: 1, gap: 4 },
-  deleteAddress: { width: 38, height: 38, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  deleteAddress: { width: 44, height: 44, borderWidth: 1, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  deleteOverlay: { flex: 1, justifyContent: "center", alignItems: "center", padding: 22, backgroundColor: "rgba(8, 18, 38, 0.48)" },
+  deleteDialog: { width: "100%", maxWidth: 360, borderWidth: 1, borderRadius: 22, padding: 20, gap: 8, shadowColor: "#10264A", shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: 9 }, elevation: 8 },
+  deleteIcon: { width: 42, height: 42, borderRadius: 14, alignItems: "center", justifyContent: "center", marginBottom: 4 },
+  deleteTitle: { fontSize: 15, lineHeight: 22, fontFamily: "Inter_700Bold" },
+  deleteBody: { fontSize: 11, lineHeight: 17, fontFamily: "Inter_400Regular" },
+  deleteActions: { flexDirection: "row", gap: 9, marginTop: 10 },
+  deleteAction: { flex: 1, minHeight: 44, borderRadius: 12, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
+  deleteActionText: { fontSize: 11, fontFamily: "Inter_700Bold" },
   savedTitle: { fontSize: 11, fontFamily: "Inter_700Bold" },
   savedText: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular" },
   empty: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular", marginBottom: 9 },
