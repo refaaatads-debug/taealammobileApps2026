@@ -1315,11 +1315,12 @@ async function listRemoteSessions(accessToken: string, userId: string, view: Ses
   };
   if (view === "upcoming") {
     const upperBound = new Date(now.getTime() + 90 * 24 * 60 * 60_000).toISOString();
+    const inPersonCodeWindowStart = new Date(now.getTime() - 15 * 60_000).toISOString();
     query.status = "in.(confirmed,pending)";
     // Keep immediate-session bookings visible after their scheduled_at is set
     // to "now". They must remain in the bookings list while waiting for the
     // other participant and while the live session is active.
-    query.or = `(and(scheduled_at.gt.${nowIso},scheduled_at.lte.${upperBound}),session_status.eq.waiting_acceptance,session_status.eq.in_progress)`;
+    query.or = `(and(scheduled_at.gt.${nowIso},scheduled_at.lte.${upperBound}),session_status.eq.waiting_acceptance,session_status.eq.in_progress,and(delivery_mode.eq.in_person,scheduled_at.gt.${inPersonCodeWindowStart},scheduled_at.lte.${nowIso}))`;
   } else {
     // Match the platform schedule: history includes completed and cancelled
     // bookings, not only records that are still confirmed.

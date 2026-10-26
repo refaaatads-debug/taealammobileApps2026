@@ -158,7 +158,7 @@ export function ProgressBar({ progress, color }: { progress: number; color?: str
   );
 }
 
-export function SessionCard({ session, role, cancelled, compact = false, onPress, onJoin, onCancel }: { session: Session; role: Role; cancelled?: boolean; compact?: boolean; onPress: () => void; onJoin?: () => void; onCancel?: () => void }) {
+export function SessionCard({ session, role, cancelled, compact = false, footer, onPress, onJoin, onCancel }: { session: Session; role: Role; cancelled?: boolean; compact?: boolean; footer?: React.ReactNode; onPress: () => void; onJoin?: () => void; onCancel?: () => void }) {
   const colors = useColors();
   const { t, locale, direction } = useAppPreferences();
   const tone = session.tone === 'teal' ? colors.teal : session.tone === 'gold' ? colors.accentForeground : colors.primary;
@@ -232,6 +232,7 @@ export function SessionCard({ session, role, cancelled, compact = false, onPress
             <Text numberOfLines={1} style={[styles.sessionPerson, { color: colors.mutedForeground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>{session.person}</Text>
           </View>
         </View>
+        {footer ? <View style={styles.sessionFooter}>{footer}</View> : null}
         {showJoinControl ? (
           <Pressable
             testID={`join-session-${session.id}`}
@@ -721,6 +722,7 @@ export const styles = StyleSheet.create({
   sessionTitleCompact: { fontSize: 12, lineHeight: 15, marginTop: 2 },
   sessionMeta: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', gap: 5, marginTop: 7 },
   sessionMetaCompact: { marginTop: 3, gap: 3 },
+  sessionFooter: { width: '100%', marginTop: 5, gap: 5 },
   sessionInfoPill: { minHeight: 24, borderRadius: 7, paddingHorizontal: 6, flexDirection: 'row-reverse', alignItems: 'center', gap: 3 },
   metaText: { fontSize: 9, fontFamily: 'Inter_400Regular' },
   sessionPerson: { flex: 1, fontSize: 9, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
