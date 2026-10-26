@@ -15,6 +15,7 @@ import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, canStude
 import { getTeacherInPersonDecisionOutcome, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
 import SwipeDecisionControl from '@/components/SwipeDecisionControl';
 import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
+import StudentLocationLink from '@/components/StudentLocationLink';
 
 type StudentRequestSection = 'pending' | 'accepted' | 'completed';
 type SessionWithMode = Session & {
@@ -1070,12 +1071,16 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
   };
   return (
     <View style={styles.inPersonSessionFooter}>
-      <View style={[styles.inPersonLocation, { backgroundColor: colors.muted }]}>
-        <Icon name="map-pin" size={13} color={colors.teal} />
-        <Text numberOfLines={2} style={[styles.inPersonLocationText, { color: colors.foreground, writingDirection: direction }]}>
-          {location || t('موقع الطالب غير متاح', 'Student location unavailable')}
-        </Text>
-      </View>
+      {location ? (
+        <StudentLocationLink address={location} latitude={snapshot?.latitude} longitude={snapshot?.longitude} />
+      ) : (
+        <View style={[styles.inPersonLocation, { backgroundColor: colors.muted }]}>
+          <Icon name="map-pin" size={13} color={colors.mutedForeground} />
+          <Text numberOfLines={2} style={[styles.inPersonLocationText, { color: colors.mutedForeground, writingDirection: direction }]}>
+            {t('موقع الطالب غير متاح', 'Student location unavailable')}
+          </Text>
+        </View>
+      )}
       {confirmed ? (
         <Text style={[styles.inPersonActionHint, { color: colors.teal }]}>{t('تم تأكيد الحضور — الحصة جارية', 'Attendance confirmed — lesson in progress')}</Text>
       ) : role === 'teacher' ? (
@@ -1206,7 +1211,16 @@ function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete, onCa
       <View style={styles.inPersonRequestDetails}>
         {personLabel ? <View style={styles.inPersonRequestDetailLine}><Icon name="user" size={13} color={colors.mutedForeground} /><Text style={[styles.inPersonRequestDetailText, { color: colors.mutedForeground, writingDirection: direction }]}>{personLabel}</Text></View> : null}
         <View style={styles.inPersonRequestDetailLine}><Icon name="calendar" size={13} color={colors.mutedForeground} /><Text style={[styles.inPersonRequestDetailText, { color: colors.mutedForeground, writingDirection: direction }]}>{dateLabel}</Text></View>
-        {location ? <View style={styles.inPersonRequestDetailLine}><Icon name="map-pin" size={13} color={colors.teal} /><Text style={[styles.inPersonRequestDetailText, { color: colors.foreground, writingDirection: direction }]}>{location}</Text></View> : null}
+        {location ? <StudentLocationLink
+          address={location}
+          latitude={item.latitude ?? addressSnapshot?.latitude}
+          longitude={item.longitude ?? addressSnapshot?.longitude}
+          containerStyle={styles.inPersonRequestDetailLine}
+          textStyle={[styles.inPersonRequestDetailText, { color: colors.foreground, writingDirection: direction }]}
+          backgroundColor="transparent"
+          iconColor={colors.teal}
+          textColor={colors.foreground}
+        /> : null}
       </View>
       {role === 'student' && status === 'accepted' ? attendanceConfirmed ? (
         <View style={[styles.requestStatus, { backgroundColor: colors.tealSoft }]}><Text style={[styles.requestStatusText, { color: colors.teal }]}>{t('تم تأكيد الحضور — بدأت الجلسة الحضورية', 'Attendance confirmed — in-person session started')}</Text></View>
