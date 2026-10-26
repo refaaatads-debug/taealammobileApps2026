@@ -212,38 +212,54 @@ export function SessionCard({ session, role, cancelled, compact = false, footer,
               : t('بانتظار دخول المعلم', 'Waiting for teacher to join')
           : t('قادمة', 'Upcoming');
   return (
-    <Pressable testID={`session-${session.id}`} onPress={onPress} style={({ pressed }) => [styles.sessionCard, compact && styles.sessionCardCompact, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.cardPressed]}>
-      <View style={[styles.sessionDate, compact && styles.sessionDateCompact, { backgroundColor: session.tone === 'gold' ? colors.goldSoft : session.tone === 'teal' ? colors.tealSoft : colors.navySoft }]}>
-        <Text style={[styles.sessionDateDay, compact && styles.sessionDateDayCompact, { color: tone }]}>{dateDay}</Text>
-        <Text style={[styles.sessionDateMonth, { color: colors.mutedForeground }]}>{dateMonth}</Text>
+    <View style={[styles.sessionCard, compact && styles.sessionCardCompact, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={styles.sessionHeaderRow}>
+        <Pressable
+          testID={`session-${session.id}`}
+          accessibilityRole="button"
+          accessibilityLabel={`${session.subject}: ${session.title}`}
+          onPress={onPress}
+          style={({ pressed }) => [styles.sessionMain, pressed && styles.cardPressed]}
+        >
+          <View style={[styles.sessionDate, compact && styles.sessionDateCompact, { backgroundColor: session.tone === 'gold' ? colors.goldSoft : session.tone === 'teal' ? colors.tealSoft : colors.navySoft }]}>
+            <Text style={[styles.sessionDateDay, compact && styles.sessionDateDayCompact, { color: tone }]}>{dateDay}</Text>
+            <Text style={[styles.sessionDateMonth, { color: colors.mutedForeground }]}>{dateMonth}</Text>
+          </View>
+          <View style={styles.sessionBody}>
+            <View style={styles.sessionTopline}>
+              <Text style={[styles.sessionSubject, { color: tone }]}>{session.subject}</Text>
+              <Text style={[styles.sessionModeTag, { color: isInPerson ? colors.accentForeground : colors.primary, backgroundColor: isInPerson ? colors.goldSoft : colors.navySoft }]}>{modeLabel}</Text>
+              <View style={[styles.sessionStatusBadge, { backgroundColor: statusBackground }]}>
+                <View style={[styles.sessionStatusDot, { backgroundColor: statusColor }]} />
+                <Text style={[styles.sessionStatusText, { color: statusColor }]}>{statusLabel}</Text>
+              </View>
+            </View>
+            <Text style={[styles.sessionTitle, compact && styles.sessionTitleCompact, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]} numberOfLines={compact ? 1 : 2}>{session.title}</Text>
+            <View style={[styles.sessionMeta, compact && styles.sessionMetaCompact]}>
+              <View style={[styles.sessionInfoPill, { backgroundColor: colors.muted }]}>
+                <Icon name="clock" size={12} color={colors.mutedForeground} />
+                <Text style={[styles.metaText, { color: colors.mutedForeground }]}>{sessionTime} · {session.duration}</Text>
+              </View>
+              <View style={[styles.sessionInfoPill, { backgroundColor: colors.muted, flex: 1 }]}>
+                <Icon name={role === 'teacher' ? 'book-open' : 'user'} size={12} color={colors.mutedForeground} />
+                <Text numberOfLines={1} style={[styles.sessionPerson, { color: colors.mutedForeground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>{session.person}</Text>
+              </View>
+            </View>
+          </View>
+        </Pressable>
+        {!cancelled && onCancel ? (
+          <Pressable testID={`cancel-${session.id}`} accessibilityRole="button" onPress={onCancel} hitSlop={10} style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}>
+            <Icon name="x-circle" size={17} color={colors.destructive} />
+          </Pressable>
+        ) : null}
       </View>
-      <View style={styles.sessionBody}>
-        <View style={styles.sessionTopline}>
-          <Text style={[styles.sessionSubject, { color: tone }]}>{session.subject}</Text>
-          <Text style={[styles.sessionModeTag, { color: isInPerson ? colors.accentForeground : colors.primary, backgroundColor: isInPerson ? colors.goldSoft : colors.navySoft }]}>{modeLabel}</Text>
-          <View style={[styles.sessionStatusBadge, { backgroundColor: statusBackground }]}>
-            <View style={[styles.sessionStatusDot, { backgroundColor: statusColor }]} />
-            <Text style={[styles.sessionStatusText, { color: statusColor }]}>{statusLabel}</Text>
-          </View>
-        </View>
-        <Text style={[styles.sessionTitle, compact && styles.sessionTitleCompact, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]} numberOfLines={compact ? 1 : 2}>{session.title}</Text>
-        <View style={[styles.sessionMeta, compact && styles.sessionMetaCompact]}>
-          <View style={[styles.sessionInfoPill, { backgroundColor: colors.muted }]}>
-            <Icon name="clock" size={12} color={colors.mutedForeground} />
-            <Text style={[styles.metaText, { color: colors.mutedForeground }]}>{sessionTime} · {session.duration}</Text>
-          </View>
-          <View style={[styles.sessionInfoPill, { backgroundColor: colors.muted, flex: 1 }]}>
-            <Icon name={role === 'teacher' ? 'book-open' : 'user'} size={12} color={colors.mutedForeground} />
-            <Text numberOfLines={1} style={[styles.sessionPerson, { color: colors.mutedForeground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>{session.person}</Text>
-          </View>
-        </View>
-        {footer ? <View style={styles.sessionFooter}>{footer}</View> : null}
-        {showJoinControl ? (
+      {footer ? <View style={styles.sessionFooter}>{footer}</View> : null}
+      {showJoinControl ? (
           <Pressable
             testID={`join-session-${session.id}`}
+            accessibilityRole="button"
             disabled={!canJoin}
             onPress={(event) => {
-              event.stopPropagation();
               if (canJoin) onJoin?.();
             }}
             style={({ pressed }) => [
@@ -265,14 +281,8 @@ export function SessionCard({ session, role, cancelled, compact = false, footer,
                   : t('بانتظار بدء المعلم', 'Waiting for teacher')}
             </Text>
           </Pressable>
-        ) : null}
-      </View>
-      {!cancelled && onCancel ? (
-        <Pressable testID={`cancel-${session.id}`} onPress={onCancel} hitSlop={10} style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}>
-          <Icon name="x-circle" size={17} color={colors.destructive} />
-        </Pressable>
       ) : null}
-    </Pressable>
+    </View>
   );
 }
 
@@ -281,7 +291,7 @@ export function AssignmentRow({ assignment, completed, submissionCount = 0, teac
   const { t, direction, formatNumber } = useAppPreferences();
   const isDone = completed || assignment.status === 'مكتمل';
   const isReviewed = teacherReviewStatus === 'reviewed';
-  const statusColor = isReviewed || isDone ? colors.success : teacherReviewStatus === 'ai_graded' || assignment.status === 'قيد التقدم' ? colors.teal : colors.mutedForeground;
+  const statusColor = isReviewed || isDone ? colors.accentForeground : teacherReviewStatus === 'ai_graded' || assignment.status === 'قيد التقدم' ? colors.primary : colors.foreground;
   const statusLabel = isReviewed
     ? t('تم التصحيح', 'Reviewed')
     : teacherReviewStatus === 'ai_graded'
@@ -296,25 +306,25 @@ export function AssignmentRow({ assignment, completed, submissionCount = 0, teac
               ? t('اختبار', 'Quiz')
               : t('واجب', 'Assignment');
   return (
-    <Pressable testID={`assignment-${assignment.id}`} accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.assignmentRow, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.cardPressed]}>
-      <View style={[styles.assignmentAccent, { backgroundColor: statusColor }]} />
+    <Pressable testID={`assignment-${assignment.id}`} accessibilityRole="button" accessibilityLabel={`${assignment.title}، ${statusLabel}`} onPress={onPress} style={({ pressed }) => [styles.assignmentRow, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: direction === 'rtl' ? 'row-reverse' : 'row' }, pressed && styles.cardPressed]}>
+      <View style={[styles.assignmentAccent, direction === 'rtl' ? { right: 0 } : { left: 0 }, { backgroundColor: statusColor }]} />
       <View style={[styles.assignmentIcon, { backgroundColor: isDone ? colors.tealSoft : assignment.kind === 'اختبار' ? colors.goldSoft : colors.navySoft }]}>
         <Icon name={assignment.kind === 'اختبار' ? 'edit-3' : 'file-text'} size={18} color={isDone ? colors.teal : colors.primary} />
       </View>
-      <View style={styles.assignmentMain}>
-        <View style={styles.assignmentTitleLine}>
-          <Text style={[styles.assignmentTitle, { color: colors.foreground, writingDirection: direction }]} numberOfLines={2}>{assignment.title}</Text>
+      <View style={[styles.assignmentMain, { alignItems: direction === 'rtl' ? 'flex-end' : 'flex-start' }]}>
+        <View style={[styles.assignmentTitleLine, { flexDirection: direction === 'rtl' ? 'row-reverse' : 'row' }]}>
+          <Text style={[styles.assignmentTitle, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]} numberOfLines={2}>{assignment.title}</Text>
           <View style={[styles.badge, { backgroundColor: isReviewed || isDone ? colors.tealSoft : teacherReviewStatus === 'ai_graded' || assignment.status === 'قيد التقدم' ? colors.navySoft : colors.goldSoft }]}>
             <Text style={[styles.badgeText, { color: isReviewed || isDone ? colors.success : teacherReviewStatus === 'ai_graded' || assignment.status === 'قيد التقدم' ? colors.primary : colors.accentForeground }]}>{statusLabel}</Text>
           </View>
         </View>
-        <View style={styles.assignmentMeta}>
+        <View style={[styles.assignmentMeta, { flexDirection: direction === 'rtl' ? 'row-reverse' : 'row' }]}>
           <Icon name="book-open" size={11} color={colors.mutedForeground} />
-          <Text style={[styles.assignmentSubject, { color: colors.mutedForeground, writingDirection: direction }]} numberOfLines={1}>{assignment.subject}</Text>
+          <Text style={[styles.assignmentSubject, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]} numberOfLines={1}>{assignment.subject}</Text>
           <View style={[styles.assignmentMetaDot, { backgroundColor: colors.border }]} />
           <Icon name="calendar" size={11} color={colors.mutedForeground} />
-          <Text style={[styles.assignmentDue, { color: colors.mutedForeground, writingDirection: direction }]} numberOfLines={1}>{assignment.due}</Text>
-          {submissionCount ? <Text style={[styles.assignmentSubmission, { color: colors.teal, writingDirection: direction }]}>{` · ${formatNumber(submissionCount)} ${t('تسليم', 'submissions')}`}</Text> : null}
+          <Text style={[styles.assignmentDue, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]} numberOfLines={1}>{assignment.due}</Text>
+          {submissionCount ? <Text style={[styles.assignmentSubmission, { color: colors.accentForeground, writingDirection: direction }]}>{` · ${formatNumber(submissionCount)} ${t('تسليم', 'submissions')}`}</Text> : null}
         </View>
         <View style={styles.assignmentProgressHeader}>
           <Text style={[styles.assignmentProgressLabel, { color: colors.mutedForeground, writingDirection: direction }]}>{t('نسبة الإنجاز', 'Progress')}</Text>
@@ -325,7 +335,7 @@ export function AssignmentRow({ assignment, completed, submissionCount = 0, teac
         </View>
       </View>
       <View style={[styles.assignmentArrow, { backgroundColor: isDone ? colors.tealSoft : colors.navySoft }]}>
-        <Icon name="arrow-left" size={14} color={isDone ? colors.teal : colors.primary} />
+        <Icon name={direction === 'rtl' ? 'arrow-left' : 'arrow-right'} size={16} color={isDone ? colors.accentForeground : colors.primary} />
       </View>
     </Pressable>
   );
@@ -709,14 +719,16 @@ export const styles = StyleSheet.create({
   sectionAction: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   progressTrack: { flex: 1, height: 5, borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 3 },
-  sessionCard: { minHeight: 108, borderRadius: 18, borderWidth: 1, padding: 12, flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 9, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  sessionCard: { minHeight: 108, borderRadius: 18, borderWidth: 1, padding: 12, flexDirection: 'column', alignItems: 'stretch', marginBottom: 8, gap: 8, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   sessionCardCompact: { minHeight: 80, borderRadius: 14, padding: 8, marginBottom: 5, gap: 6, shadowOpacity: 0.04, shadowRadius: 5, elevation: 1 },
+  sessionHeaderRow: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 9 },
+  sessionMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: 12 },
   sessionDate: { width: 58, height: 74, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   sessionDateCompact: { width: 42, height: 52, borderRadius: 11 },
   sessionDateDay: { fontSize: 22, fontFamily: 'Inter_700Bold' },
   sessionDateDayCompact: { fontSize: 17 },
   sessionDateMonth: { fontSize: 9, marginTop: 3, fontFamily: 'Inter_600SemiBold' },
-  sessionBody: { flex: 1, alignItems: 'flex-end' },
+  sessionBody: { flex: 1, minWidth: 0, alignItems: 'flex-end' },
   sessionTopline: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sessionSubject: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   sessionModeTag: { fontSize: 9, fontFamily: 'Inter_700Bold', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4, overflow: 'hidden' },
@@ -727,33 +739,33 @@ export const styles = StyleSheet.create({
   sessionTitleCompact: { fontSize: 12, lineHeight: 15, marginTop: 2 },
   sessionMeta: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', gap: 5, marginTop: 7 },
   sessionMetaCompact: { marginTop: 3, gap: 3 },
-  sessionFooter: { width: '100%', marginTop: 5, gap: 5 },
+  sessionFooter: { width: '100%', marginTop: 2, gap: 5 },
   sessionInfoPill: { minHeight: 24, borderRadius: 7, paddingHorizontal: 6, flexDirection: 'row-reverse', alignItems: 'center', gap: 3 },
   metaText: { fontSize: 9, fontFamily: 'Inter_400Regular' },
   sessionPerson: { flex: 1, fontSize: 9, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
-  joinSessionButton: { minHeight: 28, borderRadius: 8, borderWidth: 1, paddingHorizontal: 8, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 6, alignSelf: 'flex-end' },
+  joinSessionButton: { minHeight: 34, borderRadius: 9, borderWidth: 1, paddingHorizontal: 9, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 2, alignSelf: 'flex-end' },
   joinSessionText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   cancelled: { fontSize: 10, marginTop: 5, fontFamily: 'Inter_600SemiBold' },
   cancelButton: { padding: 5 },
-  assignmentRow: { minHeight: 112, borderRadius: 20, borderWidth: 1, flexDirection: 'row', alignItems: 'center', padding: 13, gap: 11, marginBottom: 10, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 14, shadowOffset: { width: 0, height: 5 }, elevation: 3, position: 'relative', overflow: 'hidden' },
-  assignmentAccent: { position: 'absolute', top: 14, bottom: 14, left: 0, width: 4, borderRadius: 3 },
-  assignmentIcon: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  assignmentRow: { minHeight: 102, borderRadius: 16, borderWidth: 1, flexDirection: 'row', alignItems: 'center', padding: 11, gap: 9, marginBottom: 8, shadowColor: '#173E8C', shadowOpacity: 0.06, shadowRadius: 9, shadowOffset: { width: 0, height: 3 }, elevation: 1, position: 'relative', overflow: 'hidden' },
+  assignmentAccent: { position: 'absolute', top: 11, bottom: 11, width: 3, borderRadius: 2 },
+  assignmentIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   assignmentMain: { flex: 1, alignItems: 'flex-end' },
   assignmentTitleLine: { flexDirection: 'row', width: '100%', alignItems: 'flex-start', gap: 7 },
-  assignmentTitle: { flex: 1, textAlign: 'right', fontSize: 13, lineHeight: 18, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  badge: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8, marginTop: 1 },
-  badgeText: { fontSize: 9, fontFamily: 'Inter_700Bold' },
-  assignmentMeta: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', gap: 4, marginTop: 7 },
-  assignmentSubject: { maxWidth: '42%', textAlign: 'right', fontSize: 10, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
-  assignmentDue: { flexShrink: 1, textAlign: 'right', fontSize: 10, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
+  assignmentTitle: { flex: 1, textAlign: 'right', fontSize: 14, lineHeight: 18, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  badge: { minHeight: 24, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 8, marginTop: 1, justifyContent: 'center' },
+  badgeText: { fontSize: 10, lineHeight: 13, fontFamily: 'Inter_700Bold' },
+  assignmentMeta: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', gap: 4, marginTop: 5 },
+  assignmentSubject: { maxWidth: '42%', textAlign: 'right', fontSize: 11, fontFamily: 'Inter_500Medium', writingDirection: 'rtl' },
+  assignmentDue: { flexShrink: 1, textAlign: 'right', fontSize: 11, fontFamily: 'Inter_500Medium', writingDirection: 'rtl' },
   assignmentMetaDot: { width: 3, height: 3, borderRadius: 2, marginHorizontal: 2 },
-  assignmentSubmission: { flexShrink: 1, fontSize: 9, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
-  assignmentProgressHeader: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 9 },
-  assignmentProgressLabel: { fontSize: 9, fontFamily: 'Inter_400Regular' },
-  percent: { fontSize: 10, fontFamily: 'Inter_700Bold' },
-  assignmentProgressTrack: { width: '100%', height: 6, borderRadius: 4, overflow: 'hidden', marginTop: 5 },
+  assignmentSubmission: { flexShrink: 1, fontSize: 11, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
+  assignmentProgressHeader: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
+  assignmentProgressLabel: { fontSize: 10, fontFamily: 'Inter_500Medium' },
+  percent: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+  assignmentProgressTrack: { width: '100%', height: 5, borderRadius: 3, overflow: 'hidden', marginTop: 4 },
   assignmentProgressFill: { height: '100%', borderRadius: 4 },
-  assignmentArrow: { width: 30, height: 30, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  assignmentArrow: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   emptyState: { borderRadius: 18, borderWidth: 1, alignItems: 'center', padding: 18, marginTop: 4, position: 'relative', overflow: 'hidden', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   emptyGlow: { position: 'absolute', width: 170, height: 170, borderRadius: 85, top: -112, right: -66, opacity: 0.72 },
   emptyIcon: { width: 46, height: 46, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 9, shadowColor: '#173E8C', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
