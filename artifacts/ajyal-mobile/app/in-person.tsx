@@ -10,11 +10,10 @@ import { useAjyal } from "@/hooks/useAjyal";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
-import { firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "@/lib/inPersonScheduling";
+import { firstAvailableInPersonSchedule, formatLocalDateTimeInput, getApprovedStageSubjectIds, getInPersonAppointmentTimes, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "@/lib/inPersonScheduling";
 import { getInPersonBookingSnapshot } from "@/lib/inPersonBookingSnapshot";
 import { selectSavedAddress } from "@/lib/inPersonAddressSelection";
 import { TEACHING_STAGES } from "@/constants/education";
-import { getListTeachersQueryKey, useListTeachers } from "@workspace/api-client-react";
 import { OptionDropdown } from "@/components/OptionDropdown";
 
 type Row = Record<string, any>;
@@ -57,6 +56,7 @@ export default function InPersonScreen() {
   const [cities, setCities] = useState<City[]>([]);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [subjects, setSubjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [stageSubjectRows, setStageSubjectRows] = useState<Row[]>([]);
   const [groups, setGroups] = useState<Row[]>([]);
   const [teacherBookings, setTeacherBookings] = useState<Row[]>([]);
   const [settings, setSettings] = useState<Row | null>(null);
@@ -75,8 +75,6 @@ export default function InPersonScreen() {
   const [teacherLongitude, setTeacherLongitude] = useState("");
   const [teacherRadius, setTeacherRadius] = useState("10");
   const [attendanceCodes, setAttendanceCodes] = useState<Record<string, string>>({});
-  const teacherDirectoryQuery = useListTeachers(undefined, { query: { enabled: role === "student", queryKey: getListTeachersQueryKey(undefined), staleTime: 30_000 } });
-  const directoryTeachers = teacherDirectoryQuery.data ?? [];
   const addressIdRef = useRef(addressId);
   addressIdRef.current = addressId;
 
@@ -84,10 +82,8 @@ export default function InPersonScreen() {
   const cityOptions = useMemo(() => cities, [cities]);
   const selectedCity = cities.find((city) => city.id === cityId) ?? null;
   const selectedAddress = addresses.find((address) => address.id === addressId) ?? null;
-  const stageSubjectNames = useMemo(() => new Set(directoryTeachers
-    .filter((teacher) => teacher.teachingStages?.includes(teachingStage))
-    .flatMap((teacher) => (teacher.subjects ?? []).map(normalizeSubjectName))), [directoryTeachers, teachingStage]);
-  const stageSubjects = useMemo(() => subjects.filter((subject) => stageSubjectNames.has(normalizeSubjectName(subject.name))), [stageSubjectNames, subjects]);
+  const stageSubjectIds = useMemo(() => getApprovedStageSubjectIds(stageSubjectRows, teachingStage), [stageSubjectRows, teachingStage]);
+  const stageSubjects = useMemo(() => subjects.filter((subject) => stageSubjectIds.has(subject.id)), [stageSubjectIds, subjects]);
   const dateOptions = useMemo(() => Array.from({ length: 7 }, (_, offset) => {
     const date = new Date();
     date.setHours(0, 0, 0, 0);
@@ -115,27 +111,31 @@ export default function InPersonScreen() {
     setCities([]);
     setAddresses([]);
     setSubjects([]);
+    setStageSubjectRows([]);
     setTeacherBookings([]);
     setSettings(null);
     setTeachers([]);
     setSelectedTeachers([]);
     setSearchPerformed(false);
     try {
-      const [cityResult, addressResult, subjectResult] = await Promise.all([
+      const [cityResult, addressResult, subjectResult, teacherSubjectResult] = await Promise.all([
         supabase.from("cities").select("id,name_ar,name_en,in_person_enabled").eq("country_iso2", "SA").eq("is_active", true).order("name_ar"),
         role === "student"
           ? supabase.from("user_addresses").select("id,city_id,street_address,district,additional_details,latitude,longitude,is_primary").eq("owner_id", user.id).order("is_primary", { ascending: false })
           : Promise.resolve({ data: [], error: null }),
         role === "student" ? supabase.from("subjects").select("id,name").order("name") : Promise.resolve({ data: [], error: null }),
+        role === "student" ? supabase.from("teacher_subjects").select("subject_id,teacher_profiles!inner(is_approved,teaching_stages)") : Promise.resolve({ data: [], error: null }),
       ]);
       if (cityResult.error) throw cityResult.error;
       if (addressResult.error) throw addressResult.error;
       if (subjectResult.error) throw subjectResult.error;
+      if (teacherSubjectResult.error) throw teacherSubjectResult.error;
       const cityRows = records(cityResult.data) as City[];
       setCities(cityRows);
       const addressRows = records(addressResult.data) as Address[];
       setAddresses(addressRows);
       setSubjects(records(subjectResult.data).map((item) => ({ id: String(item.id), name: String(item.name ?? "") })));
+      setStageSubjectRows(records(teacherSubjectResult.data));
       if (role === "student") {
         const selected = selectSavedAddress(addressRows, addressIdRef.current);
         setAddressId(selected?.id ?? "");
@@ -220,25 +220,16 @@ export default function InPersonScreen() {
     }
     setSaving(true); setError(""); setRequestSent(false); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
     const result = await supabase.rpc("search_in_person_teachers", {
-      p_city_id: cityId, p_subject_id: subjectId, p_address_id: addressId, p_scheduled_at: date.toISOString(),
+      p_city_id: cityId, p_subject_id: subjectId, p_address_id: addressId, p_scheduled_at: date.toISOString(), p_teaching_stage: teachingStage,
     });
     setSaving(false);
     if (result.error) {
       setError(errorText(result.error, t("تعذر البحث عن المعلمين.", "Teacher search failed.")));
       return;
     }
-    // The RPC is authoritative for in-person approval, city and radius. Apply stage matching when
-    // the general directory has a teacher record, but do not discard in-person-only teachers absent there.
-    const subjectName = stageSubjects.find((subject) => subject.id === subjectId)?.name ?? "";
-    const matchesStageWhenKnown = (candidate: Teacher) => {
-      const directoryTeacher = directoryTeachers.find((teacher) => String(teacher.id) === candidate.teacher_id);
-      if (!directoryTeacher) return true;
-      const stages = directoryTeacher.teachingStages ?? [];
-      const teacherSubjects = directoryTeacher.subjects ?? [];
-      return (!stages.length || stages.includes(teachingStage))
-        && (!teacherSubjects.length || teacherSubjects.some((name) => normalizeSubjectName(name) === normalizeSubjectName(subjectName)));
-    };
-    setTeachers((records(result.data) as Teacher[]).filter(matchesStageWhenKnown));
+    // The platform search applies the selected subject and stage to every eligible teacher;
+    // do not filter its results again through the smaller general-directory response.
+    setTeachers(records(result.data) as Teacher[]);
     setSearchPerformed(true);
   };
 
@@ -391,12 +382,11 @@ export default function InPersonScreen() {
                 setRequestSent(false);
               }}
               testID="in-person-subject-dropdown"
-              loading={teacherDirectoryQuery.isLoading}
-              disabled={!teachingStage || teacherDirectoryQuery.isError}
+              loading={loading}
+              disabled={!teachingStage || loading || !stageSubjects.length}
             />
-            {teacherDirectoryQuery.isLoading ? <Text style={mutedStyle}>{t("جارٍ تحميل المواد المناسبة للمرحلة...", "Loading subjects for this stage...")}</Text> : null}
-            {!teacherDirectoryQuery.isLoading && teacherDirectoryQuery.isError ? <Text accessibilityRole="alert" style={{ color: colors.destructive }}>{t("تعذر تحميل المواد المرتبطة بالمرحلة.", "Could not load subjects for this stage.")}</Text> : null}
-            {!teacherDirectoryQuery.isLoading && !teacherDirectoryQuery.isError && teachingStage && !stageSubjects.length ? <Text style={mutedStyle}>{t("لا توجد مواد مرتبطة بهذه المرحلة حالياً.", "No subjects are linked to this stage yet.")}</Text> : null}
+            {loading ? <Text style={mutedStyle}>{t("جارٍ تحميل المواد المناسبة للمرحلة...", "Loading subjects for this stage...")}</Text> : null}
+            {!loading && teachingStage && !stageSubjects.length ? <Text style={mutedStyle}>{t("لا توجد مواد مرتبطة بهذه المرحلة حالياً.", "No subjects are linked to this stage yet.")}</Text> : null}
             <Text style={[styles.fieldLabel, textStyle]}>{t("موعد الحصة", "Lesson date and time")}</Text>
             <Text style={[styles.scheduleLabel, { color: colors.mutedForeground }]}>{t("اختر اليوم", "Choose a day")}</Text>
             <View style={styles.subjectGrid}>{dateOptions.map((option) => {
@@ -419,7 +409,7 @@ export default function InPersonScreen() {
               </Pressable>;
             })}</View>
             <Text style={mutedStyle}>{t("بالتوقيت المحلي. اختر موعداً بعد ساعتين على الأقل من الآن.", "Local time. Choose a time at least two hours from now.")}</Text>
-            <Pressable testID="in-person-search-teachers" disabled={saving || !selectedAddress || !selectedCity?.in_person_enabled || !stageSubjects.length || teacherDirectoryQuery.isLoading || teacherDirectoryQuery.isError} onPress={() => void searchTeachers()} style={({ pressed }) => [styles.primary, actionStyle, (saving || !selectedAddress || !selectedCity?.in_person_enabled || !stageSubjects.length) && styles.disabled, pressed && !saving && styles.pressed]}>
+            <Pressable testID="in-person-search-teachers" disabled={saving || loading || !selectedAddress || !selectedCity?.in_person_enabled || !stageSubjects.length} onPress={() => void searchTeachers()} style={({ pressed }) => [styles.primary, actionStyle, (saving || loading || !selectedAddress || !selectedCity?.in_person_enabled || !stageSubjects.length) && styles.disabled, pressed && !saving && !loading && styles.pressed]}>
               {saving ? <ActivityIndicator color="#fff" /> : <><Icon name="search" size={16} color="#fff" /><Text style={styles.primaryText}>{t("ابحث عن المعلمين", "Find available teachers")}</Text></>}
             </Pressable>
             {searchPerformed && !teachers.length && selectedCity?.in_person_enabled && !saving ? <Text style={mutedStyle}>{t("لا توجد نتائج مطابقة لهذا الموعد والعنوان والمادة.", "No teachers match this time, address, and subject.")}</Text> : null}

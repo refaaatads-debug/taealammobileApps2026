@@ -40,6 +40,27 @@ export function inPersonAttendanceAction(
   return nowMs >= start ? 'enter_code' : 'waiting';
 }
 
+export function getApprovedStageSubjectIds(rows: Array<Record<string, unknown>>, stage: string): Set<string> {
+  const normalize = (value: unknown) => String(value ?? '').normalize('NFKC').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, '').trim().replace(/\s+/gu, ' ').toLowerCase();
+  const asList = (value: unknown): string[] => {
+    if (Array.isArray(value)) return value.map(String);
+    if (typeof value !== 'string') return [];
+    const text = value.trim();
+    if (!text) return [];
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed.map(String);
+    } catch {}
+    return text.replace(/^\{|\}$/gu, '').split(',').map((item) => item.replace(/^['"]|['"]$/gu, '').trim()).filter(Boolean);
+  };
+  const selectedStage = normalize(stage);
+  return new Set(rows.filter((row) => {
+    const rawProfile = row.teacher_profiles;
+    const profile = Array.isArray(rawProfile) ? rawProfile[0] as Record<string, unknown> | undefined : rawProfile as Record<string, unknown> | null;
+    return profile?.is_approved === true && asList(profile.teaching_stages).some((value) => normalize(value) === selectedStage);
+  }).map((row) => String(row.subject_id ?? '')).filter(Boolean));
+}
+
 export function parseFutureInPersonDateTime(value: string, nowMs = Date.now()): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value.trim());
   if (!match) return null;

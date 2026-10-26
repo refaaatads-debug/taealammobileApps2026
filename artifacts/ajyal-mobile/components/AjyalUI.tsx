@@ -158,7 +158,7 @@ export function ProgressBar({ progress, color }: { progress: number; color?: str
   );
 }
 
-export function SessionCard({ session, role, cancelled, onPress, onJoin, onCancel }: { session: Session; role: Role; cancelled?: boolean; onPress: () => void; onJoin?: () => void; onCancel?: () => void }) {
+export function SessionCard({ session, role, cancelled, compact = false, onPress, onJoin, onCancel }: { session: Session; role: Role; cancelled?: boolean; compact?: boolean; onPress: () => void; onJoin?: () => void; onCancel?: () => void }) {
   const colors = useColors();
   const { t, locale, direction } = useAppPreferences();
   const tone = session.tone === 'teal' ? colors.teal : session.tone === 'gold' ? colors.accentForeground : colors.primary;
@@ -207,9 +207,9 @@ export function SessionCard({ session, role, cancelled, onPress, onJoin, onCance
               : t('بانتظار دخول المعلم', 'Waiting for teacher to join')
           : t('قادمة', 'Upcoming');
   return (
-    <Pressable testID={`session-${session.id}`} onPress={onPress} style={({ pressed }) => [styles.sessionCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.cardPressed]}>
-      <View style={[styles.sessionDate, { backgroundColor: session.tone === 'gold' ? colors.goldSoft : session.tone === 'teal' ? colors.tealSoft : colors.navySoft }]}>
-        <Text style={[styles.sessionDateDay, { color: tone }]}>{dateDay}</Text>
+    <Pressable testID={`session-${session.id}`} onPress={onPress} style={({ pressed }) => [styles.sessionCard, compact && styles.sessionCardCompact, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.cardPressed]}>
+      <View style={[styles.sessionDate, compact && styles.sessionDateCompact, { backgroundColor: session.tone === 'gold' ? colors.goldSoft : session.tone === 'teal' ? colors.tealSoft : colors.navySoft }]}>
+        <Text style={[styles.sessionDateDay, compact && styles.sessionDateDayCompact, { color: tone }]}>{dateDay}</Text>
         <Text style={[styles.sessionDateMonth, { color: colors.mutedForeground }]}>{dateMonth}</Text>
       </View>
       <View style={styles.sessionBody}>
@@ -221,8 +221,8 @@ export function SessionCard({ session, role, cancelled, onPress, onJoin, onCance
             <Text style={[styles.sessionStatusText, { color: statusColor }]}>{statusLabel}</Text>
           </View>
         </View>
-        <Text style={[styles.sessionTitle, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]} numberOfLines={2}>{session.title}</Text>
-        <View style={styles.sessionMeta}>
+        <Text style={[styles.sessionTitle, compact && styles.sessionTitleCompact, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]} numberOfLines={compact ? 1 : 2}>{session.title}</Text>
+        <View style={[styles.sessionMeta, compact && styles.sessionMetaCompact]}>
           <View style={[styles.sessionInfoPill, { backgroundColor: colors.muted }]}>
             <Icon name="clock" size={12} color={colors.mutedForeground} />
             <Text style={[styles.metaText, { color: colors.mutedForeground }]}>{sessionTime} · {session.duration}</Text>
@@ -704,8 +704,11 @@ export const styles = StyleSheet.create({
   progressTrack: { flex: 1, height: 5, borderRadius: 3, overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 3 },
   sessionCard: { minHeight: 108, borderRadius: 18, borderWidth: 1, padding: 12, flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 9, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  sessionCardCompact: { minHeight: 80, borderRadius: 14, padding: 8, marginBottom: 5, gap: 6, shadowOpacity: 0.04, shadowRadius: 5, elevation: 1 },
   sessionDate: { width: 58, height: 74, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  sessionDateCompact: { width: 42, height: 52, borderRadius: 11 },
   sessionDateDay: { fontSize: 22, fontFamily: 'Inter_700Bold' },
+  sessionDateDayCompact: { fontSize: 17 },
   sessionDateMonth: { fontSize: 9, marginTop: 3, fontFamily: 'Inter_600SemiBold' },
   sessionBody: { flex: 1, alignItems: 'flex-end' },
   sessionTopline: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -715,7 +718,9 @@ export const styles = StyleSheet.create({
   sessionStatusDot: { width: 5, height: 5, borderRadius: 3 },
   sessionStatusText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   sessionTitle: { width: '100%', fontSize: 14, lineHeight: 18, fontFamily: 'Inter_700Bold', marginTop: 5, textAlign: 'right', writingDirection: 'rtl' },
+  sessionTitleCompact: { fontSize: 12, lineHeight: 15, marginTop: 2 },
   sessionMeta: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', gap: 5, marginTop: 7 },
+  sessionMetaCompact: { marginTop: 3, gap: 3 },
   sessionInfoPill: { minHeight: 24, borderRadius: 7, paddingHorizontal: 6, flexDirection: 'row-reverse', alignItems: 'center', gap: 3 },
   metaText: { fontSize: 9, fontFamily: 'Inter_400Regular' },
   sessionPerson: { flex: 1, fontSize: 9, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },

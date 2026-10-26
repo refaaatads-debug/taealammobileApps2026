@@ -367,6 +367,7 @@ export default function BookingsScreen() {
       key={session.id}
       session={session}
       role={role}
+      compact={session.status === 'done'}
       cancelled={session.status === 'cancelled'}
       onPress={() => openSession(session.id)}
       onJoin={() => router.push({ pathname: '/live-session', params: { booking: session.id } })}
@@ -601,6 +602,7 @@ export default function BookingsScreen() {
                 request={request}
                 groupCount={count}
                 groupItems={items}
+                compact={selectedStudentRequest.key === 'accepted'}
                 deleting={deleteRequestMutation.isPending && deleteRequestTarget?.id === request.id}
                 onCancel={selectedStudentRequest.key === 'pending' ? () => requestBookingCancel(request) : undefined}
                 onDelete={request.status === 'accepted' ? () => requestBookingDelete(request) : undefined}
@@ -819,7 +821,7 @@ function StudentSessionGroup({ studentName, sessions, role, onOpenSession, onJoi
   );
 }
 
-function BookingRequestCard({ request, groupCount = 1, groupItems = [request], busy, cancelling, deleting, onExpired, onCancel, onDelete, onDecision }: { request: BookingRequest; groupCount?: number; groupItems?: BookingRequest[]; busy?: boolean; cancelling?: boolean; deleting?: boolean; onExpired?: () => void; onCancel?: () => void; onDelete?: () => void; onDecision?: (status: 'accepted' | 'rejected') => void }) {
+function BookingRequestCard({ request, groupCount = 1, groupItems = [request], compact = false, busy, cancelling, deleting, onExpired, onCancel, onDelete, onDecision }: { request: BookingRequest; groupCount?: number; groupItems?: BookingRequest[]; compact?: boolean; busy?: boolean; cancelling?: boolean; deleting?: boolean; onExpired?: () => void; onCancel?: () => void; onDelete?: () => void; onDecision?: (status: 'accepted' | 'rejected') => void }) {
   const colors = useColors();
   const { t, locale, direction } = useAppPreferences();
   const [expanded, setExpanded] = useState(request.status === 'open');
@@ -853,13 +855,13 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], b
     }
   }, [request.status, remainingMs, onExpired]);
   return (
-    <View style={[styles.requestCard, { backgroundColor: colors.card, borderColor: colors.border, borderRightColor: statusColor }]}>
+    <View style={[styles.requestCard, compact && styles.requestCardCompact, { backgroundColor: colors.card, borderColor: colors.border, borderRightColor: statusColor }]}>
       <View style={styles.requestTop}>
         <Pressable onPress={() => setExpanded((value) => !value)} style={styles.requestTopToggle}>
           <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.mutedForeground} />
             <View style={[styles.requestStatus, { backgroundColor: colors.navySoft }]}><Text style={[styles.requestStatusText, { color: colors.primary }]}>{t('عن بُعد', 'Online')}</Text></View>
             <View style={[styles.requestStatus, { backgroundColor: statusBackground }]}><Text style={[styles.requestStatusText, { color: statusColor }]}>{status}</Text></View>
-           <Text style={[styles.requestSubject, { color: colors.foreground, writingDirection: direction }]}>{request.subject}</Text>
+            <Text numberOfLines={compact ? 1 : undefined} style={[styles.requestSubject, compact && styles.requestSubjectCompact, { color: colors.foreground, writingDirection: direction }]}>{request.subject}</Text>
         </Pressable>
         {onDelete ? <Pressable
           testID={`delete-booking-request-${request.id}`}
@@ -873,7 +875,8 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], b
           <Icon name="trash-2" size={15} color={colors.destructive} />
         </Pressable> : null}
       </View>
-       {expanded ? <><Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{request.studentName ? `${t('الطالب', 'Student')}: ${request.studentName} · ` : ''}{dateLabel} · {request.durationMinutes} {t('دقيقة', 'min')}{groupCount > 1 ? ` · ${groupCount} ${t('حصص في طلب واحد', 'sessions in one request')}` : ''}</Text>
+       {expanded ? <><Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{request.studentName ? `${t('الطالب', 'Student')}: ${request.studentName} · ` : ''}{dateLabel} · {request.durationMinutes} {t('دقيقة', 'min')}{typeof request.price === 'number' ? ` · ${t('السعر', 'Price')} ${request.price} ${t('ر.س', 'SAR')}` : ''}{groupCount > 1 ? ` · ${groupCount} ${t('حصص في طلب واحد', 'sessions in one request')}` : ''}</Text>
+        {request.status === 'open' && !onDecision ? <Text style={[styles.requestReserveNote, { color: colors.mutedForeground }]}>{t('طلبك متاح للمعلمين؛ يظهر اسم المعلم بعد قبوله.', 'Your request is visible to teachers; the teacher’s name appears after acceptance.')}</Text> : null}
        {groupCount > 1 ? <View style={styles.requestSlotList}>{groupItems.map((item) => {
          const itemDate = new Date(item.scheduledAt);
          return <Text key={item.id} style={[styles.requestSlot, { color: colors.foreground, backgroundColor: colors.muted }]}>{itemDate.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' })} · {itemDate.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })}</Text>;
@@ -1083,10 +1086,12 @@ const styles = StyleSheet.create({
   requestSectionHeader: { minHeight: 50, borderRadius: 18, borderWidth: 1, paddingHorizontal: 12, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   requestSectionTitle: { flex: 1, fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   requestCard: { borderRadius: 18, borderWidth: 1, borderRightWidth: 2, padding: 12, gap: 7, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  requestCardCompact: { borderRadius: 13, padding: 8, gap: 4, shadowOpacity: 0.035, shadowRadius: 4, elevation: 1 },
   requestTop: { flexDirection: 'row-reverse', alignItems: 'center', gap: 7 },
   requestTopToggle: { flex: 1, flexDirection: 'row-reverse', alignItems: 'center', gap: 10, minHeight: 40 },
   requestDeleteButton: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   requestSubject: { flex: 1, fontSize: 14, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  requestSubjectCompact: { fontSize: 12 },
   requestStatus: { borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6 },
   requestStatusText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   requestMeta: { fontSize: 10, lineHeight: 16, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },

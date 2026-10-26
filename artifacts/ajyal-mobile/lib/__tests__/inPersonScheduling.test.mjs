@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canConfirmInPersonAttendance, firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonAttendanceAction, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
+import { canConfirmInPersonAttendance, firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, getApprovedStageSubjectIds, inPersonAttendanceAction, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
 
 test("round-trips local schedule input without converting it to UTC text", () => {
   const date = new Date(2026, 9, 26, 18, 45);
@@ -46,6 +46,16 @@ test("shows the in-person attendance action only during its valid window", () =>
   assert.equal(inPersonAttendanceAction(scheduled, "not_started", start), "enter_code");
   assert.equal(inPersonAttendanceAction(scheduled, "not_started", start + 15 * 60_000), "expired");
   assert.equal(inPersonAttendanceAction(scheduled, "in_progress", start + 20 * 60_000), "confirmed");
+});
+
+test("includes every subject attached to an approved teacher in the selected stage", () => {
+  const rows = [
+    { subject_id: "math", teacher_profiles: { is_approved: true, teaching_stages: ["المتوسطة"] } },
+    { subject_id: "science", teacher_profiles: { is_approved: true, teaching_stages: ["المتوسطة", "الثانوية"] } },
+    { subject_id: "history", teacher_profiles: { is_approved: false, teaching_stages: ["المتوسطة"] } },
+    { subject_id: "primary-only", teacher_profiles: { is_approved: true, teaching_stages: ["الابتدائية"] } },
+  ];
+  assert.deepEqual([...getApprovedStageSubjectIds(rows, "المتوسطة")].sort(), ["math", "science"]);
 });
 
 test("translates in-person request states without exposing raw server values", () => {
