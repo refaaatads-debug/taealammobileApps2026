@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Crypto from "expo-crypto";
 import * as Location from "expo-location";
 import { router, useFocusEffect } from "expo-router";
@@ -99,6 +99,11 @@ export default function InPersonScreen() {
   useEffect(() => {
     if (!teachingStage && profile?.teachingStage) setTeachingStage(profile.teachingStage);
   }, [profile?.teachingStage, teachingStage]);
+  useEffect(() => {
+    if (!requestSent) return;
+    const timer = setTimeout(() => router.replace("/(tabs)/bookings"), 2400);
+    return () => clearTimeout(timer);
+  }, [requestSent]);
   const load = useCallback(async () => {
     if (!supabase || !user?.id || (role !== "student" && role !== "teacher")) {
       setLoading(false);
@@ -432,7 +437,6 @@ export default function InPersonScreen() {
             })}
             {teachers.length ? <Text style={[styles.selectionHint, { color: colors.mutedForeground }]}>{t("اضغط على بطاقة المعلم لتحديده قبل الإرسال", "Tap a teacher card to select them before sending")}</Text> : null}
             {teachers.length ? <Pressable accessibilityRole="button" disabled={saving || !selectedTeachers.length} onPress={() => void createRequest()} style={[styles.primary, actionStyle, (!selectedTeachers.length || saving) && styles.disabled]}>{saving ? <ActivityIndicator color="#fff" /> : <Icon name="send" size={15} color="#fff" />}<Text style={styles.primaryText}>{saving ? t("جارٍ إرسال الطلب...", "Sending request...") : selectedTeachers.length ? `${t("إرسال الطلب إلى", "Send request to")} ${selectedTeachers.length} ${t("معلم", "teachers")}` : t("حدد معلماً أولاً", "Select a teacher first")}</Text></Pressable> : null}
-            {requestSent ? <View accessibilityLiveRegion="polite" style={[styles.successBanner, { backgroundColor: colors.tealSoft, borderColor: colors.teal }]}><Icon name="check-circle" size={17} color={colors.teal} /><Text style={[styles.successText, { color: colors.teal }]}>{t("تم إرسال الطلب بنجاح. يمكنك متابعة حالته من صفحة الحجوزات.", "Request sent. You can track its status in Bookings.")}</Text></View> : null}
           </View>
         </>
       ) : role === "teacher" ? (
@@ -477,6 +481,15 @@ export default function InPersonScreen() {
           })}
         </>
       ) : <Text style={mutedStyle}>{t("الحساب غير جاهز.", "Account is not ready.")}</Text>}
+      <Modal visible={requestSent} transparent animationType="fade" onRequestClose={() => router.replace("/(tabs)/bookings")}>
+        <View style={styles.successOverlay}>
+          <View style={[styles.successModal, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.successIcon, { backgroundColor: colors.tealSoft }]}><Icon name="check-circle" size={28} color={colors.teal} /></View>
+            <Text style={[styles.cardTitle, textStyle]}>{t("تم إرسال الطلب بنجاح", "Request sent successfully")}</Text>
+            <Text style={[styles.successText, { color: colors.mutedForeground }]}>{t("سيتم نقلك إلى الحجوزات لمتابعة حالة الطلب.", "Taking you to Bookings to track your request.")}</Text>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -532,8 +545,10 @@ const styles = StyleSheet.create({
   dateValue: { fontSize: 11, fontFamily: "Inter_700Bold" },
   timeOption: { minHeight: 42, flexGrow: 1, flexBasis: "21%", borderWidth: 1, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
   selectionHint: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", textAlign: "right", writingDirection: "rtl" },
-  successBanner: { minHeight: 42, borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 7, flexDirection: "row", alignItems: "center", gap: 8 },
   successText: { flex: 1, fontSize: 11, lineHeight: 16, fontFamily: "Inter_600SemiBold", textAlign: "right", writingDirection: "rtl" },
+  successOverlay: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(10, 25, 45, 0.42)", padding: 24 },
+  successModal: { width: "100%", maxWidth: 340, alignItems: "center", gap: 10, borderWidth: 1, borderRadius: 22, padding: 24 },
+  successIcon: { width: 56, height: 56, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   teacherOption: { minHeight: 64, borderWidth: 1, borderRadius: 16, padding: 11, flexDirection: "row", alignItems: "center", gap: 10 },
   teacherAvatar: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   teacherName: { fontSize: 12, fontFamily: "Inter_700Bold" },

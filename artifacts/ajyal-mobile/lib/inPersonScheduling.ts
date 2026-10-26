@@ -23,6 +23,11 @@ export function firstAvailableInPersonSchedule(nowMs = Date.now()): string {
   return formatLocalDateTimeInput(new Date(earliest));
 }
 
+export function canConfirmInPersonAttendance(scheduledAt: string, nowMs = Date.now()): boolean {
+  const start = new Date(scheduledAt).getTime();
+  return Number.isFinite(start) && nowMs >= start && nowMs < start + 15 * 60 * 1000;
+}
+
 export function parseFutureInPersonDateTime(value: string, nowMs = Date.now()): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value.trim());
   if (!match) return null;

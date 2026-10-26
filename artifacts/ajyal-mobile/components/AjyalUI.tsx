@@ -169,9 +169,10 @@ export function SessionCard({ session, role, cancelled, onPress, onJoin, onCance
   const sessionTime = hasDate ? sessionDate.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' }) : session.time;
   const isWaitingAcceptance = session.sessionStatus === 'waiting_acceptance';
   const isInProgress = session.sessionStatus === 'in_progress';
+  const isInPerson = session.deliveryMode === 'in_person';
   const isConfirmedUpcoming = session.status === 'upcoming' && !isWaitingAcceptance;
-  const canJoin = role !== 'teacher' && isConfirmedUpcoming && isInProgress;
-  const showJoinControl = !cancelled && session.status === 'upcoming' && (role === 'student' || isConfirmedUpcoming);
+  const canJoin = role !== 'teacher' && !isInPerson && isConfirmedUpcoming && isInProgress;
+  const showJoinControl = !isInPerson && !cancelled && session.status === 'upcoming' && (role === 'student' || isConfirmedUpcoming);
   const statusColor = cancelled || session.status === 'expired'
     ? colors.destructive
     : session.status === 'done'
@@ -212,6 +213,7 @@ export function SessionCard({ session, role, cancelled, onPress, onJoin, onCance
       <View style={styles.sessionBody}>
         <View style={styles.sessionTopline}>
           <Text style={[styles.sessionSubject, { color: tone }]}>{session.subject}</Text>
+          {isInPerson ? <Text style={[styles.sessionModeTag, { color: colors.accentForeground, backgroundColor: colors.goldSoft }]}>{t('حضوري', 'In person')}</Text> : null}
           <View style={[styles.sessionStatusBadge, { backgroundColor: statusBackground }]}>
             <View style={[styles.sessionStatusDot, { backgroundColor: statusColor }]} />
             <Text style={[styles.sessionStatusText, { color: statusColor }]}>{statusLabel}</Text>
@@ -706,6 +708,7 @@ export const styles = StyleSheet.create({
   sessionBody: { flex: 1, alignItems: 'flex-end' },
   sessionTopline: { width: '100%', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sessionSubject: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+  sessionModeTag: { fontSize: 9, fontFamily: 'Inter_700Bold', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4, overflow: 'hidden' },
   sessionStatusBadge: { borderRadius: 8, paddingHorizontal: 6, paddingVertical: 4, flexDirection: 'row-reverse', alignItems: 'center', gap: 3 },
   sessionStatusDot: { width: 5, height: 5, borderRadius: 3 },
   sessionStatusText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },

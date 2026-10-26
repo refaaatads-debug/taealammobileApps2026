@@ -400,6 +400,7 @@ function mapRemoteSession(row: RemoteRow, userId: string, people: Map<string, Re
     time: formatTime(startsAt),
     scheduledAt: startsAt.toISOString(),
     duration: formatDuration(durationMinutes),
+    deliveryMode: remoteString(row, "delivery_mode", "deliveryMode") === "in_person" ? "in_person" : "online",
     tone: (["teal", "gold", "navy"].includes(remoteString(row, "tone") ?? "")
       ? remoteString(row, "tone")
       : "teal") as Tone,

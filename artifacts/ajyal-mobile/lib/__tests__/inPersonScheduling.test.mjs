@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
+import { canConfirmInPersonAttendance, firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
 
 test("round-trips local schedule input without converting it to UTC text", () => {
   const date = new Date(2026, 9, 26, 18, 45);
@@ -28,6 +28,15 @@ test("offers only hourly appointments at least two hours ahead", () => {
 test("starts with the first available hourly appointment", () => {
   const now = new Date(2026, 9, 26, 11, 15).getTime();
   assert.equal(firstAvailableInPersonSchedule(now), "2026-10-26T14:00");
+});
+
+test("only permits in-person code entry from the scheduled time through 15 minutes after", () => {
+  const startsAt = new Date(2026, 9, 26, 14, 0).getTime();
+  const scheduled = "2026-10-26T14:00:00";
+  assert.equal(canConfirmInPersonAttendance(scheduled, startsAt - 1), false);
+  assert.equal(canConfirmInPersonAttendance(scheduled, startsAt), true);
+  assert.equal(canConfirmInPersonAttendance(scheduled, startsAt + 14 * 60_000 + 59_999), true);
+  assert.equal(canConfirmInPersonAttendance(scheduled, startsAt + 15 * 60_000), false);
 });
 
 test("translates in-person request states without exposing raw server values", () => {
