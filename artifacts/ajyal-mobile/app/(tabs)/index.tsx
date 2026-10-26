@@ -9,7 +9,7 @@ import { useAuth } from '@/lib/auth';
 import { getReadChatMessageIds } from '@/lib/localChatReadState';
 import { getStudentUnreadChatMessageCount } from '@/lib/studentUnreadMessages';
 import { getAvailableTeacherBalance } from '@/lib/teacherFinance';
-import { getTeacherInPersonRequestCountQueryKey } from '@/lib/teacherBookingTaskSync';
+import { countOpenBookingRequestGroups, getTeacherInPersonRequestCountQueryKey } from '@/lib/teacherBookingTaskSync';
 import { supabase } from '@/lib/supabase';
 import { isAssignmentComplete } from '@/constants/localData';
 import { summarizePendingTeacherSubmissions } from '@/lib/teacherAssignmentTasks';
@@ -226,9 +226,11 @@ export default function HomeScreen() {
   );
   const teacherDashboard = teacherDashboardQuery.data;
   const studentDashboard = studentDashboardQuery.data;
-  const incomingOpenRequests = incomingRequestsQuery.data?.filter((request) => request.status === 'open').length;
+  const incomingOpenRequests = incomingRequestsQuery.data
+    ? countOpenBookingRequestGroups(incomingRequestsQuery.data)
+    : 0;
   const inPersonOpenRequests = teacherInPersonRequestsQuery.data ?? 0;
-  const openRequestCount = (incomingOpenRequests ?? teacherDashboard?.openRequests ?? 0) + inPersonOpenRequests;
+  const openRequestCount = incomingOpenRequests + inPersonOpenRequests;
   const dashboardSessions = isTeacher ? (teacherDashboard?.upcomingSessions ?? []) : (studentDashboard?.upcomingSessions ?? []);
   const firstSession = dashboardSessions[0];
   const unread = isTeacher ? (teacherDashboard?.unreadNotifications ?? 0) : (studentDashboard?.unreadNotifications ?? 0);
@@ -324,7 +326,7 @@ export default function HomeScreen() {
       icon: 'calendar',
       tone: 'teal',
       title: `${formatNumber(openRequestCount)} ${t('طلبات حصص بانتظار قرارك', 'lesson requests need your decision')}`,
-      body: `${formatNumber(incomingOpenRequests ?? teacherDashboard?.openRequests ?? 0)} ${t('عن بُعد', 'online')} · ${formatNumber(inPersonOpenRequests)} ${t('حضوري', 'in person')}`,
+      body: `${formatNumber(incomingOpenRequests)} ${t('عن بُعد', 'online')} · ${formatNumber(inPersonOpenRequests)} ${t('حضوري', 'in person')}`,
       onPress: () => router.push('/bookings'),
     });
   }
