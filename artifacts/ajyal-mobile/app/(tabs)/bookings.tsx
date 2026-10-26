@@ -458,7 +458,7 @@ export default function BookingsScreen() {
         <EmptyState icon="alert-circle" title={t('تعذر تحميل طلبات الحصص', 'Unable to load lesson requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); void inPersonRequestsQuery.refetch(); }} />
       ) : incomingRequestRows.length || pendingInPersonRequestRows.length ? (
         <View style={styles.requests}>
-          {pendingInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`teacher-in-person-${String(item.request_group_id ?? index)}`} item={item} role="teacher" onPress={() => router.push('/in-person')} />)}
+          {pendingInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`teacher-in-person-${String(item.request_group_id ?? index)}`} item={item} role="teacher" onDecisionComplete={() => { void Promise.all([inPersonRequestsQuery.refetch(), sessionsQuery.refetch(), historyQuery.refetch()]); }} />)}
           {incomingRequestRows.map(({ request, count, items }, index) => (
             <BookingRequestCard
               key={`upcoming-request-${request.groupId || request.id}-${request.id}-${index}`}
@@ -631,7 +631,7 @@ export default function BookingsScreen() {
         ) : selectedStudentRequestRows.length || selectedInPersonRequestRows.length ? (
           <View style={styles.requests}>
             {requestQuery.isError || inPersonRequestsQuery.isError ? <Text style={[styles.requestMeta, { color: colors.destructive, writingDirection: direction }]}>{t('تعذر تحديث بعض الطلبات؛ المعروض أدناه هو آخر محتوى متاح.', 'Some requests could not be refreshed; showing the latest available data below.')}</Text> : null}
-            {selectedInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`student-in-person-${String(item.request_group_id ?? index)}`} item={item} role="student" onPress={() => router.push('/in-person')} onConfirmed={() => { void Promise.all([inPersonRequestsQuery.refetch(), sessionsQuery.refetch(), historyQuery.refetch()]); }} />)}
+            {selectedInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`student-in-person-${String(item.request_group_id ?? index)}`} item={item} role="student" onConfirmed={() => { void Promise.all([inPersonRequestsQuery.refetch(), sessionsQuery.refetch(), historyQuery.refetch()]); }} />)}
             {selectedStudentRequestRows.map(({ request, count, items }) => (
               <BookingRequestCard
                 key={`${selectedStudentRequest.key}-${request.groupId || request.id}-${request.id}`}
@@ -1046,13 +1046,14 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
   );
 }
 
-function InPersonRequestCard({ item, role, onPress, onConfirmed }: { item: Record<string, unknown>; role: 'teacher' | 'student'; onPress: () => void; onConfirmed?: () => void }) {
+function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete }: { item: Record<string, unknown>; role: 'teacher' | 'student'; onConfirmed?: () => void; onDecisionComplete?: () => void }) {
   const colors = useColors();
   const { t, locale, direction } = useAppPreferences();
   const [codeModalOpen, setCodeModalOpen] = useState(false);
   const [attendanceCode, setAttendanceCode] = useState('');
   const [codeError, setCodeError] = useState('');
   const [codeBusy, setCodeBusy] = useState(false);
+  const [decisionBusy, setDecisionBusy] = useState(false);
   const [attendanceConfirmed, setAttendanceConfirmed] = useState(Boolean(item.attendance_confirmed_at));
   const status = String(item.status ?? 'open');
   const isOpen = status === 'open';
@@ -1064,7 +1065,7 @@ function InPersonRequestCard({ item, role, onPress, onConfirmed }: { item: Recor
   const dateLabel = time && !Number.isNaN(time.getTime())
     ? `${time.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' })} · ${time.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })}`
     : t('موعد غير محدد', 'Time not specified');
-  const title = String(item.subject_name ?? t('حصة حضورية', 'In-person lesson'));
+  const subjectTitle = String(item.subject_name ?? '').trim();
   const person = role === 'teacher' ? item.student_name : item.teacher_name;
   const personLabel = typeof person === 'string' && person.trim() ? person : '';
   const addressSnapshot = item.visit_address_snapshot && typeof item.visit_address_snapshot === 'object'
@@ -1095,13 +1096,30 @@ function InPersonRequestCard({ item, role, onPress, onConfirmed }: { item: Recor
     setAttendanceCode('');
     onConfirmed?.();
   };
+  const decideRequest = async (decision: 'accept' | 'reject') => {
+    const groupId = typeof item.request_group_id === 'string' ? item.request_group_id : '';
+    if (!supabase || !groupId || decisionBusy) return;
+    setDecisionBusy(true);
+    const { data, error } = await supabase.rpc(decision === 'accept' ? 'accept_in_person_request' : 'reject_in_person_request', { p_request_group_id: groupId });
+    setDecisionBusy(false);
+    if (error) {
+      Alert.alert(t('تعذر تحديث الطلب', 'Could not update request'), error.message || t('تحقق من الاتصال وحاول مرة أخرى.', 'Check your connection and try again.'));
+      return;
+    }
+    if (decision === 'reject' && data !== true) {
+      Alert.alert(t('تمت معالجة الطلب', 'Request already handled'), t('قد يكون معلم آخر قبله أو انتهت مهلة القبول.', 'Another teacher may have accepted it, or it may have expired.'));
+    } else {
+      Alert.alert(decision === 'accept' ? t('تم قبول الحصة', 'Lesson accepted') : t('تم رفض الطلب', 'Request declined'));
+    }
+    onDecisionComplete?.();
+  };
   return (
     <View style={[styles.requestCard, { backgroundColor: colors.card, borderColor: colors.border, borderRightColor: colors.teal }]}>
       <View style={styles.requestTop}>
         <View style={styles.requestTopToggle}>
           <View style={[styles.requestStatus, { backgroundColor: colors.tealSoft }]}><Text style={[styles.requestStatusText, { color: colors.teal }]}>{t('حضوري', 'In person')}</Text></View>
           <View style={[styles.requestStatus, { backgroundColor: isOpen ? colors.goldSoft : colors.navySoft }]}><Text style={[styles.requestStatusText, { color: isOpen ? colors.accentForeground : colors.primary }]}>{isOpen ? t('طلب جديد', 'New request') : t('مقبول', 'Accepted')}</Text></View>
-          <Text style={[styles.inPersonRequestTitle, { color: colors.foreground, writingDirection: direction }]}>{title}</Text>
+          {subjectTitle && subjectTitle !== 'تاريخ' ? <Text numberOfLines={1} style={[styles.inPersonRequestTitle, { color: colors.foreground, writingDirection: direction }]}>{subjectTitle}</Text> : null}
         </View>
       </View>
       <View style={styles.inPersonRequestDetails}>
@@ -1121,10 +1139,14 @@ function InPersonRequestCard({ item, role, onPress, onConfirmed }: { item: Recor
       ) : null}
       {role === 'student' && isOpen && !personLabel ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{t('الطلب متاح للمعلمين؛ يظهر اسم المعلم بعد القبول.', 'The request is available to teachers; the teacher’s name appears after acceptance.')}</Text> : null}
       {role === 'teacher' ? (
-        <Pressable onPress={onPress} style={[styles.requestCancelButton, { borderColor: colors.teal }]}>
-          <Icon name="map-pin" size={14} color={colors.teal} />
-          <Text style={[styles.requestCancelText, { color: colors.teal }]}>{t('إدارة طلب الحضوري', 'Manage in-person request')}</Text>
-        </Pressable>
+        <View style={styles.inPersonDecisionActions}>
+          <Pressable disabled={decisionBusy} onPress={() => void decideRequest('reject')} style={[styles.requestButton, styles.inPersonRejectButton, { borderColor: colors.destructive, opacity: decisionBusy ? 0.55 : 1 }]}>
+            <Text style={[styles.requestButtonText, { color: colors.destructive }]}>{t('رفض الطلب', 'Decline')}</Text>
+          </Pressable>
+          <Pressable disabled={decisionBusy} onPress={() => void decideRequest('accept')} style={[styles.requestButton, { backgroundColor: colors.teal, borderColor: colors.teal, opacity: decisionBusy ? 0.55 : 1 }]}>
+            <Text style={[styles.requestButtonText, { color: colors.primaryForeground }]}>{decisionBusy ? t('جارٍ التحديث…', 'Updating…') : t('قبول الحصة', 'Accept lesson')}</Text>
+          </Pressable>
+        </View>
       ) : null}
       <Modal visible={codeModalOpen} transparent animationType="fade" onRequestClose={() => setCodeModalOpen(false)}>
         <View style={{ flex: 1, justifyContent: 'center', padding: 22, backgroundColor: 'rgba(10,25,45,0.45)' }}>
@@ -1243,13 +1265,15 @@ const styles = StyleSheet.create({
   requestDeleteButton: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   requestSubject: { flex: 1, fontSize: 14, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   requestSubjectCompact: { fontSize: 12 },
+  inPersonRequestTitle: { flex: 1, fontSize: 12, lineHeight: 16, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   requestStatus: { borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6 },
   requestStatusText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   requestMeta: { fontSize: 10, lineHeight: 16, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
-  inPersonRequestTitle: { flex: 1, fontSize: 12, lineHeight: 16, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   inPersonRequestDetails: { gap: 4, paddingVertical: 2 },
   inPersonRequestDetailLine: { flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
   inPersonRequestDetailText: { flex: 1, fontSize: 10, lineHeight: 15, fontFamily: 'Inter_500Medium', textAlign: 'right', writingDirection: 'rtl' },
+  inPersonDecisionActions: { flexDirection: 'row-reverse', gap: 7, marginTop: 3 },
+  inPersonRejectButton: { backgroundColor: 'transparent' },
   inPersonSessionFooter: { gap: 5 },
   inPersonLocation: { minHeight: 30, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
   inPersonLocationText: { flex: 1, fontSize: 10, lineHeight: 14, fontFamily: 'Inter_500Medium', textAlign: 'right' },
