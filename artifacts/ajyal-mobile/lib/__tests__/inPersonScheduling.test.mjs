@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canConfirmInPersonAttendance, firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
+import { canConfirmInPersonAttendance, firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonAttendanceAction, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "../inPersonScheduling.ts";
 
 test("round-trips local schedule input without converting it to UTC text", () => {
   const date = new Date(2026, 9, 26, 18, 45);
@@ -37,6 +37,15 @@ test("only permits in-person code entry from the scheduled time through 15 minut
   assert.equal(canConfirmInPersonAttendance(scheduled, startsAt), true);
   assert.equal(canConfirmInPersonAttendance(scheduled, startsAt + 14 * 60_000 + 59_999), true);
   assert.equal(canConfirmInPersonAttendance(scheduled, startsAt + 15 * 60_000), false);
+});
+
+test("shows the in-person attendance action only during its valid window", () => {
+  const scheduled = "2026-10-26T14:00:00";
+  const start = new Date(2026, 9, 26, 14, 0).getTime();
+  assert.equal(inPersonAttendanceAction(scheduled, "not_started", start - 1), "waiting");
+  assert.equal(inPersonAttendanceAction(scheduled, "not_started", start), "enter_code");
+  assert.equal(inPersonAttendanceAction(scheduled, "not_started", start + 15 * 60_000), "expired");
+  assert.equal(inPersonAttendanceAction(scheduled, "in_progress", start + 20 * 60_000), "confirmed");
 });
 
 test("translates in-person request states without exposing raw server values", () => {

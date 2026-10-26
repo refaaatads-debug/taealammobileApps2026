@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { Icon, SectionHeading } from '@/components/AjyalUI';
 import type { Session } from '@/constants/localData';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
+import { inPersonAttendanceAction } from '@/lib/inPersonScheduling';
+import { supabase } from '@/lib/supabase';
 
 type ScheduleMode = 'week' | 'month';
 
@@ -41,10 +43,15 @@ function formatEventTime(session: Session, locale: string) {
 }
 
 function sessionStatusLabel(session: Session, t: (arabic: string, english: string) => string) {
+  if (session.deliveryMode === 'in_person') {
+    const action = inPersonAttendanceAction(session.scheduledAt, session.sessionStatus);
+    if (action === 'waiting' || action === 'enter_code') return t('بانتظار حضور المعلم للحصة', 'Waiting for the teacher to attend the lesson');
+    if (action === 'confirmed') return t('تم تأكيد الحضور', 'Attendance confirmed');
+  }
   if (session.status === 'expired') return t('منتهى', 'Expired');
   if (session.status === 'done') return t('مكتمل', 'Completed');
   if (session.status === 'cancelled') return t('ملغى', 'Cancelled');
-  if (session.sessionStatus === 'in_progress') return t('جارية الآن', 'In progress');
+  if (session.sessionStatus === 'in_progress') return session.deliveryMode === 'in_person' ? t('تم تأكيد الحضور', 'Attendance confirmed') : t('جارية الآن', 'In progress');
   return t('قادمة', 'Upcoming');
 }
 
@@ -53,11 +60,13 @@ export default function BookingsSchedule({
   role,
   onSessionPress,
   onJoinSession,
+  onAttendanceConfirmed,
 }: {
   sessions: Session[];
   role: 'student' | 'teacher';
   onSessionPress?: (session: Session) => void;
   onJoinSession?: (session: Session) => void;
+  onAttendanceConfirmed?: () => void;
 }) {
   const colors = useColors();
   const { t, locale, direction, formatNumber } = useAppPreferences();
@@ -65,6 +74,26 @@ export default function BookingsSchedule({
   const [mode, setMode] = useState<ScheduleMode>('week');
   const [cursor, setCursor] = useState(() => startOfDay(new Date()));
   const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [attendanceSession, setAttendanceSession] = useState<Session | null>(null);
+  const [attendanceCode, setAttendanceCode] = useState('');
+  const [attendanceError, setAttendanceError] = useState('');
+  const [attendanceSuccess, setAttendanceSuccess] = useState(false);
+  const [attendanceBusy, setAttendanceBusy] = useState(false);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!attendanceSuccess) return;
+    const timer = setTimeout(() => {
+      setAttendanceSuccess(false);
+      setAttendanceSession(null);
+      setAttendanceCode('');
+    }, 1700);
+    return () => clearTimeout(timer);
+  }, [attendanceSuccess]);
 
   const parsedSessions = useMemo(
     () => sessions
@@ -126,6 +155,30 @@ export default function BookingsSchedule({
     setSelectedDay(startOfDay(day));
     if (mode === 'month' && (day.getMonth() !== cursor.getMonth())) {
       setCursor(startOfDay(day));
+    }
+  };
+
+  const submitAttendanceCode = async () => {
+    if (!supabase || !attendanceSession || !attendanceCode.trim() || attendanceBusy) return;
+    setAttendanceBusy(true);
+    setAttendanceError('');
+    try {
+      const { data, error } = await supabase.rpc('confirm_in_person_attendance_code', {
+        p_booking_id: attendanceSession.id,
+        p_code: attendanceCode.trim(),
+      });
+      if (error) throw error;
+      if (data !== true) {
+        setAttendanceCode('');
+        setAttendanceError(t('الكود خطأ، أعد إدخاله.', 'Incorrect code. Enter it again.'));
+        return;
+      }
+      setAttendanceSuccess(true);
+      onAttendanceConfirmed?.();
+    } catch (error) {
+      setAttendanceError(error instanceof Error ? error.message : t('تعذر التحقق من الكود. أعد المحاولة.', 'Could not verify the code. Try again.'));
+    } finally {
+      setAttendanceBusy(false);
     }
   };
 
@@ -201,10 +254,39 @@ export default function BookingsSchedule({
                  <Text style={[styles.eventPerson, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{session.person}</Text>
               </View>
                <View style={styles.eventStatus}>
-                 <Text style={[styles.eventStatusText, { color: session.status === 'cancelled' || session.status === 'expired' ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal, writingDirection: direction }]}>{sessionStatusLabel(session, t)}</Text>
-                 <View style={[styles.statusDot, { backgroundColor: session.status === 'cancelled' || session.status === 'expired' ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal }]} />
+                  <Text style={[styles.eventStatusText, { color: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal, writingDirection: direction }]}>{sessionStatusLabel(session, t)}</Text>
+                  <View style={[styles.statusDot, { backgroundColor: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal }]} />
                </View>
-                {role === 'student' && session.status === 'upcoming' ? (
+                 {role === 'student' && (session.status === 'upcoming' || session.status === 'expired') && session.deliveryMode === 'in_person' ? (() => {
+                   const action = inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs);
+                   if (action === 'enter_code') return (
+                     <Pressable
+                       testID={`schedule-attendance-code-${session.id}`}
+                       accessibilityRole="button"
+                       onPress={(event) => {
+                         event.stopPropagation();
+                         setAttendanceSession(session);
+                         setAttendanceError('');
+                         setAttendanceCode('');
+                       }}
+                       style={({ pressed }) => [styles.scheduleJoinButton, { backgroundColor: colors.teal, borderColor: colors.teal }, pressed && styles.pressed]}
+                     >
+                       <Icon name="key" size={12} color={colors.primaryForeground} />
+                       <Text style={[styles.scheduleJoinText, { color: colors.primaryForeground, writingDirection: direction }]}>{t('إدخال كود الحضور', 'Enter attendance code')}</Text>
+                     </Pressable>
+                   );
+                   const statusText = action === 'confirmed'
+                     ? t('تم تأكيد الحضور وبدء الحصة', 'Attendance confirmed; session started')
+                     : action === 'expired'
+                       ? t('انتهت مهلة إدخال الكود', 'Code entry period ended')
+                       : t('بانتظار حضور المعلم للحصة', 'Waiting for the teacher to attend the lesson');
+                   return (
+                     <View style={[styles.scheduleJoinButton, { backgroundColor: action === 'expired' ? 'rgba(234,62,62,0.08)' : colors.muted, borderColor: action === 'expired' ? colors.destructive : colors.border }]}>
+                       <Icon name={action === 'confirmed' ? 'check-circle' : action === 'expired' ? 'x-circle' : 'clock'} size={12} color={action === 'expired' ? colors.destructive : colors.mutedForeground} />
+                       <Text style={[styles.scheduleJoinText, { color: action === 'expired' ? colors.destructive : colors.mutedForeground, writingDirection: direction }]}>{statusText}</Text>
+                     </View>
+                   );
+                 })() : role === 'student' && session.status === 'upcoming' ? (
                   <Pressable
                     testID={`schedule-join-session-${session.id}`}
                     accessibilityRole="button"
@@ -242,7 +324,43 @@ export default function BookingsSchedule({
          <Text style={[styles.periodHint, { color: colors.mutedForeground, writingDirection: direction }]}>{t('اختر يوماً لعرض الحجوزات المسجلة فيه.', 'Choose a day to view its bookings.')}</Text>
       ) : (
          <Text style={[styles.periodHint, { color: colors.mutedForeground, writingDirection: direction }]}>{t('لا توجد حجوزات في هذه الفترة.', 'No bookings in this period.')}</Text>
-      )}
+       )}
+       <Modal visible={Boolean(attendanceSession)} transparent animationType="fade" onRequestClose={() => { if (!attendanceBusy) setAttendanceSession(null); }}>
+         <View style={styles.modalOverlay}>
+           <View style={[styles.attendanceModal, { backgroundColor: colors.card, borderColor: colors.border }]}>
+             {attendanceSuccess ? (
+               <>
+                 <Icon name="check-circle" size={34} color={colors.teal} />
+                 <Text style={[styles.eventTitle, { color: colors.teal, textAlign: 'center' }]}>{t('تم تأكيد الحضور وبدء الحصة الحضورية', 'Attendance confirmed; in-person session started')}</Text>
+               </>
+             ) : (
+               <>
+                 <Text style={[styles.eventTitle, { color: colors.foreground, writingDirection: direction }]}>{t('إدخال كود الحضور', 'Enter attendance code')}</Text>
+                 <Text style={[styles.eventPerson, { color: colors.mutedForeground, writingDirection: direction }]}>{t('أدخل الكود الذي يعرضه المعلم. يُتاح الإدخال من موعد الحصة وحتى 15 دقيقة بعده.', 'Enter the code shown by the teacher. Code entry is available from the scheduled time until 15 minutes after.')}</Text>
+                 <TextInput
+                   autoFocus
+                   value={attendanceCode}
+                   onChangeText={(value) => { setAttendanceCode(value); setAttendanceError(''); }}
+                   keyboardType="number-pad"
+                   maxLength={12}
+                   placeholder={t('كود الحضور', 'Attendance code')}
+                   placeholderTextColor={colors.mutedForeground}
+                   style={[styles.attendanceInput, { color: colors.foreground, borderColor: attendanceError ? colors.destructive : colors.border }]}
+                 />
+                 {attendanceError ? <Text accessibilityRole="alert" style={[styles.attendanceError, { color: colors.destructive }]}>{attendanceError}</Text> : null}
+                 <View style={styles.modalActions}>
+                   <Pressable disabled={attendanceBusy || !attendanceCode.trim()} onPress={() => void submitAttendanceCode()} style={[styles.modalButton, { backgroundColor: colors.teal, opacity: attendanceBusy || !attendanceCode.trim() ? 0.55 : 1 }]}>
+                     {attendanceBusy ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.modalButtonText, { color: colors.primaryForeground }]}>{t('تأكيد وبدء الحصة', 'Confirm and start')}</Text>}
+                   </Pressable>
+                   <Pressable disabled={attendanceBusy} onPress={() => setAttendanceSession(null)} style={[styles.modalButton, { borderColor: colors.border, borderWidth: 1 }]}>
+                     <Text style={[styles.modalButtonText, { color: colors.mutedForeground }]}>{t('إلغاء', 'Cancel')}</Text>
+                   </Pressable>
+                 </View>
+               </>
+             )}
+           </View>
+         </View>
+       </Modal>
     </View>
   );
 }
@@ -282,6 +400,13 @@ const styles = StyleSheet.create({
   eventStatus: { alignItems: 'center', gap: 4 },
   eventStatusText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   scheduleJoinButton: { minHeight: 30, maxWidth: 104, borderRadius: 9, borderWidth: 1, paddingHorizontal: 7, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(10,25,45,0.45)', alignItems: 'center', justifyContent: 'center', padding: 22 },
+  attendanceModal: { width: '100%', maxWidth: 360, borderRadius: 20, borderWidth: 1, padding: 18, gap: 12 },
+  attendanceInput: { minHeight: 48, borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, textAlign: 'center', fontSize: 18, letterSpacing: 4 },
+  attendanceError: { fontSize: 12, textAlign: 'right', writingDirection: 'rtl' },
+  modalActions: { flexDirection: 'row', gap: 8 },
+  modalButton: { minHeight: 44, flex: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 9 },
+  modalButtonText: { fontSize: 11, fontFamily: 'Inter_700Bold', textAlign: 'center' },
   scheduleJoinText: { fontSize: 8, lineHeight: 11, fontFamily: 'Inter_700Bold', textAlign: 'center' },
   periodHint: { fontSize: 10, textAlign: 'center', writingDirection: 'rtl', paddingVertical: 12 },
   pressed: { opacity: 0.72 },

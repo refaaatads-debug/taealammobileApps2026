@@ -202,7 +202,9 @@ export function SessionCard({ session, role, cancelled, onPress, onJoin, onCance
         : isWaitingAcceptance
           ? role === 'teacher'
             ? t('بانتظار بدء الحصة من الكمبيوتر', 'Waiting to start from computer')
-            : t('بانتظار دخول المعلم', 'Waiting for teacher to join')
+            : isInPerson
+              ? t('بانتظار حضور المعلم للحصة', 'Waiting for the teacher to attend the lesson')
+              : t('بانتظار دخول المعلم', 'Waiting for teacher to join')
           : t('قادمة', 'Upcoming');
   return (
     <Pressable testID={`session-${session.id}`} onPress={onPress} style={({ pressed }) => [styles.sessionCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && styles.cardPressed]}>

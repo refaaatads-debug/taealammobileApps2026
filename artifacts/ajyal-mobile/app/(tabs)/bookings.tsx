@@ -684,6 +684,7 @@ export default function BookingsScreen() {
             role={role === 'teacher' ? 'teacher' : 'student'}
             onSessionPress={(session) => openSession(session.id)}
             onJoinSession={(session) => router.push({ pathname: '/live-session', params: { booking: session.id } })}
+            onAttendanceConfirmed={() => { void Promise.all([sessionsQuery.refetch(), historyQuery.refetch(), inPersonRequestsQuery.refetch()]); }}
           />
         ) : null}
         <Modal visible={Boolean(cancelTarget)} transparent animationType="fade" onRequestClose={() => setCancelTarget(null)}>

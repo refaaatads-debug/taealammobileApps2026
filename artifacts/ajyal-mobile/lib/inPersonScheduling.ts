@@ -28,6 +28,18 @@ export function canConfirmInPersonAttendance(scheduledAt: string, nowMs = Date.n
   return Number.isFinite(start) && nowMs >= start && nowMs < start + 15 * 60 * 1000;
 }
 
+export function inPersonAttendanceAction(
+  scheduledAt: string,
+  sessionStatus: string | null | undefined,
+  nowMs = Date.now(),
+): 'waiting' | 'enter_code' | 'expired' | 'confirmed' {
+  if (sessionStatus === 'in_progress') return 'confirmed';
+  const start = new Date(scheduledAt).getTime();
+  if (!Number.isFinite(start)) return 'waiting';
+  if (nowMs >= start + 15 * 60 * 1000) return 'expired';
+  return nowMs >= start ? 'enter_code' : 'waiting';
+}
+
 export function parseFutureInPersonDateTime(value: string, nowMs = Date.now()): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value.trim());
   if (!match) return null;
