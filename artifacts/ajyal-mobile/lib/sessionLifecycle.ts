@@ -11,3 +11,12 @@ export function isSessionEnded(snapshot: SessionLifecycleSnapshot): boolean {
     || terminalStatuses.has(snapshot.sessionStatus ?? "")
     || terminalStatuses.has(snapshot.bookingStatus ?? "");
 }
+
+export function shouldRetrySessionEndRequest(
+  snapshot: SessionLifecycleSnapshot,
+  now: number,
+  nextRetryAt: number,
+  deadline: number,
+): boolean {
+  return !isSessionEnded(snapshot) && now >= nextRetryAt && now < deadline;
+}

@@ -60,6 +60,10 @@ export function readPlatformWhiteboardVisibility(input: unknown): boolean | null
   return firstBoolean(sources, ['open', 'enabled', 'active', 'isSharing']);
 }
 
+export function resolveWhiteboardStateVisibility(open: boolean | null): boolean {
+  return open ?? true;
+}
+
 /**
  * Reads the platform contract (`allow`) plus older permission aliases.
  */
