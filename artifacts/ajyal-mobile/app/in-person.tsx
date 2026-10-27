@@ -78,6 +78,7 @@ export default function InPersonScreen() {
   const [teacherRadius, setTeacherRadius] = useState("10");
   const [attendanceCodes, setAttendanceCodes] = useState<Record<string, string>>({});
   const addressIdRef = useRef(addressId);
+  const searchRequestIdRef = useRef(0);
   addressIdRef.current = addressId;
 
   const isTeacher = role === "teacher";
@@ -103,6 +104,8 @@ export default function InPersonScreen() {
     return () => clearTimeout(timer);
   }, [requestSent]);
   const load = useCallback(async () => {
+    searchRequestIdRef.current += 1;
+    setSaving(false);
     if (!supabase || !user?.id || (role !== "student" && role !== "teacher")) {
       setLoading(false);
       setError(t("يلزم تسجيل الدخول بحساب طالب أو معلم.", "Sign in with a student or teacher account."));
@@ -220,10 +223,12 @@ export default function InPersonScreen() {
       setError(t("اختر المرحلة والمدينة والعنوان والمادة المرتبطة بها وموعداً بعد ساعتين على الأقل.", "Choose a stage, city, address, its related subject, and a time at least two hours ahead."));
       return;
     }
+    const searchRequestId = ++searchRequestIdRef.current;
     setSaving(true); setError(""); setRequestSent(false); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
     const result = await supabase.rpc("search_in_person_teachers", {
       p_city_id: cityId, p_subject_id: subjectId, p_address_id: addressId, p_scheduled_at: date.toISOString(), p_teaching_stage: teachingStage,
     });
+    if (searchRequestId !== searchRequestIdRef.current) return;
     setSaving(false);
     if (result.error) {
       setError(errorText(result.error, t("تعذر البحث عن المعلمين.", "Teacher search failed.")));
@@ -311,6 +316,8 @@ export default function InPersonScreen() {
                   onPress={() => {
                     setCityId(city.id);
                      setRequestSent(false);
+                    searchRequestIdRef.current += 1;
+                    setSaving(false);
                     const cityAddress = selectSavedAddress(addresses.filter((address) => address.city_id === city.id), "");
                     setAddressId(cityAddress?.id ?? "");
                     setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
@@ -347,6 +354,8 @@ export default function InPersonScreen() {
                 onChange={(id) => {
                   const address = addresses.find((item) => item.id === id);
                   if (!address) return;
+                  searchRequestIdRef.current += 1;
+                  setSaving(false);
                   setAddressId(address.id); setCityId(address.city_id); setRequestSent(false);
                   setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
                 }}

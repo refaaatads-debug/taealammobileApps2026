@@ -40,8 +40,8 @@ type ConsumptionRecord = {
   deliveryMode: string;
   recordStatus: string;
   packageMinutes: number;
+  teachingMinutes: number;
   actualMinutes: number;
-  releasedMinutes: number;
   shortSession: boolean;
   scheduledAt: string | null;
   startedAt: string | null;
@@ -363,29 +363,15 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
       const subscriptionIds = subscriptions.map((row) => text(row, "id")).filter(Boolean) as string[];
       const subscriptionById = new Map(subscriptions.map((row) => [String(row.id), row]));
       const planById = new Map(((plansResult.data ?? []) as Row[]).map((row) => [String(row.id), row]));
-      const reservationQuery = subscriptionIds.length
-        ? supabase.from("in_person_credit_reservations")
-          .select("booking_id,subscription_id,reserved_minutes,consumed_minutes,released_minutes,status")
-          .in("subscription_id", subscriptionIds)
-        : Promise.resolve({ data: [], error: null });
-      const [bookingsResult, reservationsResult] = await Promise.all([
-        supabase
-          .from("bookings")
-          .select("id, teacher_id, subject_id, subjects(name), scheduled_at, subscription_id, status, delivery_mode, balance_cost_minutes, in_person_package_minutes")
-          .eq("student_id", user.id)
-          .order("scheduled_at", { ascending: false })
-          .limit(500),
-        reservationQuery,
-      ]);
+      const bookingsResult = await supabase
+        .from("bookings")
+        .select("id, teacher_id, subject_id, subjects(name), scheduled_at, subscription_id, status, delivery_mode, duration_minutes, instruction_duration_minutes, balance_cost_minutes, in_person_package_minutes")
+        .eq("student_id", user.id)
+        .in("subscription_id", subscriptionIds.length ? subscriptionIds : ["00000000-0000-0000-0000-000000000000"])
+        .order("scheduled_at", { ascending: false })
+        .limit(500);
       if (bookingsResult.error) throw bookingsResult.error;
-      if (reservationsResult.error) throw reservationsResult.error;
-      const bookingRows = (bookingsResult.data ?? []) as Row[];
-      const reservationsByBooking = new Map((reservationsResult.data ?? []).map((reservation) => [String(reservation.booking_id), reservation as Row]));
-      const bookings = bookingRows.filter((booking) => {
-        const reservation = reservationsByBooking.get(String(booking.id));
-        const subscriptionId = text(reservation ?? booking, "subscription_id");
-        return Boolean(subscriptionId && subscriptionById.has(subscriptionId));
-      });
+      const bookings = (bookingsResult.data ?? []) as Row[];
       if (bookings.length) {
         const bookingIds = bookings.map((booking) => String(booking.id));
         const teacherIds = [...new Set(bookings.map((booking) => text(booking, "teacher_id")).filter(Boolean))] as string[];
@@ -428,12 +414,13 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
         deductions = bookings.map((booking) => {
           const bookingId = String(booking.id);
           const session = sessionsByBooking.get(bookingId);
-          const reservation = reservationsByBooking.get(bookingId);
           const teacherId = text(booking, "teacher_id") ?? "";
           const nestedSubject = booking.subjects && typeof booking.subjects === "object" ? text(booking.subjects as Row, "name") : null;
           const deliveryMode = text(booking, "delivery_mode") ?? "online";
-          const minutes = session ? actualMinutes(session) : number(reservation ?? {}, "consumed_minutes") ?? 0;
-          const subscriptionId = text(reservation ?? booking, "subscription_id");
+          const minutes = session
+            ? number(session, "deducted_minutes") ?? (deliveryMode === "in_person" ? 0 : actualMinutes(session))
+            : 0;
+          const subscriptionId = text(booking, "subscription_id");
           const subscription = subscriptionId ? subscriptionById.get(subscriptionId) : undefined;
           const plan = subscription ? planById.get(String(subscription.plan_id)) : undefined;
           return {
@@ -442,10 +429,10 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
             teacherName: namesByTeacher.get(teacherId) ?? "معلم",
             packageName: plan ? text(plan, "name_ar", "name", "title") ?? "باقة تعليمية" : "باقة تعليمية",
             deliveryMode,
-            recordStatus: text(reservation ?? {}, "status") ?? text(booking, "status") ?? "unknown",
-            packageMinutes: number(reservation ?? {}, "reserved_minutes") ?? number(booking, "in_person_package_minutes", "balance_cost_minutes") ?? number(session ?? {}, "deducted_minutes") ?? 0,
+            recordStatus: text(booking, "status") ?? "unknown",
+            packageMinutes: number(booking, "in_person_package_minutes", "balance_cost_minutes") ?? number(session ?? {}, "deducted_minutes") ?? 0,
+            teachingMinutes: number(booking, "instruction_duration_minutes", "duration_minutes") ?? (session ? actualMinutes(session) : 0),
             actualMinutes: minutes,
-            releasedMinutes: number(reservation ?? {}, "released_minutes") ?? 0,
             shortSession: Boolean(session && minutes > 0 && minutes < 5) || boolean(session ?? {}, "short_session") === true,
             scheduledAt: text(booking, "scheduled_at"),
             startedAt: text(session ?? {}, "started_at"),
@@ -617,11 +604,11 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
               </View>
                <ValueRow label={t("موعد الجلسة", "Session time")} value={dateTimeLabel(record.scheduledAt ?? record.startedAt, locale)} />
                <ValueRow label={t("نوع الجلسة", "Session type")} value={record.deliveryMode === "in_person" ? t("حضوري", "In person") : t("أونلاين", "Online")} />
-               <ValueRow label={t("حالة الحجز", "Booking status")} value={record.recordStatus} />
+               <ValueRow label={t("حالة الحجز", "Booking status")} value={record.recordStatus === "completed" ? t("مكتملة", "Completed") : record.recordStatus === "confirmed" ? t("مؤكدة", "Confirmed") : record.recordStatus === "cancelled" ? t("ملغاة", "Cancelled") : record.recordStatus === "pending" ? t("قيد الانتظار", "Pending") : record.recordStatus} />
                <ValueRow label={t("دقائق الباقة", "Plan minutes")} value={`${formatNumber(record.packageMinutes)} ${t("دقيقة", "min")}`} />
+               <ValueRow label={t("مدة التدريس", "Teaching duration")} value={`${formatNumber(record.teachingMinutes)} ${t("دقيقة", "min")}`} />
                <ValueRow label={record.deliveryMode === "in_person" ? t("الدقائق المستهلكة من الرصيد", "Credit minutes consumed") : t("الدقائق المخصومة", "Minutes deducted")} value={`${formatNumber(record.actualMinutes)} ${t("دقيقة", "min")}`} />
-               {record.releasedMinutes > 0 ? <ValueRow label={t("الدقائق المعادة", "Minutes refunded")} value={`${formatNumber(record.releasedMinutes)} ${t("دقيقة", "min")}`} /> : null}
-               <ValueRow label={t("حالة الاستهلاك", "Usage status")} value={record.shortSession ? t("أقل من 5 دقائق", "Under 5 minutes") : record.actualMinutes > 0 ? t("تم الاستهلاك", "Consumed") : record.releasedMinutes > 0 ? t("أعيد للباقة", "Returned to plan") : t(record.recordStatus, record.recordStatus)} />
+               <ValueRow label={t("حالة الاستهلاك", "Usage status")} value={record.shortSession ? t("أقل من 5 دقائق", "Under 5 minutes") : record.actualMinutes > 0 ? t("تم الاستهلاك", "Consumed") : t(record.recordStatus, record.recordStatus)} />
                {record.shortSession ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("الجلسة أقل من 5 دقائق، لذلك لم يتم الخصم من الباقة.", "The session was under 5 minutes, so no plan minutes were deducted.")}</Text> : null}
             </View>
           ))}

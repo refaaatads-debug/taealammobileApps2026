@@ -98,6 +98,8 @@ export default function BookingsScreen() {
     enabled: roleResolved && Boolean(profile?.id) && Boolean(supabase),
     staleTime: 15_000,
     refetchInterval: roleResolved ? (role === 'teacher' ? 20_000 : 60_000) : false,
+    refetchOnReconnect: true,
+    refetchOnWindowFocus: true,
     queryFn: async () => {
       if (!supabase) return [];
       const result = await supabase.rpc(role === 'teacher' ? 'list_teacher_in_person_requests_priced' : 'list_my_in_person_request_groups');
@@ -328,7 +330,7 @@ export default function BookingsScreen() {
           const notification = payload.new as Record<string, unknown>;
           if (!isTeacherBookingNotification(notification.type)) return;
           void requestQuery.refetch();
-          void inPersonRequestsQuery.refetch();
+          void queryClient.invalidateQueries({ queryKey: ['in-person-request-groups', role, profile.id] });
           void sessionsQuery.refetch();
           void historyQuery.refetch();
           void queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] });
