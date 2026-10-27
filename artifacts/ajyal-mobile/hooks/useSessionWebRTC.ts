@@ -159,8 +159,9 @@ export function useSessionWebRTC({
   const remoteTracksRef = useRef<any[]>([]);
   const rtcRef = useRef<RtcModule | null>(null);
   const agoraEngineRef = useRef<any>(null);
+  const agoraWebSessionRef = useRef<any>(null);
   const agoraModuleRef = useRef<any>(null);
-  const agoraRemoteUidRef = useRef<number | null>(null);
+  const agoraRemoteUidRef = useRef<string | number | null>(null);
   const transportProviderRef = useRef<'unknown' | 'webrtc' | 'agora'>('unknown');
   const agoraDataReadyRef = useRef(false);
   const pendingAgoraDataRef = useRef<SessionDataMessage[]>([]);
@@ -191,8 +192,11 @@ export function useSessionWebRTC({
   const [dataChannelState, setDataChannelState] = useState<'closed' | 'connecting' | 'open'>('closed');
   const [screenSharing, setScreenSharing] = useState(false);
   const [transportProvider, setTransportProvider] = useState<'unknown' | 'webrtc' | 'agora'>('unknown');
-  const [agoraRemoteUid, setAgoraRemoteUid] = useState<number | null>(null);
+  const [agoraRemoteUid, setAgoraRemoteUid] = useState<string | number | null>(null);
   const [agoraSurfaceView, setAgoraSurfaceView] = useState<any>(null);
+  const [agoraWebRemoteVideoTrack, setAgoraWebRemoteVideoTrack] = useState<any>(null);
+  const [agoraWebRemoteAudioTrack, setAgoraWebRemoteAudioTrack] = useState<any>(null);
+  const [agoraWebAudioBlocked, setAgoraWebAudioBlocked] = useState(false);
 
   const sendSignal = useCallback(async (signalType: string, payload: unknown) => {
     if (!channelRef.current || !userId) return;
@@ -595,6 +599,14 @@ export function useSessionWebRTC({
       setAgoraSurfaceView(null);
       setScreenSharing(false);
     }
+    if (agoraWebSessionRef.current) {
+      await agoraWebSessionRef.current.leave().catch(() => undefined);
+      agoraWebSessionRef.current = null;
+      setAgoraWebRemoteVideoTrack(null);
+      setAgoraWebRemoteAudioTrack(null);
+      setAgoraWebAudioBlocked(false);
+      setAgoraRemoteUid(null);
+    }
     dataChannelRef.current?.close?.();
     dataChannelRef.current = null;
     pendingDataMessagesRef.current = [];
@@ -644,8 +656,81 @@ export function useSessionWebRTC({
 
   restartRef.current = restartConnection;
 
+  const startAgoraWeb = useCallback(async (transport: AgoraTransport) => {
+    const { joinAgoraWebSession } = await import('@/lib/sessionAgoraWeb');
+    const channel = supabase?.channel(`webrtc-${bookingId}`, { config: { broadcast: { self: false } } });
+    if (!channel) throw new Error('خدمة الحصة غير متاحة.');
+    channelRef.current = channel.on('broadcast', { event: 'session-data' }, (event: any) => {
+      if (event.payload?.senderId !== userId && event.payload?.message) onDataMessage?.(event.payload.message);
+    });
+    channelRef.current.subscribe((status: string) => {
+      if (status === 'SUBSCRIBED') {
+        agoraDataReadyRef.current = true;
+        setDataChannelState('open');
+        setMediaWarning(null);
+        for (const message of pendingAgoraDataRef.current.splice(0)) sendDataMessage(message);
+        sendDataMessage({ type: 'join', userId });
+        void startSessionHeartbeat().catch(() => setError('تعذر تحديث حالة الحصة.'));
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        agoraDataReadyRef.current = false;
+        setDataChannelState('closed');
+        setMediaWarning('الصوت يعمل، لكن تعذرت مزامنة السبورة والمحادثة مؤقتاً.');
+      }
+    });
+    const session = await joinAgoraWebSession(transport, {
+      onRemoteUserJoined: (uid) => {
+        agoraRemoteUidRef.current = uid;
+        setAgoraRemoteUid(uid);
+        setConnectionState('connecting');
+        onRemoteJoin?.();
+      },
+      onRemoteUserLeft: () => {
+        agoraRemoteUidRef.current = null;
+        setAgoraRemoteUid(null);
+        setConnectionState('disconnected');
+        onRemoteLeave?.();
+      },
+      onRemoteAudio: (state, uid) => {
+        agoraRemoteUidRef.current = uid;
+        setAgoraRemoteUid(uid);
+        if (state === 'playing') setConnectionState('connected');
+        else if (state === 'starting') setConnectionState('connecting');
+        else if (state === 'failed') {
+          setConnectionState('failed');
+          setError('انضم الطرف الآخر، لكن تعذر تشغيل صوته.');
+        } else setConnectionState('disconnected');
+      },
+      onRemoteVideo: setAgoraWebRemoteVideoTrack,
+      onRemoteAudioTrack: setAgoraWebRemoteAudioTrack,
+      onAutoplayBlocked: () => {
+        setConnectionState('connecting');
+        setAgoraWebAudioBlocked(true);
+        setMediaWarning('وصل صوت الطرف الآخر؛ اضغط زر تفعيل الصوت إذا لم تسمعه.');
+      },
+      onTokenWillExpire: async () => {
+        const { data, error } = await supabase!.functions.invoke('session-transport-token', { body: { bookingId } });
+        if (error) throw error;
+        const renewed = parseSessionTransport(data);
+        if (renewed.provider !== 'agora' || renewed.uid !== userId) throw new Error('رد تجديد رمز Agora غير صالح.');
+        return renewed.token;
+      },
+      onTokenError: (reason) => {
+        setConnectionState('failed');
+        setError(reason instanceof Error ? reason.message : 'تعذر تجديد رمز Agora.');
+      },
+      onReconnecting: (reconnecting) => {
+        if (reconnecting) setConnectionState('connecting');
+      },
+    });
+    agoraWebSessionRef.current = session;
+    if (session.microphoneWarning) setMediaWarning(session.microphoneWarning);
+  }, [bookingId, onDataMessage, onRemoteJoin, onRemoteLeave, sendDataMessage, startSessionHeartbeat, userId]);
+
   const startAgora = useCallback(async (transport: AgoraTransport) => {
-    if (Platform.OS === 'web') throw new Error('Agora متاح داخل تطبيق الهاتف فقط.');
+    if (Platform.OS === 'web') {
+      await startAgoraWeb(transport);
+      return;
+    }
     if (transport.uid !== userId) throw new Error('معرّف مستخدم Agora لا يطابق الحساب الحالي.');
     const permission = await requestRecordingPermissionsAsync();
     if (!permission.granted) throw new Error('يلزم السماح باستخدام الميكروفون للانضمام إلى الحصة.');
@@ -690,7 +775,7 @@ export function useSessionWebRTC({
       },
       onUserOffline: (_connection: unknown, uid: number) => {
         if (agoraRemoteUidRef.current === uid) agoraRemoteUidRef.current = null;
-        setAgoraRemoteUid((current: number | null) => current === uid ? null : current);
+        setAgoraRemoteUid((current: string | number | null) => current === uid ? null : current);
         setConnectionState(mapAgoraConnectionEvent('remote-left'));
         onRemoteLeave?.();
       },
@@ -739,7 +824,7 @@ export function useSessionWebRTC({
       { publishMicrophoneTrack: true, publishCameraTrack: false, publishScreenCaptureVideo: false },
     );
     if (joinResult < 0) throw new Error(`تعذر الانضمام إلى Agora (رمز ${joinResult}).`);
-  }, [bookingId, onDataMessage, onRemoteJoin, onRemoteLeave, sendDataMessage, startSessionHeartbeat, userId]);
+  }, [bookingId, onDataMessage, onRemoteJoin, onRemoteLeave, sendDataMessage, startSessionHeartbeat, startAgoraWeb, userId]);
 
   const start = useCallback(async () => {
     if (startedRef.current || !bookingId || !userId || !supabase) return;
@@ -870,6 +955,12 @@ export function useSessionWebRTC({
   }, [enabled, start, stop]);
 
   const toggleMute = useCallback(() => {
+    if (transportProviderRef.current === 'agora' && agoraWebSessionRef.current) {
+      const nextMuted = !muted;
+      void agoraWebSessionRef.current.microphoneTrack?.setEnabled(!nextMuted);
+      setMuted(nextMuted);
+      return;
+    }
     if (transportProviderRef.current === 'agora' && agoraEngineRef.current) {
       const nextMuted = !muted;
       agoraEngineRef.current.muteLocalAudioStream(nextMuted);
@@ -883,6 +974,10 @@ export function useSessionWebRTC({
   }, [muted]);
 
   const toggleSpeaker = useCallback(async () => {
+    if (Platform.OS === 'web') {
+      setError('يتحكم المتصفح ونظام الجهاز بمخرج الصوت؛ غيّر مستوى الصوت من إعداداته.');
+      return;
+    }
     const nextSpeakerEnabled = !speakerEnabledRef.current;
     try {
       await setAudioModeAsync({
@@ -908,6 +1003,10 @@ export function useSessionWebRTC({
   }, [videoEnabled]);
 
   const toggleScreenShare = useCallback(async () => {
+    if (Platform.OS === 'web') {
+      setError('مشاركة الشاشة في Agora Web غير مفعّلة في هذا التطبيق بعد.');
+      return;
+    }
     if (Platform.OS !== 'android') {
       setError('مشاركة الشاشة من الهاتف تتطلب إعداد ReplayKit على iOS؛ المتاح حالياً Android.');
       return;
@@ -954,6 +1053,16 @@ export function useSessionWebRTC({
     }
   }, [screenSharing, sendDataMessage]);
 
+  const resumeAgoraAudio = useCallback(async () => {
+    try {
+      await agoraWebSessionRef.current?.resumeAudio();
+      setAgoraWebAudioBlocked(false);
+      setMediaWarning(null);
+    } catch {
+      setAgoraWebAudioBlocked(true);
+    }
+  }, []);
+
   return {
     connectionState,
     localStream,
@@ -968,6 +1077,10 @@ export function useSessionWebRTC({
     transportProvider,
     agoraRemoteUid,
     agoraSurfaceView,
+    agoraWebRemoteVideoTrack,
+    agoraWebRemoteAudioTrack,
+    agoraWebAudioBlocked,
+    resumeAgoraAudio,
     screenSharing,
     toggleScreenShare,
     start,

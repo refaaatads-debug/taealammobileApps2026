@@ -11,8 +11,12 @@ type SessionVideoProps = {
   fit?: 'contain' | 'cover';
   scale?: number;
   fill?: boolean;
-  agoraRemoteUid?: number | null;
+  agoraRemoteUid?: string | number | null;
   agoraSurfaceView?: any;
+  agoraWebRemoteAudioTrack?: any;
+  agoraWebRemoteVideoTrack?: any;
+  agoraWebAudioBlocked?: boolean;
+  onResumeAgoraAudio?: () => void;
 };
 
 export function SessionVideo({
@@ -26,8 +30,13 @@ export function SessionVideo({
   fill = false,
   agoraRemoteUid = null,
   agoraSurfaceView,
+  agoraWebRemoteAudioTrack,
+  agoraWebRemoteVideoTrack,
+  agoraWebAudioBlocked = false,
+  onResumeAgoraAudio,
 }: SessionVideoProps) {
   const videoRef = useRef<any>(null);
+  const agoraWebVideoRef = useRef<any>(null);
   const audioRef = useRef<any>(null);
   const allTracks = stream?.getTracks?.() ?? [];
   const playbackPlan = getSessionMediaPlaybackPlan(allTracks);
@@ -58,6 +67,32 @@ export function SessionVideo({
       audio.srcObject = null;
     };
   }, [playbackPlan.needsWebAudioSink, stream, trackSignature]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !agoraWebRemoteVideoTrack || !agoraWebVideoRef.current) return;
+    try {
+      agoraWebRemoteVideoTrack.play(agoraWebVideoRef.current);
+    } catch {
+      // Video can be republished after the component mounts; the next track update retries.
+    }
+    return () => agoraWebRemoteVideoTrack.stop?.();
+  }, [agoraWebRemoteVideoTrack]);
+
+  if (Platform.OS === 'web' && (agoraWebRemoteAudioTrack || agoraWebRemoteVideoTrack)) {
+    return (
+      <View style={[styles.frame, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { transform: [{ scale }] }]}>
+        {React.createElement('div', {
+          ref: agoraWebVideoRef,
+          style: { width: '100%', height: '100%', objectFit: fit, backgroundColor: '#112D4E' },
+        })}
+        {agoraWebAudioBlocked ? (
+          <Pressable accessibilityRole="button" onPress={onResumeAgoraAudio} style={styles.audioRecovery}>
+            <Text style={styles.audioRecoveryText}>تفعيل صوت الحصة</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  }
 
   const renderWebAudio = () => Platform.OS === 'web' && playbackPlan.needsWebAudioSink
     ? React.createElement('audio', {

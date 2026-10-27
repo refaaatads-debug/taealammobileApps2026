@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   readPlatformWhiteboardPermission,
   readPlatformWhiteboardVisibility,
+  resolveWhiteboardStateVisibility,
 } from "../sessionWhiteboardProtocol.ts";
 
 test("reads the platform's whiteboard-toggle open field for both directions", () => {
@@ -34,6 +35,8 @@ test("reads visibility and drawing permission from a full board-state response",
     allow: true,
   };
   assert.equal(readPlatformWhiteboardVisibility(response), false);
+  assert.equal(resolveWhiteboardStateVisibility(readPlatformWhiteboardVisibility(response)), false);
+  assert.equal(resolveWhiteboardStateVisibility(null), true);
   assert.equal(readPlatformWhiteboardPermission(response), true);
 });
 
