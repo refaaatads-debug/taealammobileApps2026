@@ -21,6 +21,7 @@ test("keeps accepted sessions waiting for the teacher to start", () => {
 test("redirects from cancelled or ended sessions", () => {
   assert.equal(shouldRedirectFromLiveSession(true, "booking-1", "cancelled", "cancelled"), true);
   assert.equal(shouldRedirectFromLiveSession(true, "booking-1", "accepted", "ended"), true);
+  assert.equal(shouldRedirectFromLiveSession(true, "booking-1", "confirmed", "in_progress", "in_person"), true);
 });
 
 test("does not auto-open a stale started-session record after its booking ended", () => {

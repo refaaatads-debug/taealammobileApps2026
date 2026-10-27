@@ -17,9 +17,14 @@ export function shouldRedirectFromLiveSession(
   bookingId: string | undefined,
   bookingStatus: string | null,
   sessionStatus: string | null,
+  deliveryMode?: unknown,
 ): boolean {
   if (!bookingId) return true;
   if (!lifecycleLoaded) return false;
+  const normalizedMode = typeof deliveryMode === "string"
+    ? deliveryMode.trim().toLowerCase().replace(/[-\s]/gu, "_")
+    : "";
+  if (normalizedMode === "in_person" || normalizedMode === "inperson" || normalizedMode === "حضوري") return true;
   if (!bookingStatus) return true;
   return TERMINAL_STATUSES.has(bookingStatus.toLowerCase())
     || Boolean(sessionStatus && TERMINAL_STATUSES.has(sessionStatus.toLowerCase()));
