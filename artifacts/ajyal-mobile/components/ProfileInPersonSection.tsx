@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Location from "expo-location";
 import { Icon } from "@/components/AjyalUI";
 import LocationPicker from "@/components/InPersonLocationPicker";
@@ -34,6 +34,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
   const [locationGranted, setLocationGranted] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(true);
+  const [cityPickerOpen, setCityPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!supabase || !userId) {
@@ -278,16 +279,26 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
           </View>
         </>}
         <Text style={[styles.label, { color: colors.foreground }]}>{t("المدينة", "City")}</Text>
-        <View style={styles.row}>
-          {cities.map((city) => <Pressable key={city.id} accessibilityRole="button" accessibilityState={{ selected: cityId === city.id }} onPress={() => { setSelectedPlace(null); setCityId(city.id); }} style={buttonStyle(cityId === city.id)}><Text style={[styles.choiceText, { color: cityId === city.id ? colors.teal : colors.foreground }]}>{city.name_ar}</Text></Pressable>)}
-        </View>
+        <Pressable
+          testID="profile-in-person-city-dropdown"
+          accessibilityRole="button"
+          accessibilityState={{ expanded: cityPickerOpen }}
+          onPress={() => setCityPickerOpen(true)}
+          style={({ pressed }) => [styles.cityDropdown, { backgroundColor: colors.card, borderColor: cityId ? colors.teal : colors.border, opacity: pressed ? 0.82 : 1 }]}
+        >
+          <Icon name="chevron-down" size={17} color={cityId ? colors.teal : colors.mutedForeground} />
+          <Text numberOfLines={1} style={[styles.cityDropdownText, { color: cityId ? colors.foreground : colors.mutedForeground, writingDirection: direction }]}>
+            {cities.find((city) => city.id === cityId)?.name_ar ?? selectedPlace?.city ?? t("اختر المدينة", "Choose a city")}
+          </Text>
+          <View style={[styles.cityDropdownIcon, { backgroundColor: colors.tealSoft }]}><Icon name="map-pin" size={15} color={colors.teal} /></View>
+        </Pressable>
+        {cities.length === 0 ? <Text style={[styles.empty, { color: colors.mutedForeground }]}>{t("لا توجد مدن نشطة للاختيار حالياً.", "There are no active cities to choose from.")}</Text> : null}
         {selectedPlace && !cities.some((city) => city.id === cityId) ? <Text style={[styles.helper, { color: colors.teal }]}>{t("المدينة من نتيجة Google Maps: ", "City from Google Maps: ")}{selectedPlace.city}</Text> : null}
-        {cities.length === 0 ? <Text style={[styles.empty, { color: colors.mutedForeground }]}>{t("لا توجد مدن نشطة للاختيار حالياً.", "There are no active cities to choose from right now.")}</Text> : null}
         <View style={styles.fieldGroup}>
           <Text style={[styles.label, { color: colors.foreground }]}>{t("العنوان أو الشارع", "Street address")}</Text>
          <TextInput value={street} onChangeText={setStreet} placeholder={t("اكتب العنوان بالتفصيل", "Enter the address")} placeholderTextColor={colors.mutedForeground} style={[styles.input, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.card, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]} />
         </View>
-        <View style={[styles.mapPanel, { backgroundColor: colors.muted, borderColor: colors.border }]}>
+        <View style={[styles.mapPanel, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}>
           <View style={styles.mapHeading}>
             <Text style={[styles.label, styles.mapLabel, { color: colors.foreground }]}>{t("حدد الموقع على الخريطة", "Select the location on the map")}</Text>
             <Text style={[styles.mapHint, { color: colors.mutedForeground }]}>{t("ابحث عن العنوان أو اختر نقطة دقيقة.", "Search for an address or choose a precise point.")}</Text>
@@ -296,7 +307,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
           latitude={latitude}
           longitude={longitude}
           locationGranted={locationGranted}
-          colors={{ card: colors.card, border: colors.border, teal: colors.teal, foreground: colors.foreground, mutedForeground: colors.mutedForeground, destructive: colors.destructive }}
+          colors={{ card: colors.card, border: colors.border, teal: colors.teal, tealSoft: colors.tealSoft, foreground: colors.foreground, mutedForeground: colors.mutedForeground, destructive: colors.destructive }}
           onChange={(lat, lng) => { setSelectedPlace(null); setLatitude(String(lat)); setLongitude(String(lng)); }}
           onPlaceSelect={handlePlaceSelect}
           searchPlaceholder={t("ابحث عن مدينة أو عنوان", "Search for a city or address")}
@@ -304,6 +315,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
         />
         </View>
         <Pressable accessibilityRole="button" onPress={() => void getCurrentLocation()} style={({ pressed }) => [styles.secondary, { borderColor: colors.border, backgroundColor: colors.card, opacity: pressed ? 0.8 : 1 }]}>
+          <Icon name="crosshair" size={15} color={colors.teal} />
           <Text style={[styles.secondaryText, { color: colors.teal }]}>{t("استخدم موقعي الحالي", "Use my current location")}</Text>
         </Pressable>
         {role === "teacher" && <View style={styles.radiusField}>
@@ -322,6 +334,41 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
       </>}
       </View> : null}
     </View>
+    <Modal transparent visible={cityPickerOpen} animationType="fade" onRequestClose={() => setCityPickerOpen(false)}>
+      <View style={styles.cityOverlay}>
+        <Pressable accessibilityLabel={t("إغلاق قائمة المدن", "Close city list")} style={styles.cityBackdrop} onPress={() => setCityPickerOpen(false)} />
+        <View style={[styles.citySheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.citySheetHeader}>
+            <Pressable testID="profile-in-person-city-close" accessibilityRole="button" onPress={() => setCityPickerOpen(false)} hitSlop={10}>
+              <Icon name="x" size={20} color={colors.mutedForeground} />
+            </Pressable>
+            <Text style={[styles.citySheetTitle, { color: colors.foreground, writingDirection: direction }]}>{t("اختر المدينة", "Choose a city")}</Text>
+          </View>
+          <ScrollView style={styles.cityOptions} contentContainerStyle={styles.cityOptionsContent} showsVerticalScrollIndicator={false}>
+            {cities.map((city) => {
+              const selected = cityId === city.id;
+              return (
+                <Pressable
+                  key={city.id}
+                  testID={`profile-in-person-city-${city.id}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  onPress={() => {
+                    setSelectedPlace(null);
+                    setCityId(city.id);
+                    setCityPickerOpen(false);
+                  }}
+                  style={({ pressed }) => [styles.cityOption, { backgroundColor: selected ? colors.tealSoft : colors.background, borderColor: selected ? colors.teal : colors.border, opacity: pressed ? 0.78 : 1 }]}
+                >
+                  <Icon name={selected ? "check" : "map-pin"} size={16} color={selected ? colors.teal : colors.mutedForeground} />
+                  <Text style={[styles.cityOptionText, { color: selected ? colors.teal : colors.foreground, writingDirection: direction }]}>{city.name_ar}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
     {addressToDelete ? (
       <Modal transparent animationType="fade" onRequestClose={() => !deletingAddressId && setAddressToDelete(null)}>
         <View style={styles.deleteOverlay}>
@@ -343,9 +390,9 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
 }
 
 const styles = StyleSheet.create({
-  card: { borderWidth: 1, borderRadius: 22, marginBottom: 16, overflow: "hidden", shadowColor: "#12233F", shadowOpacity: 0.08, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 3 },
-  sectionHeader: { minHeight: 92, alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
-  sectionNumber: { width: 42, height: 42, borderRadius: 15, alignItems: "center", justifyContent: "center" },
+  card: { borderWidth: 1, borderRadius: 20, marginBottom: 12, overflow: "hidden", shadowColor: "#12233F", shadowOpacity: 0.07, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 2 },
+  sectionHeader: { minHeight: 76, alignItems: "center", gap: 9, paddingHorizontal: 12, paddingVertical: 10 },
+  sectionNumber: { width: 36, height: 36, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   sectionNumberText: { fontSize: 10, fontFamily: "Inter_700Bold" },
   sectionHeaderCopy: { flex: 1, minWidth: 0 },
   sectionEyebrow: { fontSize: 9, fontFamily: "Inter_500Medium", marginBottom: 2 },
@@ -353,31 +400,43 @@ const styles = StyleSheet.create({
   approvalText: { fontSize: 9, fontFamily: "Inter_700Bold" },
   title: { fontSize: 13, lineHeight: 19, fontFamily: "Inter_700Bold" },
   description: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular", marginTop: 3 },
-  body: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 18, borderTopWidth: StyleSheet.hairlineWidth },
+  body: { paddingHorizontal: 12, paddingTop: 11, paddingBottom: 13, borderTopWidth: StyleSheet.hairlineWidth },
   loader: { padding: 24 },
-  label: { fontSize: 11, lineHeight: 16, fontFamily: "Inter_700Bold", marginBottom: 8 },
+  label: { fontSize: 11, lineHeight: 15, fontFamily: "Inter_700Bold", marginBottom: 5 },
   sectionLabel: { marginTop: 1 },
-  row: { flexDirection: "row", flexWrap: "wrap", gap: 9, marginBottom: 12 },
+  row: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 9 },
   choice: { borderWidth: 1, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14 },
   choiceActive: { borderWidth: 1.5 },
-  modeChoice: { flex: 1, minWidth: 82, minHeight: 46, alignItems: "center", justifyContent: "center" },
+  modeChoice: { flex: 1, minWidth: 76, minHeight: 40, alignItems: "center", justifyContent: "center" },
   choiceText: { fontSize: 10, fontFamily: "Inter_600SemiBold" },
-  statusPanel: { borderRadius: 14, paddingHorizontal: 13, paddingVertical: 10, marginTop: 2, marginBottom: 5, gap: 3 },
+  statusPanel: { borderRadius: 12, paddingHorizontal: 11, paddingVertical: 8, marginTop: 2, marginBottom: 5, gap: 3, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   status: { fontSize: 10, fontFamily: "Inter_500Medium" },
   statusValue: { fontSize: 11, fontFamily: "Inter_700Bold" },
-  fieldGroup: { marginBottom: 13 },
-  input: { minHeight: 48, borderWidth: 1, borderRadius: 14, paddingHorizontal: 14, fontSize: 12, fontFamily: "Inter_400Regular" },
+  cityDropdown: { minHeight: 43, borderWidth: 1, borderRadius: 13, paddingHorizontal: 11, flexDirection: "row-reverse", alignItems: "center", gap: 8, marginBottom: 9 },
+  cityDropdownText: { flex: 1, fontSize: 11, fontFamily: "Inter_600SemiBold", textAlign: "right" },
+  cityDropdownIcon: { width: 28, height: 28, borderRadius: 9, alignItems: "center", justifyContent: "center" },
+  cityOverlay: { flex: 1, justifyContent: "flex-end" },
+  cityBackdrop: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(10, 25, 45, 0.42)" },
+  citySheet: { maxHeight: "72%", borderTopLeftRadius: 23, borderTopRightRadius: 23, borderWidth: 1, paddingHorizontal: 15, paddingTop: 13, paddingBottom: 22 },
+  citySheetHeader: { minHeight: 38, flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 9 },
+  citySheetTitle: { flex: 1, fontSize: 15, fontFamily: "Inter_700Bold", textAlign: "right" },
+  cityOptions: { maxHeight: 420 },
+  cityOptionsContent: { gap: 7, paddingBottom: 4 },
+  cityOption: { minHeight: 44, borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, flexDirection: "row-reverse", alignItems: "center", gap: 9 },
+  cityOptionText: { flex: 1, fontSize: 11, fontFamily: "Inter_600SemiBold", textAlign: "right" },
+  fieldGroup: { marginBottom: 9 },
+  input: { minHeight: 42, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, fontSize: 12, fontFamily: "Inter_400Regular" },
   radiusField: { gap: 7, marginTop: 6, marginBottom: 12 },
   radiusInputWrap: { minHeight: 50, borderWidth: 1, borderRadius: 14, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 8 },
   radiusInput: { flex: 1, minHeight: 48, paddingHorizontal: 5, fontSize: 12, fontFamily: "Inter_600SemiBold" },
   unitPill: { borderRadius: 10, paddingHorizontal: 11, paddingVertical: 7 },
   unitText: { fontSize: 10, fontFamily: "Inter_600SemiBold" },
   helper: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular" },
-  mapPanel: { borderWidth: 1, borderRadius: 18, padding: 12, marginTop: 1, marginBottom: 12 },
-  mapHeading: { marginBottom: 10 },
+  mapPanel: { borderWidth: 1, borderRadius: 17, padding: 9, marginTop: 1, marginBottom: 8 },
+  mapHeading: { marginBottom: 7 },
   mapLabel: { marginBottom: 3 },
   mapHint: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular" },
-  secondary: { minHeight: 46, alignSelf: "stretch", borderWidth: 1, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14, justifyContent: "center", alignItems: "center", marginBottom: 8 },
+  secondary: { minHeight: 40, alignSelf: "stretch", borderWidth: 1, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 12, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 7, marginBottom: 7 },
   secondaryText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
   saved: { borderWidth: 1, borderRadius: 14, padding: 12, marginBottom: 8, gap: 4 },
   savedRow: { flexDirection: "row", alignItems: "center", gap: 10 },
