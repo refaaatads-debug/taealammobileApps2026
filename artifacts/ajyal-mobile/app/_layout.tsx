@@ -192,11 +192,11 @@ function RootLayoutNav() {
       if (lifecycleBookingIds.length) {
         const { data: ownedLifecycleBookings } = await client
           .from('bookings')
-          .select('id, status, session_status')
+          .select('id, status, session_status, delivery_mode')
           .eq('student_id', profile.id)
           .in('id', lifecycleBookingIds);
         for (const row of ownedLifecycleBookings ?? []) {
-          if (typeof row.id === 'string' && shouldAutoOpenStartedSession(row.id, row.status, row.session_status)) {
+          if (typeof row.id === 'string' && shouldAutoOpenStartedSession(row.id, row.status, row.session_status, row.delivery_mode)) {
             openStartedBooking(row.id);
           }
         }
@@ -204,7 +204,7 @@ function RootLayoutNav() {
 
       const { data } = await client
         .from('bookings')
-        .select('id, status, session_status, scheduled_at, created_at')
+        .select('id, status, session_status, delivery_mode, scheduled_at, created_at')
         .eq('student_id', profile.id)
         .in('session_status', ['waiting_acceptance', 'in_progress']);
       if (!mounted) return;
@@ -213,7 +213,7 @@ function RootLayoutNav() {
         if (row.session_status === 'waiting_acceptance') {
           continue;
         }
-        if (shouldAutoOpenStartedSession(bookingId, row.status, row.session_status)) {
+        if (shouldAutoOpenStartedSession(bookingId, row.status, row.session_status, row.delivery_mode)) {
           openStartedBooking(bookingId);
         }
       }
@@ -232,6 +232,7 @@ function RootLayoutNav() {
           id?: unknown;
           status?: unknown;
           session_status?: unknown;
+          delivery_mode?: unknown;
           scheduled_at?: unknown;
           created_at?: unknown;
         };
@@ -241,7 +242,7 @@ function RootLayoutNav() {
           return;
         }
         if (updated.session_status !== 'in_progress'
-          || !shouldAutoOpenStartedSession(bookingId, updated.status, updated.session_status)) {
+          || !shouldAutoOpenStartedSession(bookingId, updated.status, updated.session_status, updated.delivery_mode)) {
           return;
         }
         openStartedBooking(bookingId);
@@ -260,13 +261,13 @@ function RootLayoutNav() {
         if (!bookingId || typeof updated.started_at !== 'string' || updated.ended_at) return;
         void client
           .from('bookings')
-          .select('id, status, session_status')
+          .select('id, status, session_status, delivery_mode')
           .eq('id', bookingId)
           .eq('student_id', profile.id)
           .maybeSingle()
           .then(({ data }) => {
             if (data?.id && typeof data.id === 'string'
-              && shouldAutoOpenStartedSession(data.id, data.status, data.session_status)) {
+              && shouldAutoOpenStartedSession(data.id, data.status, data.session_status, data.delivery_mode)) {
               openStartedBooking(data.id);
             }
           });

@@ -29,7 +29,14 @@ export function shouldAutoOpenStartedSession(
   bookingId: string | undefined,
   bookingStatus: unknown,
   sessionStatus: unknown,
+  deliveryMode?: unknown,
 ): boolean {
+  const normalizedMode = typeof deliveryMode === "string"
+    ? deliveryMode.trim().toLowerCase().replace(/[-\s]/gu, "_")
+    : "";
+  if (normalizedMode === "in_person" || normalizedMode === "inperson" || normalizedMode === "حضوري") {
+    return false;
+  }
   return !shouldRedirectFromLiveSession(
     true,
     bookingId,

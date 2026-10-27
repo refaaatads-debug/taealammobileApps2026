@@ -32,6 +32,7 @@ import { findNotificationImageUrl } from "../lib/notificationImage";
 import { persistPlatformNotifications } from "../lib/platformNotifications";
 import { getSupabaseProfile, hasSupabaseRole, readBearerToken, supabaseRpc, supabaseTable } from "../lib/supabaseAuth";
 import { normalizeStage, normalizeStageList } from "../lib/teachingStages";
+import { resolveSessionPresentationStatus, sessionTeachingDurationMinutes } from "../lib/sessionPresentation";
 
 const router: IRouter = Router();
 
@@ -80,6 +81,7 @@ async function mapSessions(rows: typeof bookingsTable.$inferSelect[], userId: st
       scheduledAt: row.startsAt.toISOString(),
       duration: formatDuration(row.durationMinutes),
       tone: (["teal", "gold", "navy"].includes(row.tone) ? row.tone : "teal") as Tone,
+      deliveryMode: "online",
       status: row.status === "cancelled" ? "cancelled" : row.status === "completed" ? "done" : isExpired ? "expired" : "upcoming",
     };
   }));
@@ -176,6 +178,16 @@ function remoteDate(row: RemoteRow, ...keys: string[]): Date {
     }
   }
   return new Date();
+}
+
+function optionalRemoteDate(row: RemoteRow, ...keys: string[]): Date | null {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value !== "string" && !(value instanceof Date)) continue;
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+  return null;
 }
 
 function remotePersonName(row: RemoteRow | undefined): string {
@@ -373,20 +385,9 @@ function mapRemoteSession(row: RemoteRow, userId: string, people: Map<string, Re
   const studentId = remoteString(row, "student_id", "studentId") ?? "";
   const teacherId = remoteString(row, "teacher_id", "teacherId") ?? "";
   const startsAt = remoteDate(row, "scheduled_at", "starts_at", "start_time", "date");
-  const durationMinutes = remoteNumber(row, "duration_minutes", "duration") ?? 60;
+  const durationMinutes = sessionTeachingDurationMinutes(row);
   const rawStatus = remoteString(row, "status") ?? "confirmed";
-  const bookingSessionStatus = remoteString(row, "session_status", "sessionStatus");
-  const sessionStartedAt = remoteString(lifecycle ?? {}, "started_at", "startedAt");
-  const sessionEndedAt = remoteString(lifecycle ?? {}, "ended_at", "endedAt");
-  const sessionStatus = sessionStartedAt && !sessionEndedAt
-    ? "in_progress"
-    : sessionEndedAt
-      ? "completed"
-      : bookingSessionStatus === "waiting_acceptance"
-        ? "waiting_acceptance"
-        : ["cancelled", "rejected", "expired", "completed"].includes(bookingSessionStatus ?? "")
-          ? bookingSessionStatus
-          : "not_started";
+  const sessionStatus = resolveSessionPresentationStatus(row, lifecycle);
   const isExpired = startsAt.getTime() <= Date.now()
     && ["pending", "confirmed"].includes(rawStatus)
     && sessionStatus !== "in_progress"
@@ -1383,6 +1384,7 @@ function mapRemoteAssignment(row: RemoteRow) {
     title: remoteString(row, "title", "name") ?? "مهمة تعليمية",
     subject: remoteString(remoteNestedRow(row, "subjects") ?? {}, "name") ?? "عام",
     due: formatDue(dueAt),
+    dueAt: optionalRemoteDate(row, "due_at", "due_date", "deadline")?.toISOString() ?? null,
     progress: status === "مكتمل" ? 100 : Math.max(0, Math.min(100, remoteNumber(row, "progress") ?? 0)),
     kind,
     status,
@@ -1931,6 +1933,7 @@ router.get("/assignments", async (req, res): Promise<void> => {
     title: row.title,
     subject: row.subject,
     due: formatDue(row.dueAt),
+    dueAt: row.dueAt?.toISOString() ?? null,
     progress: row.progress,
     kind: row.kind,
     status: row.status,

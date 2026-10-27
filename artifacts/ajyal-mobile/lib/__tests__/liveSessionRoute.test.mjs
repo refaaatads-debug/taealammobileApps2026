@@ -35,3 +35,9 @@ test("only auto-opens a started session belonging to a still-valid booking", () 
   assert.equal(shouldAutoOpenStartedSession(undefined, "accepted", "in_progress"), false);
   assert.equal(shouldAutoOpenStartedSession("booking-1", null, "in_progress"), false);
 });
+
+test("does not route confirmed in-person attendance into the online session room", () => {
+  assert.equal(shouldAutoOpenStartedSession("booking-1", "confirmed", "in_progress", "in_person"), false);
+  assert.equal(shouldAutoOpenStartedSession("booking-1", "confirmed", "in_progress", "in-person"), false);
+  assert.equal(shouldAutoOpenStartedSession("booking-1", "accepted", "in_progress", "online"), true);
+});
