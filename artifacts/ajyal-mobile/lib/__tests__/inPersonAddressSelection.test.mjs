@@ -17,6 +17,12 @@ test("uses the first saved address if none is marked primary", () => {
   assert.equal(selectSavedAddress([secondary], ""), secondary);
 });
 
+test("uses the newest saved address before the primary when no address is selected", () => {
+  const olderPrimary = { ...primary, created_at: "2026-01-01T00:00:00Z" };
+  const newest = { ...secondary, created_at: "2026-03-01T00:00:00Z" };
+  assert.equal(selectSavedAddress([olderPrimary, newest], ""), newest);
+});
+
 test("returns null when no saved address exists", () => {
   assert.equal(selectSavedAddress([], ""), null);
 });

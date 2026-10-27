@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ActivityIndicator, Alert, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Crypto from "expo-crypto";
 import * as Location from "expo-location";
@@ -18,7 +19,7 @@ import { OptionDropdown } from "@/components/OptionDropdown";
 
 type Row = Record<string, any>;
 type City = { id: string; name_ar: string; name_en: string | null; in_person_enabled: boolean };
-type Address = { id: string; city_id: string; street_address: string; district: string | null; additional_details: string | null; latitude: number; longitude: number; is_primary: boolean };
+type Address = { id: string; city_id: string; street_address: string; district: string | null; additional_details: string | null; latitude: number; longitude: number; is_primary: boolean; created_at?: string | null };
 type Teacher = { teacher_id: string; full_name: string; avg_rating: number; distance_km: number; service_radius_km: number };
 
 function errorText(error: unknown, fallback: string) {
@@ -49,6 +50,7 @@ export default function InPersonScreen() {
   const { t, locale, direction } = useAppPreferences();
   const { profile, role } = useAjyal();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -121,7 +123,7 @@ export default function InPersonScreen() {
       const [cityResult, addressResult, subjectResult, teacherSubjectResult] = await Promise.all([
         supabase.from("cities").select("id,name_ar,name_en,in_person_enabled").eq("country_iso2", "SA").eq("is_active", true).order("name_ar"),
         role === "student"
-          ? supabase.from("user_addresses").select("id,city_id,street_address,district,additional_details,latitude,longitude,is_primary").eq("owner_id", user.id).order("is_primary", { ascending: false })
+          ? supabase.from("user_addresses").select("id,city_id,street_address,district,additional_details,latitude,longitude,is_primary,created_at").eq("owner_id", user.id).order("created_at", { ascending: false })
           : Promise.resolve({ data: [], error: null }),
         role === "student" ? supabase.from("subjects").select("id,name").order("name") : Promise.resolve({ data: [], error: null }),
         role === "student" ? supabase.from("teacher_subjects").select("subject_id,teacher_profiles!inner(is_approved,teaching_stages)") : Promise.resolve({ data: [], error: null }),
@@ -249,6 +251,7 @@ export default function InPersonScreen() {
       setError(errorText(result.error, t("تعذر إنشاء طلب الحضوري.", "Could not create the in-person request.")));
       return;
     }
+    await queryClient.invalidateQueries({ queryKey: ["in-person-request-groups"] });
     setRequestSent(true);
     setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
   };
@@ -260,7 +263,11 @@ export default function InPersonScreen() {
     const result = await supabase.rpc(decision === "accept" ? "accept_in_person_request" : "reject_in_person_request", { p_request_group_id: groupId });
     setSaving(false);
     if (result.error) setError(errorText(result.error, t("تعذر تحديث الطلب.", "Could not update the request.")));
-    else await load();
+    else {
+      await queryClient.invalidateQueries({ queryKey: ["in-person-request-groups"] });
+      await queryClient.invalidateQueries({ queryKey: ["teacher-in-person-request-count"] });
+      await load();
+    }
   };
 
   const revealTeacherCode = async (bookingId: string) => {
@@ -281,7 +288,7 @@ export default function InPersonScreen() {
       <Header title={t("التدريس الحضوري", "In-person teaching")} eyebrow={t("العناوين والطلبات", "Locations and requests")} onBack={() => router.back()} avatarText={profile?.displayName?.slice(0, 1)} />
       {loading ? <View style={styles.loading}><ActivityIndicator color={colors.teal} /><Text style={mutedStyle}>{t("جارٍ تحميل البيانات...", "Loading data...")}</Text></View> : null}
       {!!error ? <Text accessibilityRole="alert" style={[styles.error, { color: colors.destructive }]}>{error}</Text> : null}
-      {role === "student" ? (
+      {role === "student" && loading ? null : role === "student" ? (
         <>
           <View style={cardStyle}>
             <View style={styles.stepHeading}>
@@ -304,9 +311,9 @@ export default function InPersonScreen() {
                   onPress={() => {
                     setCityId(city.id);
                      setRequestSent(false);
-                    const cityAddress = addresses.find((address) => address.city_id === city.id && address.is_primary)
-                      ?? addresses.find((address) => address.city_id === city.id);
+                    const cityAddress = selectSavedAddress(addresses.filter((address) => address.city_id === city.id), "");
                     setAddressId(cityAddress?.id ?? "");
+                    setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
                   }}
                   style={({ pressed }) => [styles.cityOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: !city.in_person_enabled ? 0.55 : pressed ? 0.78 : 1 }]}
                 >
@@ -328,20 +335,24 @@ export default function InPersonScreen() {
                 <Text style={[styles.editAddressText, { color: colors.teal }]}>{t("إدارة العناوين", "Manage")}</Text>
               </Pressable>
             </View>
-            {addresses.filter((address) => !cityId || address.city_id === cityId).map((address) => {
-              const selected = addressId === address.id;
-              return <Pressable key={address.id} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setAddressId(address.id); setCityId(address.city_id); setRequestSent(false); }} style={({ pressed }) => [styles.addressOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: pressed ? 0.82 : 1 }]}>
-                <View style={styles.addressOptionTop}>
-                  <View style={styles.addressOptionTitle}>
-                    <View style={[styles.addressIcon, { backgroundColor: selected ? colors.card : colors.muted }]}><Icon name="map-pin" size={15} color={colors.teal} /></View>
-                    <Text style={[styles.addressCity, textStyle]}>{cities.find((city) => city.id === address.city_id)?.name_ar ?? t("عنوان محفوظ", "Saved address")}</Text>
-                  </View>
-                  <View style={[styles.radio, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.teal : "transparent" }]}>{selected ? <Icon name="check" size={12} color="#fff" /> : null}</View>
-                </View>
-                <Text style={[styles.addressText, textStyle]}>{address.street_address}{address.district ? ` · ${address.district}` : ""}</Text>
-                {address.is_primary ? <Text style={[styles.primaryAddressBadge, { color: colors.teal }]}>{t("العنوان الأساسي", "Primary address")}</Text> : null}
-              </Pressable>;
-            })}
+            {addresses.filter((address) => !cityId || address.city_id === cityId).length ? (
+              <OptionDropdown
+                label={t("عنوان الحصة", "Lesson address")}
+                value={addressId}
+                placeholder={t("اختر عنوان الحصة", "Choose a lesson address")}
+                options={addresses.filter((address) => !cityId || address.city_id === cityId).map((address) => ({
+                  value: address.id,
+                  label: [address.street_address, address.district, cities.find((city) => city.id === address.city_id) ? cityLabel(cities.find((city) => city.id === address.city_id)!) : ""].filter(Boolean).join(" · "),
+                }))}
+                onChange={(id) => {
+                  const address = addresses.find((item) => item.id === id);
+                  if (!address) return;
+                  setAddressId(address.id); setCityId(address.city_id); setRequestSent(false);
+                  setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
+                }}
+                testID="in-person-address-dropdown"
+              />
+            ) : null}
             {!addresses.some((address) => !cityId || address.city_id === cityId) ? <Pressable accessibilityRole="button" onPress={() => router.push("/profile")} style={[styles.emptyAddress, { borderColor: colors.border, backgroundColor: colors.muted }]}>
               <Icon name="plus-circle" size={20} color={colors.teal} />
               <View style={styles.stepCopy}>

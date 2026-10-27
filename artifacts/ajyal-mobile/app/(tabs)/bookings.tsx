@@ -14,7 +14,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, canStudentCancelInPersonRequest, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
 import { getInPersonBookingIds } from '@/lib/inPersonBookingDetails';
 import { getInPersonBookingSnapshot } from '@/lib/inPersonBookingSnapshot';
-import { getTeacherInPersonDecisionOutcome, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
+import { getTeacherInPersonDecisionOutcome, isTeacherBookingNotification, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
 import SwipeDecisionControl from '@/components/SwipeDecisionControl';
 import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
 import StudentLocationLink from '@/components/StudentLocationLink';
@@ -106,8 +106,10 @@ export default function BookingsScreen() {
     },
   });
   const inPersonSessionIds = useMemo(
-    () => canonicalUpcomingSessions.filter((session) => (session as SessionWithMode).deliveryMode === 'in_person').map((session) => session.id),
-    [canonicalUpcomingSessions],
+    () => [...canonicalUpcomingSessions, ...canonicalHistorySessions]
+      .filter((session) => (session as SessionWithMode).deliveryMode === 'in_person')
+      .map((session) => session.id),
+    [canonicalHistorySessions, canonicalUpcomingSessions],
   );
   const inPersonBookingIds = useMemo(
     () => getInPersonBookingIds(inPersonSessionIds, inPersonRequestsQuery.data ?? []),
@@ -204,9 +206,25 @@ export default function BookingsScreen() {
   const visibleSessions = canonicalUpcomingSessions;
   const scheduleSessions = useMemo(() => {
     const allSessions = [...visibleSessions, ...canonicalHistorySessions];
-    return [...new Map(allSessions.map((session) => [session.id, session])).values()]
+    const detailsById = new Map((inPersonSessionDetailsQuery.data ?? []).map((row) => [String(row.id), row]));
+    return [...new Map(allSessions.map((session) => {
+      const detail = detailsById.get(session.id);
+      const snapshot = detail?.visit_address_snapshot && typeof detail.visit_address_snapshot === 'object'
+        ? detail.visit_address_snapshot as Record<string, unknown>
+        : null;
+      const location = [snapshot?.street_address, snapshot?.district, snapshot?.city_name]
+        .map((value) => typeof value === 'string' ? value.trim() : '')
+        .filter(Boolean)
+        .join(' · ');
+      return [session.id, {
+        ...session,
+        inPersonLocation: location || undefined,
+        inPersonLatitude: typeof snapshot?.latitude === 'number' || typeof snapshot?.latitude === 'string' ? snapshot.latitude : undefined,
+        inPersonLongitude: typeof snapshot?.longitude === 'number' || typeof snapshot?.longitude === 'string' ? snapshot.longitude : undefined,
+      }];
+    })).values()]
       .sort((left, right) => new Date(left.scheduledAt).getTime() - new Date(right.scheduledAt).getTime());
-  }, [canonicalHistorySessions, visibleSessions]);
+  }, [canonicalHistorySessions, inPersonSessionDetailsQuery.data, visibleSessions]);
   const historyGroups = useMemo(() => {
     if (view !== 'past' || role !== 'teacher') return [];
     const groups = new Map<string, { studentName: string; sessions: typeof visibleSessions }>();
@@ -308,8 +326,9 @@ export default function BookingsScreen() {
           filter: `user_id=eq.${profile.id}`,
         }, (payload) => {
           const notification = payload.new as Record<string, unknown>;
-          if (!String(notification.type ?? '').startsWith('booking_')) return;
+          if (!isTeacherBookingNotification(notification.type)) return;
           void requestQuery.refetch();
+          void inPersonRequestsQuery.refetch();
           void sessionsQuery.refetch();
           void historyQuery.refetch();
           void queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] });

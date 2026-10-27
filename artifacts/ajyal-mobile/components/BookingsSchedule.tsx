@@ -7,6 +7,7 @@ import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { inPersonAttendanceAction } from '@/lib/inPersonScheduling';
 import { supabase } from '@/lib/supabase';
 import TeacherInPersonCode from '@/components/TeacherInPersonCode';
+import StudentLocationLink from '@/components/StudentLocationLink';
 
 type ScheduleMode = 'week' | 'month';
 
@@ -271,6 +272,13 @@ export default function BookingsSchedule({
                     <Text style={[styles.eventStatusText, { color: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal, writingDirection: direction }]}>{sessionStatusLabel(session, t)}</Text>
                   </View>
                   <View style={styles.eventActions}>
+                  {role === 'teacher' && session.deliveryMode === 'in_person' && session.inPersonLocation ? (
+                    <StudentLocationLink
+                      address={session.inPersonLocation}
+                      latitude={session.inPersonLatitude}
+                      longitude={session.inPersonLongitude}
+                    />
+                  ) : null}
                  {role === 'teacher' && session.deliveryMode === 'in_person' ? (
                    <TeacherInPersonCode bookingId={session.id} />
                  ) : role === 'student' && (session.status === 'upcoming' || session.status === 'expired') && session.deliveryMode === 'in_person' ? (() => {

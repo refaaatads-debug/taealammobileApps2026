@@ -453,10 +453,6 @@ export default function HomeScreen() {
                 <View style={styles.todayTasks}>
                   {todayTasks.slice(0, 4).map((task) => <TodayTaskRow key={task.id} {...task} />)}
                 </View>
-              ) : !assignmentsQuery.isLoading && !assignmentsQuery.isError && !teacherSubmissionsQuery.isLoading && !teacherSubmissionsQuery.isError ? (
-                <Text style={[styles.teacherTasksEmpty, { color: colors.mutedForeground, writingDirection: direction }]}>
-                  {t('لا توجد حلول جديدة للمراجعة الآن', 'No new submissions to review right now')}
-                </Text>
               ) : null}
             </View>
          ) : (

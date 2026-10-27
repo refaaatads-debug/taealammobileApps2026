@@ -36,7 +36,12 @@ type ConsumptionRecord = {
   id: string;
   subjectName: string;
   teacherName: string;
+  packageName: string;
+  deliveryMode: string;
+  recordStatus: string;
+  packageMinutes: number;
   actualMinutes: number;
+  releasedMinutes: number;
   shortSession: boolean;
   scheduledAt: string | null;
   startedAt: string | null;
@@ -354,15 +359,33 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
     const profile = profileResult.data;
     let deductions: ConsumptionRecord[] = [];
     if (detail) {
-      const bookingsResult = await supabase
-        .from("bookings")
-        .select("id, teacher_id, subject_id, subjects(name), scheduled_at")
-        .eq("student_id", user.id)
-        .eq("status", "completed")
-        .order("scheduled_at", { ascending: false })
-        .limit(50);
+      const subscriptions = (subscriptionsResult.data ?? []) as Row[];
+      const subscriptionIds = subscriptions.map((row) => text(row, "id")).filter(Boolean) as string[];
+      const subscriptionById = new Map(subscriptions.map((row) => [String(row.id), row]));
+      const planById = new Map(((plansResult.data ?? []) as Row[]).map((row) => [String(row.id), row]));
+      const reservationQuery = subscriptionIds.length
+        ? supabase.from("in_person_credit_reservations")
+          .select("booking_id,subscription_id,reserved_minutes,consumed_minutes,released_minutes,status")
+          .in("subscription_id", subscriptionIds)
+        : Promise.resolve({ data: [], error: null });
+      const [bookingsResult, reservationsResult] = await Promise.all([
+        supabase
+          .from("bookings")
+          .select("id, teacher_id, subject_id, subjects(name), scheduled_at, subscription_id, status, delivery_mode, balance_cost_minutes, in_person_package_minutes")
+          .eq("student_id", user.id)
+          .order("scheduled_at", { ascending: false })
+          .limit(500),
+        reservationQuery,
+      ]);
       if (bookingsResult.error) throw bookingsResult.error;
-      const bookings = (bookingsResult.data ?? []) as Row[];
+      if (reservationsResult.error) throw reservationsResult.error;
+      const bookingRows = (bookingsResult.data ?? []) as Row[];
+      const reservationsByBooking = new Map((reservationsResult.data ?? []).map((reservation) => [String(reservation.booking_id), reservation as Row]));
+      const bookings = bookingRows.filter((booking) => {
+        const reservation = reservationsByBooking.get(String(booking.id));
+        const subscriptionId = text(reservation ?? booking, "subscription_id");
+        return Boolean(subscriptionId && subscriptionById.has(subscriptionId));
+      });
       if (bookings.length) {
         const bookingIds = bookings.map((booking) => String(booking.id));
         const teacherIds = [...new Set(bookings.map((booking) => text(booking, "teacher_id")).filter(Boolean))] as string[];
@@ -405,21 +428,30 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
         deductions = bookings.map((booking) => {
           const bookingId = String(booking.id);
           const session = sessionsByBooking.get(bookingId);
-          if (!session) return null;
+          const reservation = reservationsByBooking.get(bookingId);
           const teacherId = text(booking, "teacher_id") ?? "";
           const nestedSubject = booking.subjects && typeof booking.subjects === "object" ? text(booking.subjects as Row, "name") : null;
-          const minutes = actualMinutes(session);
+          const deliveryMode = text(booking, "delivery_mode") ?? "online";
+          const minutes = session ? actualMinutes(session) : number(reservation ?? {}, "consumed_minutes") ?? 0;
+          const subscriptionId = text(reservation ?? booking, "subscription_id");
+          const subscription = subscriptionId ? subscriptionById.get(subscriptionId) : undefined;
+          const plan = subscription ? planById.get(String(subscription.plan_id)) : undefined;
           return {
             id: bookingId,
             subjectName: nestedSubject ?? subjectsByTeacher.get(teacherId) ?? "غير محدد",
             teacherName: namesByTeacher.get(teacherId) ?? "معلم",
+            packageName: plan ? text(plan, "name_ar", "name", "title") ?? "باقة تعليمية" : "باقة تعليمية",
+            deliveryMode,
+            recordStatus: text(reservation ?? {}, "status") ?? text(booking, "status") ?? "unknown",
+            packageMinutes: number(reservation ?? {}, "reserved_minutes") ?? number(booking, "in_person_package_minutes", "balance_cost_minutes") ?? number(session ?? {}, "deducted_minutes") ?? 0,
             actualMinutes: minutes,
-            shortSession: minutes > 0 && minutes < 5 ? true : boolean(session, "short_session") === true,
+            releasedMinutes: number(reservation ?? {}, "released_minutes") ?? 0,
+            shortSession: Boolean(session && minutes > 0 && minutes < 5) || boolean(session ?? {}, "short_session") === true,
             scheduledAt: text(booking, "scheduled_at"),
-            startedAt: text(session, "started_at"),
-            endedAt: text(session, "ended_at"),
+            startedAt: text(session ?? {}, "started_at"),
+            endedAt: text(session ?? {}, "ended_at"),
           };
-        }).filter((record): record is ConsumptionRecord => Boolean(record));
+        });
       }
     }
     return {
@@ -564,8 +596,8 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
       {detail && !query.loading && !query.error && query.data ? (
         <>
            <SectionHeading title={t("الاستهلاك حسب الجلسات", "Usage by session")} />
-          {!query.data.deductions.length ? (
-             <EmptyState icon="clock" title={t("لا توجد جلسات مكتملة بعد", "No completed sessions yet")} body={t("سيظهر استهلاك الباقة هنا بعد إنهاء جلسة من المنصة.", "Plan usage will appear here after a session is completed on the platform.")} />
+           {!query.data.deductions.length ? (
+              <EmptyState icon="clock" title={t("لا توجد جلسات مرتبطة بالباقة", "No sessions linked to this plan")} body={t("ستظهر هنا الجلسات المحجوزة والمكتملة والمبالغ المستردة من سجل المنصة.", "Reserved, completed, and refunded sessions from your platform history will appear here.")} />
           ) : query.data.deductions.map((record) => (
             <View key={record.id} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={styles.cardTop}>
@@ -575,6 +607,7 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
                 <View style={styles.consumptionTitle}>
                   <Text style={[styles.cardTitle, { color: colors.foreground }]}>{record.subjectName}</Text>
                   <Text style={[styles.cardBody, { color: colors.mutedForeground, marginTop: 3 }]}>{record.teacherName}</Text>
+                   <Text style={[styles.cardBody, { color: colors.mutedForeground, marginTop: 3 }]}>{record.packageName}</Text>
                 </View>
                 {record.shortSession ? (
                    <Text style={[styles.badge, { color: colors.mutedForeground, backgroundColor: colors.background }]}>{t("لم تُحتسب", "Not counted")}</Text>
@@ -583,7 +616,12 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
                 )}
               </View>
                <ValueRow label={t("موعد الجلسة", "Session time")} value={dateTimeLabel(record.scheduledAt ?? record.startedAt, locale)} />
-               <ValueRow label={t("حالة الخصم", "Deduction status")} value={record.shortSession ? t("أقل من 5 دقائق", "Under 5 minutes") : `${t("مدة الجلسة:", "Session duration:")} ${formatNumber(record.actualMinutes)} ${t("دقيقة", "min")}`} />
+               <ValueRow label={t("نوع الجلسة", "Session type")} value={record.deliveryMode === "in_person" ? t("حضوري", "In person") : t("أونلاين", "Online")} />
+               <ValueRow label={t("حالة الحجز", "Booking status")} value={record.recordStatus} />
+               <ValueRow label={t("دقائق الباقة", "Plan minutes")} value={`${formatNumber(record.packageMinutes)} ${t("دقيقة", "min")}`} />
+               <ValueRow label={record.deliveryMode === "in_person" ? t("الدقائق المستهلكة من الرصيد", "Credit minutes consumed") : t("الدقائق المخصومة", "Minutes deducted")} value={`${formatNumber(record.actualMinutes)} ${t("دقيقة", "min")}`} />
+               {record.releasedMinutes > 0 ? <ValueRow label={t("الدقائق المعادة", "Minutes refunded")} value={`${formatNumber(record.releasedMinutes)} ${t("دقيقة", "min")}`} /> : null}
+               <ValueRow label={t("حالة الاستهلاك", "Usage status")} value={record.shortSession ? t("أقل من 5 دقائق", "Under 5 minutes") : record.actualMinutes > 0 ? t("تم الاستهلاك", "Consumed") : record.releasedMinutes > 0 ? t("أعيد للباقة", "Returned to plan") : t(record.recordStatus, record.recordStatus)} />
                {record.shortSession ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("الجلسة أقل من 5 دقائق، لذلك لم يتم الخصم من الباقة.", "The session was under 5 minutes, so no plan minutes were deducted.")}</Text> : null}
             </View>
           ))}

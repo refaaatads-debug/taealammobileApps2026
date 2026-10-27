@@ -11,6 +11,9 @@ export type Session = {
   duration: string;
   tone: 'teal' | 'gold' | 'navy';
   deliveryMode?: 'online' | 'in_person';
+  inPersonLocation?: string;
+  inPersonLatitude?: number | string;
+  inPersonLongitude?: number | string;
   status?: 'upcoming' | 'done' | 'cancelled' | 'expired';
   sessionStatus?: 'not_started' | 'waiting_acceptance' | 'in_progress' | 'completed' | 'cancelled' | 'rejected' | 'expired' | null;
 };

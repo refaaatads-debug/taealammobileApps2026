@@ -136,8 +136,7 @@ export function TeacherWithdrawalsScreen({ title = "سحب الأرباح" }: { 
       const fallback = await supabase.from("teacher_earnings" as any).select("amount,month,hours,created_at,status,earning_type").eq("teacher_id", user.id).order("created_at", { ascending: false });
       return { ...fallback, rolloverFieldUnavailable: !fallback.error };
     })();
-    const [breakdown, settings, earningsResult, withdrawalsResult, paymentsResult, monthResult, withdrawalSummaryResult] = await Promise.all([
-      supabase.rpc("get_teacher_earnings_breakdown", { _teacher_id: user.id }),
+    const [settings, earningsResult, withdrawalsResult, paymentsResult, monthResult, withdrawalSummaryResult] = await Promise.all([
       supabase.from("financial_settings").select("min_withdrawal_amount").maybeSingle(),
       earningsPromise,
       supabase.from("withdrawal_requests").select("*").eq("teacher_id", user.id).order("created_at", { ascending: false }).limit(10),
@@ -145,7 +144,7 @@ export function TeacherWithdrawalsScreen({ title = "سحب الأرباح" }: { 
       supabase.rpc("get_teacher_month_earnings_split", { _teacher_id: user.id, _month: month }),
       supabase.rpc("get_teacher_withdrawal_summary" as any, { _teacher_id: user.id }),
     ]);
-    const firstError = breakdown.error ?? settings.error ?? withdrawalsResult.error ?? monthResult.error ?? withdrawalSummaryResult.error;
+    const firstError = settings.error ?? withdrawalsResult.error ?? monthResult.error ?? withdrawalSummaryResult.error;
     if (firstError) {
       const message = errorMessage(firstError, "تعذر تحميل بيانات الأرباح.");
       if (silent) setRefreshError(message);
@@ -154,7 +153,6 @@ export function TeacherWithdrawalsScreen({ title = "سحب الأرباح" }: { 
       return;
     }
     setRefreshError(null);
-    const summary = Array.isArray(breakdown.data) ? (breakdown.data[0] as Row | undefined) : breakdown.data as Row | null;
     const currentMonth = Array.isArray(monthResult.data) ? (monthResult.data[0] as Row | undefined) : monthResult.data as Row | null;
     const withdrawalSummaryRow = Array.isArray(withdrawalSummaryResult.data)
       ? (withdrawalSummaryResult.data[0] as Row | undefined)
@@ -167,7 +165,7 @@ export function TeacherWithdrawalsScreen({ title = "سحب الأرباح" }: { 
         ? availableBalance > 0 ? availableBalance.toFixed(2) : ""
         : current;
     });
-    setPaid(numeric(withdrawalSummaryRow?.paid_total ?? summary?.paid_total));
+    setPaid(numeric(withdrawalSummaryRow?.paid_total));
     setWithdrawalSummary({
       pendingTotal: numeric(withdrawalSummaryRow?.pending_total),
       reservedTotal: numeric(withdrawalSummaryRow?.reserved_total),
