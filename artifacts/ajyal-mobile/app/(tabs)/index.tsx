@@ -354,7 +354,6 @@ export default function HomeScreen() {
       onPress: () => router.push('/assignments'),
     });
   }
-<<<<<<< HEAD
   if (isTeacher && openRequestCount > 0) {
     todayTasks.unshift({
       id: 'teacher-pending-booking-decisions',
@@ -365,8 +364,6 @@ export default function HomeScreen() {
       onPress: () => router.push('/bookings'),
     });
   }
-=======
->>>>>>> c32e40a (Implement teacher assignment notifications and update mobile dashboard)
   const openDashboardAction = (id: string) => {
     if (id === 'bookings' || id === 'teacher-schedule' || id === 'teacher-sessions') {
       router.push('/bookings');
