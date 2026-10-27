@@ -12,6 +12,8 @@ import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, canStudentCancelInPersonRequest, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
+import { getInPersonBookingIds } from '@/lib/inPersonBookingDetails';
+import { getInPersonBookingSnapshot } from '@/lib/inPersonBookingSnapshot';
 import { getTeacherInPersonDecisionOutcome, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
 import SwipeDecisionControl from '@/components/SwipeDecisionControl';
 import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
@@ -107,14 +109,18 @@ export default function BookingsScreen() {
     () => canonicalUpcomingSessions.filter((session) => (session as SessionWithMode).deliveryMode === 'in_person').map((session) => session.id),
     [canonicalUpcomingSessions],
   );
+  const inPersonBookingIds = useMemo(
+    () => getInPersonBookingIds(inPersonSessionIds, inPersonRequestsQuery.data ?? []),
+    [inPersonRequestsQuery.data, inPersonSessionIds],
+  );
   const inPersonSessionDetailsQuery = useQuery({
-    queryKey: ['in-person-session-details', role, inPersonSessionIds.join(',')],
-    enabled: roleResolved && Boolean(supabase) && inPersonSessionIds.length > 0,
+    queryKey: ['in-person-session-details', role, inPersonBookingIds.join(',')],
+    enabled: roleResolved && Boolean(supabase) && inPersonBookingIds.length > 0,
     queryFn: async () => {
-      if (!supabase || !inPersonSessionIds.length) return [];
+      if (!supabase || !inPersonBookingIds.length) return [];
       const result = await supabase.from('bookings' as any)
-        .select('id,visit_address_snapshot,attendance_confirmed_at')
-        .in('id', inPersonSessionIds);
+        .select('id,visit_address_snapshot,attendance_confirmed_at,instruction_duration_minutes,balance_cost_minutes')
+        .in('id', inPersonBookingIds);
       if (result.error) throw result.error;
       return Array.isArray(result.data) ? result.data as Array<Record<string, unknown>> : [];
     },
@@ -694,6 +700,7 @@ export default function BookingsScreen() {
                   key={`student-in-person-${groupId || index}`}
                   item={item}
                   role="student"
+                  details={inPersonSessionDetailsQuery.data?.find((detail) => String(detail.id) === String(item.booking_id))}
                   onCancel={groupId ? () => setCancelInPersonTarget({
                     groupId,
                     subject: String(item.subject_name ?? t('طلب حضوري', 'In-person request')),
@@ -1147,7 +1154,7 @@ function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, d
   );
 }
 
-function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete, onCancel, cancelling }: { item: Record<string, unknown>; role: 'teacher' | 'student'; onConfirmed?: () => void; onDecisionComplete?: () => void; onCancel?: () => void; cancelling?: boolean }) {
+function InPersonRequestCard({ item, role, details, onConfirmed, onDecisionComplete, onCancel, cancelling }: { item: Record<string, unknown>; role: 'teacher' | 'student'; details?: Record<string, unknown>; onConfirmed?: () => void; onDecisionComplete?: () => void; onCancel?: () => void; cancelling?: boolean }) {
   const colors = useColors();
   const { t, locale, direction } = useAppPreferences();
   const [codeModalOpen, setCodeModalOpen] = useState(false);
@@ -1172,6 +1179,7 @@ function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete, onCa
   const addressSnapshot = item.visit_address_snapshot && typeof item.visit_address_snapshot === 'object'
     ? item.visit_address_snapshot as Record<string, unknown>
     : null;
+  const bookingSnapshot = getInPersonBookingSnapshot(details ?? {});
   const location = [item.street_address ?? addressSnapshot?.street_address, item.district ?? addressSnapshot?.district, item.city_name ?? addressSnapshot?.city_name]
     .map((value) => typeof value === 'string' ? value.trim() : '')
     .filter(Boolean)
@@ -1230,6 +1238,8 @@ function InPersonRequestCard({ item, role, onConfirmed, onDecisionComplete, onCa
       <View style={styles.inPersonRequestDetails}>
         {personLabel ? <View style={styles.inPersonRequestDetailLine}><Icon name="user" size={13} color={colors.mutedForeground} /><Text style={[styles.inPersonRequestDetailText, { color: colors.mutedForeground, writingDirection: direction }]}>{personLabel}</Text></View> : null}
         <View style={styles.inPersonRequestDetailLine}><Icon name="calendar" size={13} color={colors.mutedForeground} /><Text style={[styles.inPersonRequestDetailText, { color: colors.mutedForeground, writingDirection: direction }]}>{dateLabel}</Text></View>
+        {bookingSnapshot.instructionMinutes !== null ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{bookingSnapshot.instructionMinutes} {t('دقيقة تدريس', 'teaching minutes')}</Text> : null}
+        {bookingSnapshot.packageMinutes !== null ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{bookingSnapshot.packageMinutes} {t('دقيقة محجوزة من الباقة', 'package minutes reserved')}</Text> : null}
         {role === 'teacher' && location ? <StudentLocationLink
           address={location}
           latitude={item.latitude ?? addressSnapshot?.latitude}
