@@ -264,12 +264,13 @@ export default function BookingsSchedule({
                   </View>
                  <Text style={[styles.eventPerson, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{session.person}</Text>
               </View>
-               <View style={styles.eventStatus}>
-                  <Text style={[styles.eventStatusText, { color: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal, writingDirection: direction }]}>{sessionStatusLabel(session, t)}</Text>
-                  <View style={[styles.statusDot, { backgroundColor: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal }]} />
-               </View>
                </Pressable>
-               <View style={styles.eventActions}>
+                <View style={styles.eventFooter}>
+                  <View style={[styles.eventStatus, { backgroundColor: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? 'rgba(234,62,62,0.08)' : colors.tealSoft }]}>
+                    <View style={[styles.statusDot, { backgroundColor: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal }]} />
+                    <Text style={[styles.eventStatusText, { color: session.status === 'cancelled' || (session.status === 'expired' && !(session.deliveryMode === 'in_person' && inPersonAttendanceAction(session.scheduledAt, session.sessionStatus, nowMs) === 'enter_code')) ? colors.destructive : session.status === 'done' ? colors.primary : colors.teal, writingDirection: direction }]}>{sessionStatusLabel(session, t)}</Text>
+                  </View>
+                  <View style={styles.eventActions}>
                  {role === 'teacher' && session.deliveryMode === 'in_person' ? (
                    <TeacherInPersonCode bookingId={session.id} />
                  ) : role === 'student' && (session.status === 'upcoming' || session.status === 'expired') && session.deliveryMode === 'in_person' ? (() => {
@@ -338,7 +339,8 @@ export default function BookingsSchedule({
                         : t('بانتظار دخول المعلم', 'Waiting for teacher')}
                     </Text>
                   </Pressable>
-                ) : null}
+                 ) : null}
+                 </View>
                </View>
              </View>
           ))}
@@ -429,21 +431,22 @@ const styles = StyleSheet.create({
   selectedTitle: { flex: 1, fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   selectedCount: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   events: { gap: 7, marginTop: 9 },
-   eventRow: { minHeight: 59, borderRadius: 18, borderWidth: 1, padding: 10, flexDirection: 'column', alignItems: 'stretch', gap: 8, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
-   eventMain: { width: '100%', minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
-   eventActions: { width: '100%', alignItems: 'stretch', justifyContent: 'center' },
-  eventTime: { minWidth: 64, borderRadius: 9, paddingVertical: 6, paddingHorizontal: 5, alignItems: 'center' },
+   eventRow: { minHeight: 84, borderRadius: 16, borderWidth: 1, padding: 10, flexDirection: 'column', alignItems: 'stretch', gap: 8, shadowColor: '#173E8C', shadowOpacity: 0.06, shadowRadius: 9, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
+   eventMain: { width: '100%', minWidth: 0, minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10 },
+   eventFooter: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+   eventActions: { flexShrink: 0, alignItems: 'flex-start', justifyContent: 'center' },
+   eventTime: { width: 68, minHeight: 50, borderRadius: 12, paddingVertical: 7, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center' },
   eventTimeText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   eventDuration: { fontSize: 8, marginTop: 2, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
-  eventCopy: { flex: 1, alignItems: 'flex-end' },
-  eventTitleRow: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'flex-start', gap: 5 },
-  eventTitle: { fontSize: 11, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
-  eventMode: { overflow: 'hidden', borderRadius: 7, paddingHorizontal: 5, paddingVertical: 3, fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-  eventPerson: { fontSize: 9, marginTop: 3, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  eventStatus: { alignItems: 'center', gap: 4 },
-  eventStatusText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
-   scheduleJoinButton: { minHeight: 34, maxWidth: 124, borderRadius: 10, borderWidth: 1, paddingHorizontal: 8, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 5 },
+   eventCopy: { flex: 1, minWidth: 0, alignItems: 'flex-end', gap: 4 },
+   eventTitleRow: { width: '100%', flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'flex-start', gap: 6 },
+   eventTitle: { flexShrink: 1, fontSize: 12, lineHeight: 17, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+   eventMode: { overflow: 'hidden', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4, fontSize: 9, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+   eventPerson: { width: '100%', fontSize: 10, lineHeight: 14, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
+   statusDot: { width: 7, height: 7, borderRadius: 4 },
+   eventStatus: { flex: 1, minHeight: 28, borderRadius: 9, paddingHorizontal: 8, paddingVertical: 5, flexDirection: 'row-reverse', alignItems: 'center', gap: 5 },
+   eventStatusText: { flexShrink: 1, fontSize: 9, lineHeight: 13, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
+    scheduleJoinButton: { minHeight: 34, maxWidth: 210, borderRadius: 10, borderWidth: 1, paddingHorizontal: 10, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 6 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(10,25,45,0.45)', alignItems: 'center', justifyContent: 'center', padding: 22 },
    attendanceModal: { width: '100%', maxWidth: 360, borderRadius: 22, borderWidth: 1, padding: 20, gap: 14, shadowColor: '#173E8C', shadowOpacity: 0.18, shadowRadius: 24, shadowOffset: { width: 0, height: 10 }, elevation: 12 },
    attendanceModalHeader: { flexDirection: 'row-reverse', alignItems: 'center', gap: 10 },
