@@ -242,32 +242,34 @@ export function useSessionWebRTC({
     };
   }, [flushPendingDataMessages, onDataMessage]);
 
-  const sendDataMessage = useCallback((message: SessionDataMessage) => {
+  const sendDataMessage = useCallback((message: SessionDataMessage): boolean => {
     if (transportProviderRef.current === 'agora') {
       const channel = channelRef.current;
       if (!channel || !agoraDataReadyRef.current) {
         pendingAgoraDataRef.current = [...pendingAgoraDataRef.current.slice(-99), message];
-        return;
+        return true;
       }
       void channel.send({
         type: 'broadcast',
         event: 'session-data',
         payload: { senderId: userId, message },
       }).catch((reason: unknown) => console.warn('تعذر إرسال مزامنة الحصة عبر Agora:', reason));
-      return;
+      return true;
     }
     const channel = dataChannelRef.current;
     if (channel?.readyState === 'open') {
       try {
         channel.send(JSON.stringify(message));
-        return;
+        return true;
       } catch {
         // Queue below when a channel transitions during a reconnect.
       }
     }
     if (message.type.startsWith('whiteboard-') || message.type === 'session-state' || message.type === 'hand-raise') {
       pendingDataMessagesRef.current = [...pendingDataMessagesRef.current.slice(-19), message];
+      return true;
     }
+    return false;
   }, [userId]);
 
   const writeSessionHeartbeat = useCallback(async (isConnected: boolean) => {

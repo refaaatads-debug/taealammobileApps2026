@@ -4,7 +4,7 @@ const {
   withEntitlementsPlist,
   withInfoPlist,
   withXcodeProject,
-} = require("@expo/config-plugins");
+} = require("expo/config-plugins");
 
 const CALLKEEP_HEADER_PATH =
   '"$(SRCROOT)/../node_modules/react-native-callkeep/ios/RNCallKeep"';

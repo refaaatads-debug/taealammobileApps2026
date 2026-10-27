@@ -60,6 +60,7 @@
       "expo-router",
       "./plugins/withIncomingCallNative",
       "./plugins/withAjyalNativeCalls",
+      "./plugins/withGoogleMapsKeys",
       "@config-plugins/react-native-blob-util",
       "@config-plugins/react-native-pdf",
       [
