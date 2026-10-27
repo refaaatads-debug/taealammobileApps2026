@@ -1,5 +1,6 @@
 export type SessionLifecycleSnapshot = {
   endedAt?: string | null;
+  durationSeconds?: number | null;
   sessionStatus?: string | null;
   bookingStatus?: string | null;
 };
