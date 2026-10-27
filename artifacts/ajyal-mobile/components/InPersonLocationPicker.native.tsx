@@ -16,7 +16,7 @@ type Props = {
   latitude: string;
   longitude: string;
   locationGranted: boolean;
-  colors: { card: string; border: string; teal: string; foreground: string; mutedForeground: string; destructive: string };
+  colors: { card: string; border: string; teal: string; tealSoft: string; foreground: string; mutedForeground: string; destructive: string };
   onChange: (latitude: number, longitude: number) => void;
   onPlaceSelect?: (place: GooglePlaceDetails) => void;
   searchPlaceholder?: string;
@@ -204,6 +204,6 @@ const styles = StyleSheet.create({
   suggestionText: { fontSize: 12, lineHeight: 17, fontFamily: "Inter_500Medium" },
   empty: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular", paddingHorizontal: 6, paddingVertical: 4 },
   error: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_500Medium", paddingHorizontal: 6, paddingVertical: 4 },
-  frame: { borderWidth: 1, borderRadius: 12, overflow: "hidden", marginTop: 8 },
-  map: { height: 210, width: "100%" },
+  frame: { borderWidth: 1, borderRadius: 14, overflow: "hidden", marginTop: 2 },
+  map: { height: 156, width: "100%" },
 });
