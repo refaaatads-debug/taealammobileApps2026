@@ -14,6 +14,7 @@ import { supabase } from '@/lib/supabase';
 import { Icon } from '@/components/AjyalUI';
 import type { SessionDataMessage } from '@/hooks/useSessionWebRTC';
 import { customFetch } from '@workspace/api-client-react';
+import { attemptSessionChatInsert } from '@/lib/sessionChatSend';
 
 type ChatMessage = {
   id: string;
@@ -52,6 +53,7 @@ export function SessionCollaboration({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const threadBookingIdsRef = useRef<Set<string>>(new Set([bookingId]));
 
   useEffect(() => {
@@ -153,15 +155,21 @@ export function SessionCollaboration({
   const sendMessage = async () => {
     const content = draft.trim();
     const senderId = user?.id ?? userId;
-    if (!supabase || !senderId || !bookingId || !content || sending) return;
+    const client = supabase;
+    if (!client || !senderId || !bookingId || !content || sending) return;
     setSending(true);
-    const result = await supabase
-      .from('chat_messages')
-      .insert({ booking_id: bookingId, sender_id: senderId, content })
-      .select('id,sender_id,content,created_at')
-      .single();
-    if (!result.error && result.data) {
-      const message = result.data as ChatMessage;
+    setSendError(null);
+    try {
+      const result = await attemptSessionChatInsert<ChatMessage>(() => client
+        .from('chat_messages')
+        .insert({ booking_id: bookingId, sender_id: senderId, content })
+        .select('id,sender_id,content,created_at')
+        .single());
+      if (!result.ok) {
+        setSendError('تعذر إرسال الرسالة. تحقق من الاتصال وحاول مرة أخرى.');
+        return;
+      }
+      const message = result.message as ChatMessage;
       setMessages((current) => current.some((item) => String(item.id) === String(message.id)) ? current : [...current, message].slice(-100));
       setDraft('');
       if (recipientId) {
@@ -170,8 +178,9 @@ export function SessionCollaboration({
           body: JSON.stringify({ bookingId, recipientId, kind: 'text' }),
         }).catch(() => undefined);
       }
+    } finally {
+      setSending(false);
     }
-    setSending(false);
   };
 
   return (
@@ -198,11 +207,16 @@ export function SessionCollaboration({
             <Text style={[styles.messageDate, { color: colors.mutedForeground }]}>{messageDate(message.created_at)}</Text>
           </View>
         )) : <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>لا توجد رسائل داخل هذه الجلسة بعد.</Text>}
+        {sendError ? (
+          <Text accessibilityLiveRegion="polite" style={[styles.sendError, { color: colors.destructive }]}>
+            {sendError}
+          </Text>
+        ) : null}
         <View style={[styles.composer, { borderColor: colors.border, backgroundColor: colors.background }]}>
           <Pressable testID="send-session-message" disabled={sending || !draft.trim()} onPress={() => void sendMessage()} style={[styles.sendButton, { backgroundColor: sending || !draft.trim() ? colors.muted : colors.primary }]}>
             <Icon name="send" size={15} color={sending || !draft.trim() ? colors.mutedForeground : colors.primaryForeground} />
           </Pressable>
-          <TextInput value={draft} onChangeText={setDraft} placeholder="اكتب رسالة مرتبطة بالجلسة…" placeholderTextColor={colors.mutedForeground} textAlign="right" style={[styles.input, { color: colors.foreground }]} multiline />
+          <TextInput value={draft} onChangeText={(value) => { setDraft(value); setSendError(null); }} placeholder="اكتب رسالة مرتبطة بالجلسة…" placeholderTextColor={colors.mutedForeground} textAlign="right" style={[styles.input, { color: colors.foreground }]} multiline />
         </View>
       </View>
     </KeyboardAvoidingView>
@@ -220,6 +234,7 @@ const styles = StyleSheet.create({
   messageDate: { textAlign: 'right', fontSize: 9, marginTop: 3, fontFamily: 'Inter_400Regular' },
   emptyText: { textAlign: 'center', paddingVertical: 18, fontSize: 11, fontFamily: 'Inter_400Regular' },
   errorState: { alignItems: 'center', paddingVertical: 18, gap: 5 },
+  sendError: { textAlign: 'right', writingDirection: 'rtl', fontSize: 11, fontFamily: 'Inter_600SemiBold' },
   retryButton: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7 },
   retryText: { fontSize: 10, fontFamily: 'Inter_700Bold' },
   composer: { minHeight: 45, borderRadius: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, marginTop: 5 },

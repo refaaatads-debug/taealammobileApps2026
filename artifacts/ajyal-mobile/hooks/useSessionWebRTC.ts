@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
 import { supabase } from '@/lib/supabase';
 import { mergeRemoteSessionTracks, removeRemoteSessionTrack } from '@/lib/remoteSessionTracks';
+import { mapAgoraConnectionEvent } from '@/lib/sessionAgoraConnectionState';
 import { parseSessionTransport, type AgoraTransport } from '@/lib/sessionTransport';
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'failed';
@@ -159,6 +160,7 @@ export function useSessionWebRTC({
   const rtcRef = useRef<RtcModule | null>(null);
   const agoraEngineRef = useRef<any>(null);
   const agoraModuleRef = useRef<any>(null);
+  const agoraRemoteUidRef = useRef<number | null>(null);
   const transportProviderRef = useRef<'unknown' | 'webrtc' | 'agora'>('unknown');
   const agoraDataReadyRef = useRef(false);
   const pendingAgoraDataRef = useRef<SessionDataMessage[]>([]);
@@ -589,6 +591,7 @@ export function useSessionWebRTC({
       agoraEngineRef.current = null;
       agoraModuleRef.current = null;
       setAgoraRemoteUid(null);
+      agoraRemoteUidRef.current = null;
       setAgoraSurfaceView(null);
       setScreenSharing(false);
     }
@@ -662,15 +665,33 @@ export function useSessionWebRTC({
     engine.setClientRole(agora.ClientRoleType.ClientRoleBroadcaster);
     engine.setEnableSpeakerphone(true);
     engine.registerEventHandler({
-      onJoinChannelSuccess: () => setConnectionState('connected'),
+      onJoinChannelSuccess: () => setConnectionState(mapAgoraConnectionEvent('joined-channel')),
       onUserJoined: (_connection: unknown, uid: number) => {
+        agoraRemoteUidRef.current = uid;
         setAgoraRemoteUid(uid);
-        setConnectionState('connected');
+        setConnectionState(mapAgoraConnectionEvent('remote-joined'));
         onRemoteJoin?.();
       },
+      onRemoteAudioStateChanged: (_connection: unknown, uid: number, state: number) => {
+        if (agoraRemoteUidRef.current !== uid) return;
+        if (state === agora.RemoteAudioState.RemoteAudioStateDecoding) {
+          setConnectionState(mapAgoraConnectionEvent('remote-audio-playing'));
+        } else if (state === agora.RemoteAudioState.RemoteAudioStateStarting) {
+          setConnectionState(mapAgoraConnectionEvent('remote-audio-starting'));
+        } else if (state === agora.RemoteAudioState.RemoteAudioStateFailed) {
+          setConnectionState(mapAgoraConnectionEvent('error'));
+          setError('انضم الطرف الآخر، لكن تعذر تشغيل صوته.');
+        } else if (
+          state === agora.RemoteAudioState.RemoteAudioStateStopped
+          || state === agora.RemoteAudioState.RemoteAudioStateFrozen
+        ) {
+          setConnectionState(mapAgoraConnectionEvent('remote-audio-interrupted'));
+        }
+      },
       onUserOffline: (_connection: unknown, uid: number) => {
+        if (agoraRemoteUidRef.current === uid) agoraRemoteUidRef.current = null;
         setAgoraRemoteUid((current: number | null) => current === uid ? null : current);
-        setConnectionState('disconnected');
+        setConnectionState(mapAgoraConnectionEvent('remote-left'));
         onRemoteLeave?.();
       },
       onTokenPrivilegeWillExpire: async () => {
@@ -686,7 +707,7 @@ export function useSessionWebRTC({
         }
       },
       onError: (_code: number, message: string) => {
-        setConnectionState('failed');
+        setConnectionState(mapAgoraConnectionEvent('error'));
         setError(message || 'تعذر الاتصال بخدمة Agora.');
       },
     });
