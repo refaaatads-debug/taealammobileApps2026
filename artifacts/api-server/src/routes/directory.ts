@@ -163,7 +163,7 @@ router.get("/students", async (req, res): Promise<void> => {
       res.status(403).json({ error: "Only teachers can list students" });
       return;
     }
-    const [bookingRows, assignmentRows] = await Promise.all([
+    const [bookingRows, assignmentRows, requestRows] = await Promise.all([
       supabaseTable<Record<string, unknown>>(supabaseToken, "bookings", {
         teacher_id: `eq.${teacherId}`,
         select: "student_id",
@@ -174,24 +174,30 @@ router.get("/students", async (req, res): Promise<void> => {
         // Student membership can still be derived from the assignment link.
         select: "student_id",
       }),
+      // RLS exposes only requests this teacher is allowed to see: open
+      // requests for the teacher's subjects and requests accepted by them.
+      supabaseTable<Record<string, unknown>>(supabaseToken, "booking_requests", {
+        select: "student_id",
+      }),
     ]);
     const studentIds = [...new Set([
       ...bookingRows.map((row) => typeof row.student_id === "string" ? row.student_id : null),
       ...assignmentRows.map((row) => typeof row.student_id === "string" ? row.student_id : null),
+      ...requestRows.map((row) => typeof row.student_id === "string" ? row.student_id : null),
     ].filter((id): id is string => Boolean(id)))];
     if (!studentIds.length) {
       res.json(ListMyStudentsResponse.parse([]));
       return;
     }
-    const students = await supabaseTable<Record<string, unknown>>(supabaseToken, "profiles", {
+    const students = await supabaseTable<Record<string, unknown>>(supabaseToken, "public_profiles", {
       user_id: `in.(${studentIds.join(",")})`,
-      select: "*",
+      select: "user_id,full_name,avatar_url",
     });
     res.json(ListMyStudentsResponse.parse(students.map((student) => {
       return {
         id: String(student.user_id ?? student.id),
         displayName: remoteDisplayName(student),
-        email: typeof student.email === "string" ? student.email : null,
+        email: null,
         profileImageUrl: typeof student.avatar_url === "string" ? student.avatar_url : null,
         progress: 0,
       };

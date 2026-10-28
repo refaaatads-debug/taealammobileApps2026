@@ -151,6 +151,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   }, [voiceConversation.end]);
 
   useFocusEffect(useCallback(() => {
+    if (Platform.OS === "web") return undefined;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       void handleTutorBack();
       return true;

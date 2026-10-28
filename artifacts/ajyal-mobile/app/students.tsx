@@ -1,21 +1,32 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { getListMyStudentsQueryKey, useListMyStudents } from '@workspace/api-client-react';
 import { EmptyState, Header, Icon, LoadingBlock, ProgressBar, Screen, SectionHeading } from '@/components/AjyalUI';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { useInternalCall } from '@/contexts/InternalCallContext';
+import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 
 export default function StudentsScreen() {
   const colors = useColors();
   const { profile } = useAjyal();
+  const { user } = useAuth();
   const { startOutgoingCall } = useInternalCall();
-  const query = useListMyStudents({ query: { queryKey: getListMyStudentsQueryKey(), staleTime: 30_000 } });
+  const query = useListMyStudents({
+    query: {
+      queryKey: [...getListMyStudentsQueryKey(), user?.id ?? 'signed-out'],
+      staleTime: 30_000,
+    },
+  });
   const students = query.data ?? [];
   const [callingStudentId, setCallingStudentId] = useState<string | null>(null);
   const [phoneCallingStudentId, setPhoneCallingStudentId] = useState<string | null>(null);
+
+  useFocusEffect(useCallback(() => {
+    if (user?.id) void query.refetch();
+  }, [query.refetch, user?.id]));
 
   const startInternalCall = async (studentId: string, displayName: string) => {
     if (callingStudentId) return;
