@@ -946,12 +946,12 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       let nextCall = parsed.call;
       if (nextCall.callerId) {
         const profileResult = await client
-          .from('profiles')
-          .select('full_name,display_name')
+          .from('public_profiles')
+          .select('full_name')
           .eq('user_id', nextCall.callerId)
           .maybeSingle();
-        const profile = profileResult.data as { full_name?: unknown; display_name?: unknown } | null;
-        const callerName = asString(profile?.full_name) ?? asString(profile?.display_name);
+        const profile = profileResult.data as { full_name?: unknown } | null;
+        const callerName = asString(profile?.full_name);
         if (callerName) nextCall = { ...nextCall, callerName };
       }
       if (!mounted) return;

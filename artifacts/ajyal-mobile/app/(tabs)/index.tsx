@@ -185,6 +185,8 @@ export default function HomeScreen() {
   useFocusEffect(useCallback(() => {
     const client = supabase;
     if (!client || !canLoadRoleData || !isTeacher || !profile?.id) return undefined;
+    void teacherNetSummaryQuery.refetch();
+    void teacherAvailableBalanceQuery.refetch();
     const refreshTeacherBookings = () => {
       void refetchTeacherBookingTaskQueries(
         () => incomingRequestsQuery.refetch(),
@@ -193,6 +195,14 @@ export default function HomeScreen() {
       ).catch((error) => {
         console.warn('[teacher-home] Could not refresh booking task counts:', error);
       });
+    };
+    let earningsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshTeacherEarnings = () => {
+      if (earningsRefreshTimer) clearTimeout(earningsRefreshTimer);
+      earningsRefreshTimer = setTimeout(() => {
+        void teacherNetSummaryQuery.refetch();
+        void teacherAvailableBalanceQuery.refetch();
+      }, 150);
     };
     const topic = `teacher-home-bookings-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const channel = client
@@ -214,6 +224,12 @@ export default function HomeScreen() {
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
+        table: 'teacher_earnings',
+        filter: `teacher_id=eq.${profile.id}`,
+      }, refreshTeacherEarnings)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
         table: 'assignment_submissions',
       }, () => {
         void assignmentsQuery.refetch();
@@ -225,11 +241,12 @@ export default function HomeScreen() {
         }
       });
     return () => {
+      if (earningsRefreshTimer) clearTimeout(earningsRefreshTimer);
       void client.removeChannel(channel).catch((error) => {
         console.warn('[teacher-home] Could not remove realtime channel:', error);
       });
     };
-  }, [assignmentsQuery.refetch, canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch, teacherInPersonRequestsQuery.refetch, teacherSubmissionsQuery.refetch]));
+  }, [assignmentsQuery.refetch, canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch, teacherInPersonRequestsQuery.refetch, teacherSubmissionsQuery.refetch, teacherNetSummaryQuery.refetch, teacherAvailableBalanceQuery.refetch]));
   const assignments = assignmentsQuery.data ?? [];
   const pendingAssignments = assignments.filter((assignment) => !isAssignmentComplete(assignment));
   const teacherTaskSummary = summarizePendingTeacherSubmissions(

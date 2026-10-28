@@ -30,6 +30,18 @@ test("a missing profile does not silently turn existing student links into an em
   assert.equal(entries[0].displayName, "طالب");
 });
 
+test("online and in-person request links share one directory entry and name", () => {
+  const ids = linkedStudentIds([], [], [{ student_id: "student-a" }], [
+    { student_id: "student-a" }, { student_id: "in-person-only" },
+  ]);
+  const entries = studentDirectoryEntries(ids, [
+    { user_id: "student-a", full_name: "طالب أونلاين" },
+    { user_id: "in-person-only", full_name: "طالب حضوري" },
+  ]);
+  assert.equal(entries.length, 2);
+  assert.equal(entries[1].displayName, "طالب حضوري");
+});
+
 test("incoming requests use the same recipient and expiry restrictions as the booking inbox", () => {
   const now = "2026-10-28T12:00:00.000Z";
   const query = incomingStudentRequestQuery("teacher-a", now);

@@ -10,7 +10,7 @@ import {
 } from "@workspace/db";
 import { and, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
-import { getSupabaseProfile, hasSupabaseRole, readBearerToken, supabaseTable } from "../lib/supabaseAuth";
+import { getSupabaseProfile, hasSupabaseRole, readBearerToken, supabaseRpc, supabaseTable } from "../lib/supabaseAuth";
 import { normalizeStageList } from "../lib/teachingStages";
 import { incomingStudentRequestQuery, linkedStudentIds, studentDirectoryEntries } from "../lib/teacherStudentDirectory";
 
@@ -164,7 +164,7 @@ router.get("/students", async (req, res): Promise<void> => {
       res.status(403).json({ error: "Only teachers can list students" });
       return;
     }
-    const [bookingRows, assignmentRows, requestRows] = await Promise.all([
+    const [bookingRows, assignmentRows, requestRows, inPersonRows] = await Promise.all([
       supabaseTable<Record<string, unknown>>(supabaseToken, "bookings", {
         teacher_id: `eq.${teacherId}`,
         select: "student_id",
@@ -179,8 +179,11 @@ router.get("/students", async (req, res): Promise<void> => {
       // requests for the teacher's subjects and requests accepted by them.
       supabaseTable<Record<string, unknown>>(supabaseToken, "booking_requests",
         incomingStudentRequestQuery(teacherId, new Date().toISOString())),
+      // Restricted in-person tables must be read through the teacher-scoped
+      // RPC. Apply the prepared SQL before deploying this API version.
+      supabaseRpc<Record<string, unknown>[]>(supabaseToken, "get_my_teacher_in_person_students", {}),
     ]);
-    const studentIds = linkedStudentIds(bookingRows, assignmentRows, requestRows);
+    const studentIds = linkedStudentIds(bookingRows, assignmentRows, requestRows, inPersonRows);
     if (!studentIds.length) {
       res.json(ListMyStudentsResponse.parse([]));
       return;
@@ -189,7 +192,8 @@ router.get("/students", async (req, res): Promise<void> => {
       user_id: `in.(${studentIds.join(",")})`,
       select: "user_id,full_name,avatar_url",
     });
-    res.json(ListMyStudentsResponse.parse(studentDirectoryEntries(studentIds, students)));
+    const inPersonProfiles = inPersonRows.map((row) => ({ ...row, user_id: row.student_id }));
+    res.json(ListMyStudentsResponse.parse(studentDirectoryEntries(studentIds, [...inPersonProfiles, ...students])));
     return;
   }
   const [currentUser] = await db

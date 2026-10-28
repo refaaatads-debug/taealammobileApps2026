@@ -389,7 +389,7 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
           supabase.from("sessions").select("booking_id, duration_minutes, duration_seconds, deducted_minutes, short_session, started_at, ended_at").in("booking_id", bookingIds),
           teacherIds.length ? supabase.from("public_profiles").select("user_id, full_name").in("user_id", teacherIds) : Promise.resolve({ data: [], error: null }),
           teachersNeedingSubjectFallback.length
-            ? supabase.from("teacher_profiles").select("id, user_id").in("user_id", teachersNeedingSubjectFallback)
+            ? supabase.from("public_teacher_profiles").select("id, user_id").in("user_id", teachersNeedingSubjectFallback)
             : Promise.resolve({ data: [], error: null }),
         ]);
         if (sessionsResult.error) throw sessionsResult.error;

@@ -42,6 +42,9 @@ const notificationGroupMeta: Record<NotificationGroupKey, { title: string; engli
 const notificationGroupOrder: NotificationGroupKey[] = ['sessions', 'messages', 'payments', 'account', 'general'];
 
 function getNotificationGroup(item: ApiNotification): NotificationGroupKey {
+  if (item.type === 'teacher_in_person_approval' || item.type === 'teacher_in_person_availability') {
+    return 'account';
+  }
   switch (safeNotificationIcon(item.icon)) {
     case 'calendar':
     case 'check-circle':
@@ -88,6 +91,7 @@ function getNotificationRoute(item: ApiNotification): NotificationRoute | null {
   if (type === 'chat_message' || type === 'message' || type === 'new_message') return '/messages';
   if (type === 'payment' || type === 'subscription' || type === 'subscription_updated') return '/subscription';
   if (type === 'invoice') return '/invoices';
+  if (type === 'teacher_in_person_approval' || type === 'teacher_in_person_availability') return '/profile';
   if (
     type === 'booking_request'
     || type === 'booking_confirmed'

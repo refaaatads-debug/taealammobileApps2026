@@ -1396,16 +1396,18 @@ function mapRemoteNotification(row: RemoteRow) {
   const type = remoteString(row, "type", "notification_type");
   const title = remoteString(row, "title") ?? "إشعار";
   const body = remoteString(row, "body", "message") ?? "";
-  const explicitRoute = remoteString(row, "route");
+  const explicitRoute = remoteString(row, "route", "link");
   const route = explicitRoute ?? notificationRouteForType(type, title, body, remoteString(row, "icon") ?? "");
   const bookingId = remoteString(row, "booking_id", "bookingId");
   const imageUrl = findNotificationImageUrl(row);
+  const icon = remoteString(row, "icon") ??
+    (type === "teacher_in_person_approval" || type === "teacher_in_person_availability" ? "user" : "bell");
   return {
     id: String(row.id),
     title,
     body,
     time: notificationTime(createdAt),
-    icon: remoteString(row, "icon") ?? "bell",
+    icon,
     unread: row.is_read !== true,
     ...(type ? { type } : {}),
     ...(route ? { route } : {}),
@@ -1455,6 +1457,9 @@ function notificationRouteForType(type: string | null, title = "", body = "", ic
       return "/subscription";
     case "invoice":
       return "/invoices";
+    case "teacher_in_person_approval":
+    case "teacher_in_person_availability":
+      return "/profile";
     case "teacher_cancellation_warning":
     case "first_impression_review":
     case "admin_announcement":
