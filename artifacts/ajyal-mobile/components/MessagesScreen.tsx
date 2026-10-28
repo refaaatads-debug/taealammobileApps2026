@@ -683,21 +683,31 @@ function PhoneCallModal({
 
   useEffect(() => {
     if (!visible || !supabase) return;
+    let current = true;
+    setPhone("");
     setLoading(true);
     setCalling(false);
     setStatus("idle");
     setMinutes(5);
     void Promise.all([
-      supabase.from("profiles").select("phone").eq("user_id", participant.participantId).maybeSingle(),
+      supabase.rpc("get_booking_contact", { p_user_id: participant.participantId, p_booking_id: bookingId }).maybeSingle(),
       supabase.from("wallets").select("balance").eq("user_id", teacherId).maybeSingle(),
       supabase.from("site_settings").select("value").eq("key", "call_price_per_minute").maybeSingle(),
     ]).then(([profileResult, walletResult, priceResult]) => {
-      setPhone(typeof profileResult.data?.phone === "string" ? profileResult.data.phone : "");
+      if (!current) return;
+      if (profileResult.error) setStatus("failed");
+      const contact = profileResult.data as { phone?: unknown } | null;
+      setPhone(typeof contact?.phone === "string" ? contact.phone : "");
       setBalance(Number(walletResult.data?.balance || 0));
       const configuredPrice = Number.parseFloat(String(priceResult.data?.value ?? ""));
       if (Number.isFinite(configuredPrice) && configuredPrice >= 0) setPricePerMinute(configuredPrice);
-    }).finally(() => setLoading(false));
-  }, [participant.id, teacherId, visible]);
+    }).catch(() => {
+      if (current) setStatus("failed");
+    }).finally(() => {
+      if (current) setLoading(false);
+    });
+    return () => { current = false; };
+  }, [participant.id, teacherId, bookingId, visible]);
 
   const requiredCost = Math.ceil(minutes) * pricePerMinute;
   const insufficient = balance < requiredCost;
@@ -1313,7 +1323,7 @@ export default function MessagesScreen() {
         ),
         Promise.all(
           batches(participantIds).map((participantIdBatch) =>
-            client.from("profiles").select("*").in("user_id", participantIdBatch),
+            client.from("public_profiles").select("user_id,full_name,avatar_url").in("user_id", participantIdBatch),
           ),
         ),
       ]);
