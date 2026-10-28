@@ -34,6 +34,7 @@ import { supabase } from "@/lib/supabase";
 import { EmptyState, Header, Icon, Screen } from "@/components/AjyalUI";
 import { customFetch } from "@workspace/api-client-react";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
+import { MaskedPhoneCallModal } from "@/components/MaskedPhoneCallModal";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useInternalCall } from "@/contexts/InternalCallContext";
 import { getReadChatMessageIds, markChatMessagesRead, subscribeToChatReadState } from "@/lib/localChatReadState";
@@ -658,146 +659,6 @@ function Composer({
   );
 }
 
-function PhoneCallModal({
-  visible,
-  participant,
-  teacherId,
-  bookingId,
-  onClose,
-}: {
-  visible: boolean;
-  participant: Participant;
-  teacherId: string;
-  bookingId: string | null;
-  onClose: () => void;
-}) {
-  const colors = useColors();
-  const { t, direction } = useAppPreferences();
-  const [phone, setPhone] = useState("");
-  const [balance, setBalance] = useState(0);
-  const [pricePerMinute, setPricePerMinute] = useState(0.3);
-  const [minutes, setMinutes] = useState(5);
-  const [loading, setLoading] = useState(false);
-  const [calling, setCalling] = useState(false);
-  const [status, setStatus] = useState<"idle" | "initiated" | "failed">("idle");
-
-  useEffect(() => {
-    if (!visible || !supabase) return;
-    let current = true;
-    setPhone("");
-    setLoading(true);
-    setCalling(false);
-    setStatus("idle");
-    setMinutes(5);
-    void Promise.all([
-      supabase.rpc("get_booking_contact", { p_user_id: participant.participantId, p_booking_id: bookingId }).maybeSingle(),
-      supabase.from("wallets").select("balance").eq("user_id", teacherId).maybeSingle(),
-      supabase.from("site_settings").select("value").eq("key", "call_price_per_minute").maybeSingle(),
-    ]).then(([profileResult, walletResult, priceResult]) => {
-      if (!current) return;
-      if (profileResult.error) setStatus("failed");
-      const contact = profileResult.data as { phone?: unknown } | null;
-      setPhone(typeof contact?.phone === "string" ? contact.phone : "");
-      setBalance(Number(walletResult.data?.balance || 0));
-      const configuredPrice = Number.parseFloat(String(priceResult.data?.value ?? ""));
-      if (Number.isFinite(configuredPrice) && configuredPrice >= 0) setPricePerMinute(configuredPrice);
-    }).catch(() => {
-      if (current) setStatus("failed");
-    }).finally(() => {
-      if (current) setLoading(false);
-    });
-    return () => { current = false; };
-  }, [participant.id, teacherId, bookingId, visible]);
-
-  const requiredCost = Math.ceil(minutes) * pricePerMinute;
-  const insufficient = balance < requiredCost;
-
-  const handleCall = async () => {
-    if (!supabase || !phone.trim() || !bookingId || insufficient || calling) return;
-    setCalling(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("make-phone-call", {
-        body: {
-          studentPhone: phone.trim(),
-          estimatedMinutes: minutes,
-          bookingId,
-          studentId: participant.participantId,
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || t("تعذر بدء المكالمة الهاتفية.", "Could not start the phone call."));
-      setBalance(Number(data.newBalance ?? balance - requiredCost));
-      setStatus("initiated");
-      Alert.alert(t("تم بدء المكالمة", "Call started"), t("تم إرسال الاتصال إلى رقم الطالب.", "The call was sent to the student's phone."));
-    } catch (error) {
-      setStatus("failed");
-      Alert.alert(t("تعذر بدء المكالمة", "Could not start the call"), error instanceof Error ? error.message : t("تحقق من الرصيد ورقم الطالب.", "Check the balance and student phone number."));
-    } finally {
-      setCalling(false);
-    }
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={[styles.phoneModalBackdrop, { backgroundColor: `${colors.tint}E8` }]}>
-        <View style={[styles.phoneModalCard, { backgroundColor: colors.card }]}>
-          <View style={styles.phoneModalHeader}>
-            <View style={[styles.phoneModalIcon, { backgroundColor: colors.navySoft }]}><Icon name="phone-call" size={22} color={colors.primary} /></View>
-            <View style={styles.phoneModalCopy}>
-              <Text style={[styles.phoneModalTitle, { color: colors.foreground, writingDirection: direction }]}>{t("مكالمة هاتفية مدفوعة", "Paid phone call")}</Text>
-              <Text style={[styles.phoneModalSubtitle, { color: colors.mutedForeground, writingDirection: direction }]}>{participant.name}</Text>
-            </View>
-            <Pressable onPress={onClose} disabled={calling} style={styles.phoneModalClose}><Icon name="x" size={19} color={colors.mutedForeground} /></Pressable>
-          </View>
-
-          {loading ? (
-            <View style={styles.phoneModalLoading}><ActivityIndicator color={colors.teal} /><Text style={[styles.phoneModalBody, { color: colors.mutedForeground }]}>{t("جارٍ تحميل الرصيد ورقم الطالب…", "Loading balance and student phone…")}</Text></View>
-          ) : status === "initiated" ? (
-            <View style={styles.phoneModalResult}>
-              <Icon name="check-circle" size={34} color={colors.teal} />
-              <Text style={[styles.phoneModalTitle, { color: colors.foreground, writingDirection: direction }]}>{t("تم إرسال الاتصال", "Call request sent")}</Text>
-              <Text style={[styles.phoneModalBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("المكالمة الآن في حالة انتظار الاتصال بالطالب.", "The call is now waiting to connect to the student.")}</Text>
-              <Pressable onPress={onClose} style={[styles.phoneModalPrimary, { backgroundColor: colors.primary }]}><Text style={[styles.phoneModalPrimaryText, { color: colors.primaryForeground }]}>{t("إغلاق", "Close")}</Text></Pressable>
-            </View>
-          ) : (
-            <>
-              <View style={[styles.phoneBalanceRow, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}>
-                <Text style={[styles.phoneModalBody, { color: colors.foreground, writingDirection: direction }]}>{t("رصيدك", "Your balance")}</Text>
-                <Text style={[styles.phoneBalanceValue, { color: insufficient ? colors.destructive : colors.teal }]}>{balance.toFixed(2)} ريال</Text>
-              </View>
-              <View style={[styles.phoneInfoBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Icon name="shield" size={16} color={colors.teal} />
-                <Text style={[styles.phoneModalBody, { color: colors.mutedForeground, writingDirection: direction }]}>{phone ? t("رقم الطالب محفوظ وسيتم الاتصال به تلقائيًا.", "The student's phone is saved and will be called automatically.") : t("لا يوجد رقم هاتف محفوظ لهذا الطالب.", "No phone number is saved for this student.")}</Text>
-              </View>
-              <View style={styles.phoneFieldRow}>
-                <Text style={[styles.phoneLabel, { color: colors.foreground, writingDirection: direction }]}>{t("المدة المقدرة بالدقائق", "Estimated minutes")}</Text>
-                <TextInput
-                  value={String(minutes)}
-                  onChangeText={(value) => setMinutes(Math.min(60, Math.max(1, Number(value.replace(/[^0-9]/g, "")) || 1)))}
-                  keyboardType="number-pad"
-                  style={[styles.phoneMinutesInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]}
-                />
-              </View>
-              <View style={[styles.phoneCostRow, { borderColor: colors.border }]}>
-                <Text style={[styles.phoneModalBody, { color: colors.mutedForeground }]}>{t("التكلفة المحجوزة", "Reserved cost")}</Text>
-                <Text style={[styles.phoneBalanceValue, { color: insufficient ? colors.destructive : colors.foreground }]}>{requiredCost.toFixed(2)} ريال</Text>
-              </View>
-              {insufficient ? <Text style={[styles.phoneError, { color: colors.destructive, writingDirection: direction }]}>{t("الرصيد غير كافٍ لهذه المدة.", "Your balance is not enough for this duration.")}</Text> : null}
-              <View style={styles.phoneModalActions}>
-                <Pressable onPress={onClose} disabled={calling} style={[styles.phoneModalSecondary, { borderColor: colors.border }]}><Text style={[styles.phoneModalSecondaryText, { color: colors.foreground }]}>{t("إلغاء", "Cancel")}</Text></Pressable>
-                <Pressable onPress={() => void handleCall()} disabled={calling || !phone.trim() || insufficient} style={[styles.phoneModalPrimary, { backgroundColor: calling || !phone.trim() || insufficient ? colors.muted : colors.primary }]}>
-                  {calling ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Icon name="phone" size={16} color={colors.primaryForeground} />}
-                  <Text style={[styles.phoneModalPrimaryText, { color: colors.primaryForeground }]}>{t("تأكيد الاتصال", "Confirm call")}</Text>
-                </Pressable>
-              </View>
-            </>
-          )}
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 function ConversationView({
   participant,
   messages,
@@ -836,10 +697,10 @@ function ConversationView({
   const shouldStickToBottomRef = useRef(true);
   const initialScrollParticipantRef = useRef<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [phoneModalOpen, setPhoneModalOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [phoneModalOpen, setPhoneModalOpen] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const webRecorderRef = useRef<MediaRecorder | null>(null);
   const webStreamRef = useRef<MediaStream | null>(null);
@@ -1087,14 +948,10 @@ function ConversationView({
               {callBusy === "internal" ? <ActivityIndicator size="small" color={colors.teal} /> : <Icon name="phone" size={16} color={colors.teal} />}
               <Text style={[styles.callActionText, { color: colors.teal }]}>{callBusy === "internal" ? t("جارٍ الاتصال…", "Calling…") : t("اتصال داخلي", "Internal call")}</Text>
             </Pressable>
-            <Pressable
-              testID="conversation-phone-call"
-              disabled={Boolean(callBusy)}
-              onPress={() => setPhoneModalOpen(true)}
-              style={({ pressed }) => [styles.callAction, { backgroundColor: colors.navySoft, borderColor: colors.primary }, pressed && styles.pressed]}
-            >
-              {callBusy === "phone" ? <ActivityIndicator size="small" color={colors.primary} /> : <Icon name="phone-call" size={16} color={colors.primary} />}
-              <Text style={[styles.callActionText, { color: colors.primary }]}>{callBusy === "phone" ? t("جارٍ الطلب…", "Requesting…") : t("اتصال هاتفي", "Phone call")}</Text>
+            <Pressable testID="conversation-phone-call" disabled={Boolean(callBusy)} onPress={() => setPhoneModalOpen(true)}
+              style={[styles.callAction, { backgroundColor: colors.navySoft, borderColor: colors.primary }]}>
+              <Icon name="phone-call" size={16} color={colors.primary} />
+              <Text style={[styles.callActionText, { color: colors.primary }]}>{t("اتصال برقم مخفي", "Masked phone call")}</Text>
             </Pressable>
           </View>
         ) : null}
@@ -1172,6 +1029,8 @@ function ConversationView({
           scrollEventThrottle={16}
           onContentSizeChange={handleMessageContentSizeChange}
         />
+        <MaskedPhoneCallModal visible={phoneModalOpen} studentId={participant.participantId} studentName={participant.name}
+          bookingId={bookingId} onClose={() => setPhoneModalOpen(false)} />
         <Composer
           draft={draft}
           onChange={setDraft}
@@ -1183,13 +1042,6 @@ function ConversationView({
           recording={recording}
           busy={busy}
           disabled={!bookingId}
-        />
-        <PhoneCallModal
-          visible={phoneModalOpen}
-          participant={participant}
-          teacherId={userId}
-          bookingId={bookingId}
-          onClose={() => setPhoneModalOpen(false)}
         />
       </KeyboardAvoidingView>
     </Screen>

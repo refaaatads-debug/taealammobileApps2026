@@ -6,7 +6,7 @@ import { EmptyState, Header, Icon, LoadingBlock, ProgressBar, Screen, SectionHea
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { useInternalCall } from '@/contexts/InternalCallContext';
-import { supabase } from '@/lib/supabase';
+import { MaskedPhoneCallModal } from '@/components/MaskedPhoneCallModal';
 
 export default function StudentsScreen() {
   const colors = useColors();
@@ -15,7 +15,7 @@ export default function StudentsScreen() {
   const query = useListMyStudents({ query: { queryKey: getListMyStudentsQueryKey(), staleTime: 30_000 } });
   const students = query.data ?? [];
   const [callingStudentId, setCallingStudentId] = useState<string | null>(null);
-  const [phoneCallingStudentId, setPhoneCallingStudentId] = useState<string | null>(null);
+  const [phoneStudent, setPhoneStudent] = useState<{ id: string; displayName: string } | null>(null);
 
   const startInternalCall = async (studentId: string, displayName: string) => {
     if (callingStudentId) return;
@@ -27,22 +27,6 @@ export default function StudentsScreen() {
       Alert.alert('تعذر بدء الاتصال الداخلي', error instanceof Error ? error.message : 'تحقق من اتصال الطالب ثم حاول مرة أخرى.');
     } finally {
       setCallingStudentId(null);
-    }
-  };
-
-  const startPhoneCall = async (studentId: string, displayName: string) => {
-    if (!supabase || phoneCallingStudentId) return;
-    setPhoneCallingStudentId(studentId);
-    try {
-      const { error } = await supabase.functions.invoke('make-phone-call', {
-        body: { student_id: studentId },
-      });
-      if (error) throw error;
-      Alert.alert('تم طلب الاتصال الهاتفي', `سيتم تنفيذ الاتصال عبر نظام المنصة إلى ${displayName}.`);
-    } catch (error) {
-      Alert.alert('تعذر الاتصال الهاتفي', error instanceof Error ? error.message : 'تحقق من رصيد الاتصال وإعدادات الهاتف في المنصة.');
-    } finally {
-      setPhoneCallingStudentId(null);
     }
   };
 
@@ -78,20 +62,18 @@ export default function StudentsScreen() {
                    <Icon name="phone" size={15} color={colors.teal} />
                    <Text style={[styles.actionText, { color: colors.teal }]}>{callingStudentId === student.id ? 'جارٍ' : 'داخلي'}</Text>
                  </Pressable>
-                 <Pressable
-                   testID={`phone-call-${student.id}`}
-                   disabled={Boolean(phoneCallingStudentId)}
-                   onPress={() => void startPhoneCall(student.id, student.displayName)}
-                   style={({ pressed }) => [styles.actionButton, { backgroundColor: colors.navySoft }, pressed && styles.pressed]}
-                 >
+                 <Pressable testID={`phone-call-${student.id}`} onPress={() => setPhoneStudent(student)}
+                   style={[styles.actionButton, { backgroundColor: colors.navySoft }]}>
                    <Icon name="phone-call" size={15} color={colors.primary} />
-                   <Text style={[styles.actionText, { color: colors.primary }]}>{phoneCallingStudentId === student.id ? 'جارٍ' : 'هاتف'}</Text>
+                   <Text style={[styles.actionText, { color: colors.primary }]}>اتصال مخفي</Text>
                  </Pressable>
                </View>
              </View>
           ))}
         </View>
       ) : <EmptyState icon="users" title="لا يوجد طلاب متزامنون" body="ستظهر قائمة الطلاب بعد إنشاء حجز أو مهمة مرتبطة بحسابك." />}
+      {phoneStudent && <MaskedPhoneCallModal visible studentId={phoneStudent.id} studentName={phoneStudent.displayName}
+        onClose={() => setPhoneStudent(null)} />}
     </Screen>
   );
 }

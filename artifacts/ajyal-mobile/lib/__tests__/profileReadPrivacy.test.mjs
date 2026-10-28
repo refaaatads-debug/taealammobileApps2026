@@ -9,10 +9,16 @@ test("message enrichment requests only the public identity projection", () => {
   assert.match(text, /from\("public_profiles"\)\.select\("user_id,full_name,avatar_url"\)/);
   assert.doesNotMatch(text, /from\("profiles"\)/);
 });
-test("telephone contact is scoped to participant and booking, not a private row", () => {
+test("masked telephone calling remains available without fetching contact numbers", () => {
   const text = source("components/MessagesScreen.tsx");
-  assert.match(text, /rpc\("get_booking_contact", \{ p_user_id: participant\.participantId, p_booking_id: bookingId \}\)/);
-  assert.match(text, /return \(\) => \{ current = false; \}/);
+  assert.doesNotMatch(text, /get_booking_contact|studentPhone|from\("profiles"\)/);
+  assert.match(text, /conversation-phone-call/);
+  assert.match(text, /conversation-internal-call/);
+  const modal = source("components/MaskedPhoneCallModal.tsx");
+  assert.match(modal, /invoke\("make-phone-call"/);
+  assert.match(modal, /body: \{ studentId, bookingId: bookingId \|\| undefined, estimatedMinutes: minutes \}/);
+  assert.match(modal, /from\("teacher_call_history"\)/);
+  assert.doesNotMatch(modal, /get_booking_contact|studentPhone|student_phone|from\("profiles"\)|from\("call_logs"\)/);
 });
 test("incoming caller names use the public identity projection", () => {
   const text = source("contexts/InternalCallContext.tsx");

@@ -434,7 +434,7 @@ export function CallWalletScreen() {
     setError(null);
     const [walletResult, logsResult] = await Promise.all([
       supabase.from("wallets").select("balance").eq("user_id", user.id).maybeSingle(),
-      supabase.from("call_logs").select("*").eq("teacher_id", user.id).order("created_at", { ascending: false }).limit(50),
+      supabase.from("teacher_call_history").select("*").eq("teacher_id", user.id).order("created_at", { ascending: false }).limit(50),
     ]);
     const problem = walletResult.error ?? logsResult.error;
     if (problem) setError(errorMessage(problem, "تعذر تحميل محفظة الاتصال."));
@@ -503,11 +503,11 @@ export function CallWalletScreen() {
           </View>
           <SectionHeading title="سجل المكالمات" />
           {!logs.length ? <EmptyState icon="phone" title="لا توجد مكالمات بعد" body="ستظهر المكالمات الهاتفية وتكلفتها هنا." /> : logs.map((row) => {
-            const phone = typeof row.student_phone === "string" ? `••••${row.student_phone.slice(-4)}` : "—";
+            const studentReference = typeof row.student_id === "string" ? row.student_id.slice(0, 8) : "—";
             const status = typeof row.status === "string" ? row.status : "—";
             return <View key={String(row.id)} style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Text style={[styles.rowValue, { color: colors.primary }]}>{money(numeric(row.cost))}</Text>
-              <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: colors.foreground }]}>{phone}</Text><Text style={[styles.muted, { color: colors.mutedForeground }]}>{dateTime(row.created_at)} · {numeric(row.estimated_minutes)} د · {status === "initiated" ? "تم البدء" : status === "failed" ? "فشل" : status}</Text></View>
+              <View style={styles.rowCopy}><Text style={[styles.rowTitle, { color: colors.foreground }]}>{studentReference}</Text><Text style={[styles.muted, { color: colors.mutedForeground }]}>{dateTime(row.created_at)} · {numeric(row.estimated_minutes)} د · {status === "initiated" ? "تم البدء" : status === "failed" ? "فشل" : status}</Text></View>
             </View>;
           })}
         </>
