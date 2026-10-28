@@ -104,6 +104,31 @@ export type PlatformNotificationOnceInput = PlatformNotificationInput & {
   legacyWindow?: { from: Date; to: Date };
 };
 
+export function buildAssignmentNotification(input: {
+  recipientId: string;
+  assignmentId: string;
+  submissionId: string;
+  event: "submitted" | "graded";
+  assignmentTitle: string;
+}): PlatformNotificationOnceInput {
+  const isSubmission = input.event === "submitted";
+  const assignmentTitle = input.assignmentTitle.trim() || "واجب";
+  const query = new URLSearchParams({
+    assignmentId: input.assignmentId,
+    submissionId: input.submissionId,
+  });
+  return {
+    recipientId: input.recipientId,
+    title: isSubmission ? "حل واجب جديد" : "تم تصحيح واجبك",
+    body: isSubmission
+      ? `تم تسليم حل جديد لواجب "${assignmentTitle}".`
+      : `تم تصحيح واجب "${assignmentTitle}". افتح المهام لعرض الدرجة والملاحظات.`,
+    type: isSubmission ? "assignment_submission" : "assignment_graded",
+    icon: "clipboard",
+    link: `/assignments?${query.toString()}`,
+  };
+}
+
 export async function persistPlatformNotificationOnce(
   notification: PlatformNotificationOnceInput,
 ): Promise<boolean> {

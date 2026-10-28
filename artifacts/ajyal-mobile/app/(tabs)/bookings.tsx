@@ -10,9 +10,20 @@ import type { BookingRequest } from '@workspace/api-client-react';
 import type { Session } from '@/constants/localData';
 import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, canStudentCancelInPersonRequest, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
+import { getInPersonBookingIds } from '@/lib/inPersonBookingDetails';
+import { getInPersonBookingSnapshot } from '@/lib/inPersonBookingSnapshot';
+import { getTeacherInPersonDecisionOutcome, isTeacherBookingNotification, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
+import SwipeDecisionControl from '@/components/SwipeDecisionControl';
+import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
+import StudentLocationLink from '@/components/StudentLocationLink';
 
 type StudentRequestSection = 'pending' | 'accepted' | 'completed';
+type SessionWithMode = Session & {
+  deliveryMode?: 'online' | 'in_person';
+  sessionStatus?: string | null;
+};
 
 function isAlreadyClosedBookingRequestError(error: unknown): boolean {
   if (error && typeof error === 'object') {
@@ -41,6 +52,8 @@ export default function BookingsScreen() {
   const [historyExpanded, setHistoryExpanded] = useState(true);
   const [cancelTarget, setCancelTarget] = useState<{ id: string; title: string } | null>(null);
   const [cancelRequestTarget, setCancelRequestTarget] = useState<BookingRequest | null>(null);
+  const [cancelInPersonTarget, setCancelInPersonTarget] = useState<{ groupId: string; subject: string } | null>(null);
+  const [cancelInPersonBusy, setCancelInPersonBusy] = useState(false);
   const [deleteRequestTarget, setDeleteRequestTarget] = useState<BookingRequest | null>(null);
   const [rejectRequestTarget, setRejectRequestTarget] = useState<{ request: BookingRequest; groupCount: number } | null>(null);
   const [cancelReason, setCancelReason] = useState('');
@@ -50,6 +63,23 @@ export default function BookingsScreen() {
   const sessionView = 'upcoming';
   const sessionsQuery = useListMySessions({ view: sessionView }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: sessionView }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
   const historyQuery = useListMySessions({ view: 'past' }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: 'past' }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
+  const rawScheduleSessions = useMemo(
+    () => [...new Map([...(sessionsQuery.data ?? []), ...(historyQuery.data ?? [])].map((session) => [session.id, session])).values()],
+    [historyQuery.data, sessionsQuery.data],
+  );
+  const canonicalScheduleSessions = useCanonicalSessionModes(rawScheduleSessions, profile?.id);
+  const canonicalSessionsById = useMemo(
+    () => new Map(canonicalScheduleSessions.map((session) => [session.id, session])),
+    [canonicalScheduleSessions],
+  );
+  const canonicalUpcomingSessions = useMemo(
+    () => (sessionsQuery.data ?? []).map((session) => canonicalSessionsById.get(session.id) ?? session),
+    [canonicalSessionsById, sessionsQuery.data],
+  );
+  const canonicalHistorySessions = useMemo(
+    () => (historyQuery.data ?? []).map((session) => canonicalSessionsById.get(session.id) ?? session),
+    [canonicalSessionsById, historyQuery.data],
+  );
   const requestQuery = useListBookingRequests(
     { view: requestView },
     {
@@ -63,6 +93,42 @@ export default function BookingsScreen() {
       },
     },
   );
+  const inPersonRequestsQuery = useQuery({
+    queryKey: ['in-person-request-groups', role, profile?.id],
+    enabled: roleResolved && Boolean(profile?.id) && Boolean(supabase),
+    staleTime: 15_000,
+    refetchInterval: roleResolved ? (role === 'teacher' ? 20_000 : 60_000) : false,
+    refetchOnReconnect: true,
+    refetchOnWindowFocus: true,
+    queryFn: async () => {
+      if (!supabase) return [];
+      const result = await supabase.rpc(role === 'teacher' ? 'list_teacher_in_person_requests_priced' : 'list_my_in_person_request_groups');
+      if (result.error) throw result.error;
+      return Array.isArray(result.data) ? result.data as Array<Record<string, unknown>> : [];
+    },
+  });
+  const inPersonSessionIds = useMemo(
+    () => [...canonicalUpcomingSessions, ...canonicalHistorySessions]
+      .filter((session) => (session as SessionWithMode).deliveryMode === 'in_person')
+      .map((session) => session.id),
+    [canonicalHistorySessions, canonicalUpcomingSessions],
+  );
+  const inPersonBookingIds = useMemo(
+    () => getInPersonBookingIds(inPersonSessionIds, inPersonRequestsQuery.data ?? []),
+    [inPersonRequestsQuery.data, inPersonSessionIds],
+  );
+  const inPersonSessionDetailsQuery = useQuery({
+    queryKey: ['in-person-session-details', role, inPersonBookingIds.join(',')],
+    enabled: roleResolved && Boolean(supabase) && inPersonBookingIds.length > 0,
+    queryFn: async () => {
+      if (!supabase || !inPersonBookingIds.length) return [];
+      const result = await supabase.from('bookings' as any)
+        .select('id,visit_address_snapshot,attendance_confirmed_at,instruction_duration_minutes,balance_cost_minutes')
+        .in('id', inPersonBookingIds);
+      if (result.error) throw result.error;
+      return Array.isArray(result.data) ? result.data as Array<Record<string, unknown>> : [];
+    },
+  });
   const decisionMutation = useDecideBookingRequest({
     mutation: {
       onSuccess: async (_data, variables) => {
@@ -71,6 +137,7 @@ export default function BookingsScreen() {
           requestQuery.refetch(),
           sessionsQuery.refetch(),
           historyQuery.refetch(),
+          ...(profile?.id ? [refreshTeacherBookingTaskCounts(queryClient, profile.id, getListBookingRequestsQueryKey({ view: 'incoming' }))] : []),
           queryClient.invalidateQueries({ queryKey: getListMyNotificationsQueryKey() }),
           queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] }),
         ]);
@@ -82,6 +149,7 @@ export default function BookingsScreen() {
             requestQuery.refetch(),
             sessionsQuery.refetch(),
             historyQuery.refetch(),
+            ...(profile?.id ? [refreshTeacherBookingTaskCounts(queryClient, profile.id, getListBookingRequestsQueryKey({ view: 'incoming' }))] : []),
             queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] }),
           ]);
           return;
@@ -137,12 +205,28 @@ export default function BookingsScreen() {
       },
     },
   });
-  const visibleSessions = sessionsQuery.data ?? [];
+  const visibleSessions = canonicalUpcomingSessions;
   const scheduleSessions = useMemo(() => {
-    const allSessions = [...visibleSessions, ...(historyQuery.data ?? [])];
-    return [...new Map(allSessions.map((session) => [session.id, session])).values()]
+    const allSessions = [...visibleSessions, ...canonicalHistorySessions];
+    const detailsById = new Map((inPersonSessionDetailsQuery.data ?? []).map((row) => [String(row.id), row]));
+    return [...new Map(allSessions.map((session) => {
+      const detail = detailsById.get(session.id);
+      const snapshot = detail?.visit_address_snapshot && typeof detail.visit_address_snapshot === 'object'
+        ? detail.visit_address_snapshot as Record<string, unknown>
+        : null;
+      const location = [snapshot?.street_address, snapshot?.district, snapshot?.city_name]
+        .map((value) => typeof value === 'string' ? value.trim() : '')
+        .filter(Boolean)
+        .join(' · ');
+      return [session.id, {
+        ...session,
+        inPersonLocation: location || undefined,
+        inPersonLatitude: typeof snapshot?.latitude === 'number' || typeof snapshot?.latitude === 'string' ? snapshot.latitude : undefined,
+        inPersonLongitude: typeof snapshot?.longitude === 'number' || typeof snapshot?.longitude === 'string' ? snapshot.longitude : undefined,
+      }];
+    })).values()]
       .sort((left, right) => new Date(left.scheduledAt).getTime() - new Date(right.scheduledAt).getTime());
-  }, [historyQuery.data, role, visibleSessions]);
+  }, [canonicalHistorySessions, inPersonSessionDetailsQuery.data, visibleSessions]);
   const historyGroups = useMemo(() => {
     if (view !== 'past' || role !== 'teacher') return [];
     const groups = new Map<string, { studentName: string; sessions: typeof visibleSessions }>();
@@ -183,6 +267,9 @@ export default function BookingsScreen() {
     () => displayedRequests.filter(({ request }) => request.status === 'open'),
     [displayedRequests],
   );
+  const inPersonRequestRows = inPersonRequestsQuery.data ?? [];
+  const pendingInPersonRequestRows = inPersonRequestRows.filter((item) => String(item.status ?? 'open') === 'open');
+  const acceptedInPersonRequestRows = inPersonRequestRows.filter((item) => String(item.status ?? '') === 'accepted');
   const acceptedRequestRows = useMemo(
     () => displayedRequests.filter(({ request }) => request.status === 'accepted'),
     [displayedRequests],
@@ -197,7 +284,7 @@ export default function BookingsScreen() {
     () => visibleSessions.filter((session) => localDayKey(new Date(session.scheduledAt)) === todayKey && session.status === 'upcoming'),
     [todayKey, visibleSessions],
   );
-  const pendingRequestCount = role === 'teacher' ? incomingRequestRows.length : displayedRequests.filter(({ request }) => request.status === 'open').length;
+  const pendingRequestCount = (role === 'teacher' ? incomingRequestRows.length : displayedRequests.filter(({ request }) => request.status === 'open').length) + pendingInPersonRequestRows.length;
   const activeSessionCount = visibleSessions.filter((session) => session.status === 'upcoming' || session.sessionStatus === 'in_progress').length;
 
   useEffect(() => {
@@ -241,8 +328,9 @@ export default function BookingsScreen() {
           filter: `user_id=eq.${profile.id}`,
         }, (payload) => {
           const notification = payload.new as Record<string, unknown>;
-          if (!String(notification.type ?? '').startsWith('booking_')) return;
+          if (!isTeacherBookingNotification(notification.type)) return;
           void requestQuery.refetch();
+          void queryClient.invalidateQueries({ queryKey: ['in-person-request-groups', role, profile.id] });
           void sessionsQuery.refetch();
           void historyQuery.refetch();
           void queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] });
@@ -284,6 +372,14 @@ export default function BookingsScreen() {
   const openSession = (id: string) => {
     const session = scheduleSessions.find((item) => item.id === id);
     if (!session) return;
+    if ('deliveryMode' in session && session.deliveryMode === 'in_person') {
+      Alert.alert(
+        t('حصة حضورية', 'In-person lesson'),
+        t('لا تُفتح الحصة الحضورية كغرفة أونلاين. أكّد الحضور بالكود من بطاقة الطلب المقبول في الحجوزات.', 'In-person lessons do not use an online room. Confirm attendance with the code on the accepted request card in Bookings.'),
+        [{ text: t('حسنًا', 'Okay'), style: 'cancel' }],
+      );
+      return;
+    }
     if (role === 'student' && session.sessionStatus === 'waiting_acceptance') {
       Alert.alert(
         t('دعوة لجلسة فورية', 'Instant session invitation'),
@@ -331,6 +427,37 @@ export default function BookingsScreen() {
     if (!cancelRequestTarget) return;
     cancelRequestMutation.mutate({ id: cancelRequestTarget.id });
   };
+  const confirmInPersonRequestCancel = async () => {
+    if (!supabase || !cancelInPersonTarget || cancelInPersonBusy) return;
+    setCancelInPersonBusy(true);
+    try {
+      const { data, error } = await supabase.rpc('cancel_in_person_request_group' as any, {
+        p_request_group_id: cancelInPersonTarget.groupId,
+      });
+      if (error) throw error;
+      const restoredMinutes = Number(data);
+      setCancelInPersonTarget(null);
+      await Promise.all([
+        inPersonRequestsQuery.refetch(),
+        requestQuery.refetch(),
+        sessionsQuery.refetch(),
+        historyQuery.refetch(),
+      ]);
+      Alert.alert(
+        t('تم إلغاء الطلب', 'Request cancelled'),
+        Number.isFinite(restoredMinutes) && restoredMinutes > 0
+          ? t(`أُلغي الطلب وأُعيد ${restoredMinutes} دقيقة إلى رصيدك.`, `${restoredMinutes} reserved minutes were returned to your balance.`)
+          : t('تم إلغاء الطلب وإعادة الرصيد المحجوز إلى المتاح.', 'The request was cancelled and reserved minutes are available again.'),
+      );
+    } catch (error) {
+      Alert.alert(
+        t('تعذر إلغاء الطلب', 'Could not cancel request'),
+        error instanceof Error ? error.message : t('تحقق من الاتصال ثم حاول مرة أخرى.', 'Check your connection and try again.'),
+      );
+    } finally {
+      setCancelInPersonBusy(false);
+    }
+  };
   const requestBookingDelete = (request: BookingRequest) => {
     setDeleteRequestTarget(request);
   };
@@ -338,17 +465,34 @@ export default function BookingsScreen() {
     if (!deleteRequestTarget) return;
     deleteRequestMutation.mutate({ id: deleteRequestTarget.id });
   };
-  const renderSessionCard = (session: typeof visibleSessions[number]) => (
+  const renderSessionCard = (session: typeof visibleSessions[number]) => {
+    const sessionWithMode = session as SessionWithMode;
+    const scheduledAt = String(session.scheduledAt);
+    const showInPersonDetails = sessionWithMode.deliveryMode === 'in_person'
+      && (session.status === 'upcoming' || session.status === 'expired');
+    return (
     <SessionCard
       key={session.id}
       session={session}
       role={role}
+      compact={session.status === 'done'}
+      footer={showInPersonDetails ? (
+        <InPersonSessionActions
+          role={role === 'teacher' ? 'teacher' : 'student'}
+          bookingId={session.id}
+          scheduledAt={scheduledAt}
+          sessionStatus={sessionWithMode.sessionStatus}
+          details={inPersonSessionDetailsQuery.data?.find((detail) => String(detail.id) === session.id)}
+          onConfirmed={() => { void Promise.all([sessionsQuery.refetch(), historyQuery.refetch(), inPersonRequestsQuery.refetch()]); }}
+        />
+      ) : undefined}
       cancelled={session.status === 'cancelled'}
       onPress={() => openSession(session.id)}
       onJoin={() => router.push({ pathname: '/live-session', params: { booking: session.id } })}
       onCancel={session.status === 'upcoming' ? () => requestSessionCancel(session) : undefined}
     />
-  );
+    );
+  };
   const sessionListSection = (
     <>
       <Pressable
@@ -389,14 +533,15 @@ export default function BookingsScreen() {
           <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.sectionLeadBody, { color: colors.mutedForeground, writingDirection: direction }]}>{role === 'teacher' ? t('طلبات الطلاب الواردة بانتظار قرارك.', 'Incoming student requests waiting for your decision.') : t('طلباتك التي تنتظر قبول المعلم.', 'Your requests waiting for teacher acceptance.')}</Text>
         </View>
         <View style={[styles.sectionLeadCount, { backgroundColor: colors.tealSoft }]}>
-          <Text style={[styles.sectionLeadCountText, { color: colors.teal }]}>{formatNumber(incomingRequestRows.length)}</Text>
+          <Text style={[styles.sectionLeadCountText, { color: colors.teal }]}>{formatNumber(incomingRequestRows.length + pendingInPersonRequestRows.length)}</Text>
           <Text style={[styles.sectionLeadCountLabel, { color: colors.teal }]}>{t('طلب', 'requests')}</Text>
         </View>
       </View>
-      {requestQuery.isError ? (
-        <EmptyState icon="alert-circle" title={t('تعذر تحميل طلبات الحصص', 'Unable to load lesson requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); }} />
-      ) : incomingRequestRows.length ? (
+      {(requestQuery.isError || inPersonRequestsQuery.isError) && !incomingRequestRows.length && !pendingInPersonRequestRows.length ? (
+        <EmptyState icon="alert-circle" title={t('تعذر تحميل طلبات الحصص', 'Unable to load lesson requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); void inPersonRequestsQuery.refetch(); }} />
+      ) : incomingRequestRows.length || pendingInPersonRequestRows.length ? (
         <View style={styles.requests}>
+          {pendingInPersonRequestRows.map((item, index) => <InPersonRequestCard key={`teacher-in-person-${String(item.request_group_id ?? index)}`} item={item} role="teacher" onDecisionComplete={() => { void Promise.all([inPersonRequestsQuery.refetch(), sessionsQuery.refetch(), historyQuery.refetch(), ...(profile?.id ? [refreshTeacherBookingTaskCounts(queryClient, profile.id, getListBookingRequestsQueryKey({ view: 'incoming' }))] : [])]); }} />)}
           {incomingRequestRows.map(({ request, count, items }, index) => (
             <BookingRequestCard
               key={`upcoming-request-${request.groupId || request.id}-${request.id}-${index}`}
@@ -492,9 +637,12 @@ export default function BookingsScreen() {
   const selectedStudentRequestRows = selectedStudentRequest.key === 'pending'
     ? displayedRequests.filter(({ request }) => request.status === 'open')
     : acceptedRequestRows;
+  const selectedInPersonRequestRows = selectedStudentRequest.key === 'pending'
+    ? pendingInPersonRequestRows
+    : selectedStudentRequest.key === 'accepted' ? acceptedInPersonRequestRows : [];
   const selectedStudentRequestCount = selectedStudentRequest.key === 'completed'
     ? completedSessions.length
-    : selectedStudentRequestRows.length;
+    : selectedStudentRequestRows.length + selectedInPersonRequestRows.length;
   const studentRequestSections = (
     <View style={[styles.studentRequestCard, { backgroundColor: colors.card, borderColor: colors.border }]} testID="student-request-sections">
       <View style={styles.studentRequestHeader}>
@@ -506,7 +654,7 @@ export default function BookingsScreen() {
           <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.studentRequestHeaderBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t('اختر القسم لعرض تفاصيله دون شغل مساحة إضافية.', 'Choose a section to view its details without taking extra space.')}</Text>
         </View>
         <View style={[styles.studentRequestTotal, { backgroundColor: colors.navySoft }]}>
-          <Text style={[styles.studentRequestTotalValue, { color: colors.primary }]}>{formatNumber(displayedRequests.length + completedSessions.length)}</Text>
+          <Text style={[styles.studentRequestTotalValue, { color: colors.primary }]}>{formatNumber(displayedRequests.length + completedSessions.length + inPersonRequestRows.length)}</Text>
           <Text style={[styles.studentRequestTotalLabel, { color: colors.primary }]}>{t('الإجمالي', 'Total')}</Text>
         </View>
       </View>
@@ -516,8 +664,8 @@ export default function BookingsScreen() {
           const count = option.key === 'completed'
             ? completedSessions.length
             : option.key === 'pending'
-              ? displayedRequests.filter(({ request }) => request.status === 'open').length
-              : acceptedRequestRows.length;
+              ? displayedRequests.filter(({ request }) => request.status === 'open').length + pendingInPersonRequestRows.length
+              : acceptedRequestRows.length + acceptedInPersonRequestRows.length;
           return (
             <Pressable
               key={option.key}
@@ -561,16 +709,35 @@ export default function BookingsScreen() {
           ) : (
             <EmptyState icon="check-circle" title={t('لا توجد حصص مكتملة', 'No completed lessons')} body={t('ستظهر الحصص هنا بعد انتهائها.', 'Lessons will appear here after they end.')} />
           )
-        ) : requestQuery.isError ? (
-          <EmptyState icon="alert-circle" title={t('تعذر تحميل الطلبات', 'Unable to load requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); }} />
-        ) : selectedStudentRequestRows.length ? (
+  ) : (requestQuery.isError || inPersonRequestsQuery.isError) && !selectedInPersonRequestRows.length && !selectedStudentRequestRows.length ? (
+          <EmptyState icon="alert-circle" title={t('تعذر تحميل الطلبات', 'Unable to load requests')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { void requestQuery.refetch(); void inPersonRequestsQuery.refetch(); }} />
+        ) : selectedStudentRequestRows.length || selectedInPersonRequestRows.length ? (
           <View style={styles.requests}>
+            {requestQuery.isError || inPersonRequestsQuery.isError ? <Text style={[styles.requestMeta, { color: colors.destructive, writingDirection: direction }]}>{t('تعذر تحديث بعض الطلبات؛ المعروض أدناه هو آخر محتوى متاح.', 'Some requests could not be refreshed; showing the latest available data below.')}</Text> : null}
+            {selectedInPersonRequestRows.map((item, index) => {
+              const groupId = typeof item.request_group_id === 'string' ? item.request_group_id : '';
+              return (
+                <InPersonRequestCard
+                  key={`student-in-person-${groupId || index}`}
+                  item={item}
+                  role="student"
+                  details={inPersonSessionDetailsQuery.data?.find((detail) => String(detail.id) === String(item.booking_id))}
+                  onCancel={groupId ? () => setCancelInPersonTarget({
+                    groupId,
+                    subject: String(item.subject_name ?? t('طلب حضوري', 'In-person request')),
+                  }) : undefined}
+                  cancelling={cancelInPersonBusy && cancelInPersonTarget?.groupId === groupId}
+                  onConfirmed={() => { void Promise.all([inPersonRequestsQuery.refetch(), sessionsQuery.refetch(), historyQuery.refetch()]); }}
+                />
+              );
+            })}
             {selectedStudentRequestRows.map(({ request, count, items }) => (
               <BookingRequestCard
                 key={`${selectedStudentRequest.key}-${request.groupId || request.id}-${request.id}`}
                 request={request}
                 groupCount={count}
                 groupItems={items}
+                compact={selectedStudentRequest.key === 'accepted'}
                 deleting={deleteRequestMutation.isPending && deleteRequestTarget?.id === request.id}
                 onCancel={selectedStudentRequest.key === 'pending' ? () => requestBookingCancel(request) : undefined}
                 onDelete={request.status === 'accepted' ? () => requestBookingDelete(request) : undefined}
@@ -654,6 +821,7 @@ export default function BookingsScreen() {
             role={role === 'teacher' ? 'teacher' : 'student'}
             onSessionPress={(session) => openSession(session.id)}
             onJoinSession={(session) => router.push({ pathname: '/live-session', params: { booking: session.id } })}
+            onAttendanceConfirmed={() => { void Promise.all([sessionsQuery.refetch(), historyQuery.refetch(), inPersonRequestsQuery.refetch()]); }}
           />
         ) : null}
         <Modal visible={Boolean(cancelTarget)} transparent animationType="fade" onRequestClose={() => setCancelTarget(null)}>
@@ -686,6 +854,18 @@ export default function BookingsScreen() {
               <View style={styles.modalActions}>
                 <Pressable onPress={() => setCancelRequestTarget(null)} style={[styles.modalButton, { borderColor: colors.border }]}><Text style={[styles.modalButtonText, { color: colors.mutedForeground }]}>{t('تراجع', 'Go back')}</Text></Pressable>
                 <Pressable disabled={cancelRequestMutation.isPending} onPress={confirmRequestCancel} style={[styles.modalButton, { backgroundColor: cancelRequestMutation.isPending ? colors.muted : colors.destructive }]}><Text style={[styles.modalButtonText, { color: colors.destructiveForeground }]}>{cancelRequestMutation.isPending ? t('جارٍ الإلغاء…', 'Cancelling…') : t('إلغاء الطلب', 'Cancel request')}</Text></Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+        <Modal visible={Boolean(cancelInPersonTarget)} transparent animationType="fade" onRequestClose={() => { if (!cancelInPersonBusy) setCancelInPersonTarget(null); }}>
+          <View style={styles.modalBackdrop}>
+            <View style={[styles.modalCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.modalTitle, { color: colors.foreground, writingDirection: direction }]}>{t('إلغاء الطلب الحضوري؟', 'Cancel in-person request?')}</Text>
+              <Text style={[styles.modalBody, { color: colors.mutedForeground, writingDirection: direction }]}>{cancelInPersonTarget?.subject} · {t('سيُغلق الطلب لجميع المعلمين وتعود الدقائق المحجوزة إلى رصيدك. لا يمكن التراجع بعد التأكيد.', 'This closes the request for all teachers and returns reserved minutes to your balance. This cannot be undone.')}</Text>
+              <View style={styles.modalActions}>
+                <Pressable disabled={cancelInPersonBusy} onPress={() => setCancelInPersonTarget(null)} style={[styles.modalButton, { borderColor: colors.border }]}><Text style={[styles.modalButtonText, { color: colors.mutedForeground }]}>{t('تراجع', 'Go back')}</Text></Pressable>
+                <Pressable disabled={cancelInPersonBusy} onPress={() => void confirmInPersonRequestCancel()} style={[styles.modalButton, { backgroundColor: cancelInPersonBusy ? colors.muted : colors.destructive }]}><Text style={[styles.modalButtonText, { color: colors.destructiveForeground }]}>{cancelInPersonBusy ? t('جارٍ الإلغاء…', 'Cancelling…') : t('إلغاء الطلب', 'Cancel request')}</Text></Pressable>
               </View>
             </View>
           </View>
@@ -788,7 +968,7 @@ function StudentSessionGroup({ studentName, sessions, role, onOpenSession, onJoi
   );
 }
 
-function BookingRequestCard({ request, groupCount = 1, groupItems = [request], busy, cancelling, deleting, onExpired, onCancel, onDelete, onDecision }: { request: BookingRequest; groupCount?: number; groupItems?: BookingRequest[]; busy?: boolean; cancelling?: boolean; deleting?: boolean; onExpired?: () => void; onCancel?: () => void; onDelete?: () => void; onDecision?: (status: 'accepted' | 'rejected') => void }) {
+function BookingRequestCard({ request, groupCount = 1, groupItems = [request], compact = false, busy, cancelling, deleting, onExpired, onCancel, onDelete, onDecision }: { request: BookingRequest; groupCount?: number; groupItems?: BookingRequest[]; compact?: boolean; busy?: boolean; cancelling?: boolean; deleting?: boolean; onExpired?: () => void; onCancel?: () => void; onDelete?: () => void; onDecision?: (status: 'accepted' | 'rejected') => void }) {
   const colors = useColors();
   const { t, locale, direction } = useAppPreferences();
   const [expanded, setExpanded] = useState(request.status === 'open');
@@ -822,12 +1002,13 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], b
     }
   }, [request.status, remainingMs, onExpired]);
   return (
-    <View style={[styles.requestCard, { backgroundColor: colors.card, borderColor: colors.border, borderRightColor: statusColor }]}>
+    <View style={[styles.requestCard, compact && styles.requestCardCompact, { backgroundColor: colors.card, borderColor: colors.border, borderRightColor: statusColor }]}>
       <View style={styles.requestTop}>
         <Pressable onPress={() => setExpanded((value) => !value)} style={styles.requestTopToggle}>
           <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.mutedForeground} />
-          <View style={[styles.requestStatus, { backgroundColor: statusBackground }]}><Text style={[styles.requestStatusText, { color: statusColor }]}>{status}</Text></View>
-           <Text style={[styles.requestSubject, { color: colors.foreground, writingDirection: direction }]}>{request.subject}</Text>
+            <View style={[styles.requestStatus, { backgroundColor: colors.navySoft }]}><Text style={[styles.requestStatusText, { color: colors.primary }]}>{t('عن بُعد', 'Online')}</Text></View>
+            <View style={[styles.requestStatus, { backgroundColor: statusBackground }]}><Text style={[styles.requestStatusText, { color: statusColor }]}>{status}</Text></View>
+            <Text numberOfLines={compact ? 1 : undefined} style={[styles.requestSubject, compact && styles.requestSubjectCompact, { color: colors.foreground, writingDirection: direction }]}>{request.subject}</Text>
         </Pressable>
         {onDelete ? <Pressable
           testID={`delete-booking-request-${request.id}`}
@@ -841,7 +1022,8 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], b
           <Icon name="trash-2" size={15} color={colors.destructive} />
         </Pressable> : null}
       </View>
-       {expanded ? <><Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{request.studentName ? `${t('الطالب', 'Student')}: ${request.studentName} · ` : ''}{dateLabel} · {request.durationMinutes} {t('دقيقة', 'min')}{groupCount > 1 ? ` · ${groupCount} ${t('حصص في طلب واحد', 'sessions in one request')}` : ''}</Text>
+       {expanded ? <><Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{request.studentName ? `${t('الطالب', 'Student')}: ${request.studentName} · ` : ''}{dateLabel} · {request.durationMinutes} {t('دقيقة', 'min')}{typeof request.price === 'number' ? ` · ${t('السعر', 'Price')} ${request.price} ${t('ر.س', 'SAR')}` : ''}{groupCount > 1 ? ` · ${groupCount} ${t('حصص في طلب واحد', 'sessions in one request')}` : ''}</Text>
+        {request.status === 'open' && !onDecision ? <Text style={[styles.requestReserveNote, { color: colors.mutedForeground }]}>{t('طلبك متاح للمعلمين؛ يظهر اسم المعلم بعد قبوله.', 'Your request is visible to teachers; the teacher’s name appears after acceptance.')}</Text> : null}
        {groupCount > 1 ? <View style={styles.requestSlotList}>{groupItems.map((item) => {
          const itemDate = new Date(item.scheduledAt);
          return <Text key={item.id} style={[styles.requestSlot, { color: colors.foreground, backgroundColor: colors.muted }]}>{itemDate.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' })} · {itemDate.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })}</Text>;
@@ -852,21 +1034,297 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], b
       {request.acceptedBy ? <Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{t('تم القبول بواسطة المعلم', 'Accepted by the teacher')}</Text> : null}
         {onCancel && request.status === 'open' ? <Pressable disabled={cancelling} onPress={onCancel} style={[styles.requestCancelButton, { borderColor: colors.destructive }]}><Icon name="x-circle" size={14} color={colors.destructive} /><Text style={[styles.requestCancelText, { color: colors.destructive }]}>{cancelling ? t('جارٍ الإلغاء…', 'Cancelling…') : t('إلغاء الطلب', 'Cancel request')}</Text></Pressable> : null}
          {onDelete && (request.status === 'accepted' || ['rejected', 'cancelled', 'expired'].includes(request.status)) ? <Pressable disabled={deleting} onPress={onDelete} style={[styles.requestCancelButton, { borderColor: colors.destructive }]}><Icon name="trash-2" size={14} color={colors.destructive} /><Text style={[styles.requestCancelText, { color: colors.destructive }]}>{deleting ? t('جارٍ الحذف…', 'Deleting…') : t('حذف الطلب', 'Delete request')}</Text></Pressable> : null}
-       {onDecision && request.status === 'open' ? <View style={styles.requestActions}><Pressable
-         testID={`reject-booking-request-${request.id}`}
-         accessibilityRole="button"
-         accessibilityLabel={t('رفض طلب الحجز', 'Reject booking request')}
-         disabled={busy}
-         onPress={() => onDecision('rejected')}
-         style={({ pressed }) => [styles.requestButton, { borderColor: colors.border, opacity: busy ? 0.55 : 1 }, pressed && styles.pressed]}
-       ><Text style={[styles.requestButtonText, { color: colors.destructive }]}>{t('رفض', 'Reject')}</Text></Pressable><Pressable
-         testID={`accept-booking-request-${request.id}`}
-         accessibilityRole="button"
-         accessibilityLabel={t('قبول طلب الحجز', 'Accept booking request')}
-         disabled={busy}
-         onPress={() => onDecision('accepted')}
-         style={({ pressed }) => [styles.requestButton, { backgroundColor: busy ? colors.muted : colors.teal }, pressed && styles.pressed]}
-       ><Text style={[styles.requestButtonText, { color: colors.primaryForeground }]}>{busy ? t('جارٍ التحديث…', 'Updating…') : t('قبول الطلب', 'Accept request')}</Text></Pressable></View> : null}</> : null}
+        {onDecision && request.status === 'open' ? <SwipeDecisionControl disabled={busy} onDecision={onDecision} /> : null}</> : null}
+    </View>
+  );
+}
+
+function InPersonSessionActions({ role, bookingId, scheduledAt, sessionStatus, details, onConfirmed }: {
+  role: 'teacher' | 'student';
+  bookingId: string;
+  scheduledAt: string;
+  sessionStatus?: string | null;
+  details?: Record<string, unknown>;
+  onConfirmed?: () => void;
+}) {
+  const colors = useColors();
+  const { t, direction } = useAppPreferences();
+  const [code, setCode] = useState('');
+  const [enteredCode, setEnteredCode] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+  const snapshot = details?.visit_address_snapshot && typeof details.visit_address_snapshot === 'object'
+    ? details.visit_address_snapshot as Record<string, unknown>
+    : null;
+  const location = [snapshot?.street_address, snapshot?.district, snapshot?.city_name]
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .filter(Boolean)
+    .join(' · ');
+  const confirmed = sessionStatus === 'in_progress' || Boolean(details?.attendance_confirmed_at);
+  const attendanceAction = inPersonAttendanceAction(scheduledAt, confirmed ? 'in_progress' : sessionStatus, nowMs);
+  const teacherCanRevealCode = canRevealInPersonAttendanceCode(scheduledAt, nowMs);
+  const showStudentCode = role === 'student' && !confirmed;
+  const studentCodeEnabled = attendanceAction === 'enter_code';
+  const revealCode = async () => {
+    if (!supabase || busy) return;
+    setBusy(true);
+    setError('');
+    const result = await supabase.rpc('get_in_person_attendance_code', { p_booking_id: bookingId });
+    setBusy(false);
+    if (result.error || typeof result.data !== 'string') {
+      setError(result.error?.message || t('تعذر إظهار رمز الحضور لهذه الحصة الآن.', 'The code is not available for this lesson right now.'));
+      return;
+    }
+    setCode(result.data);
+  };
+  const confirmCode = async () => {
+    if (!supabase || busy || !enteredCode.trim()) return;
+    setBusy(true);
+    setError('');
+    const result = await supabase.rpc('confirm_in_person_attendance_code', { p_booking_id: bookingId, p_code: enteredCode.trim() });
+    setBusy(false);
+    if (result.error || result.data !== true) {
+      setEnteredCode('');
+      setError(result.error?.message || t('الكود خطأ. أعد إدخاله.', 'Incorrect code. Enter it again.'));
+      return;
+    }
+    setModalOpen(false);
+    setEnteredCode('');
+    onConfirmed?.();
+  };
+  return (
+    <View style={styles.inPersonSessionFooter}>
+      {role === 'teacher' ? location ? (
+        <StudentLocationLink address={location} latitude={snapshot?.latitude} longitude={snapshot?.longitude} />
+      ) : (
+        <View style={[styles.inPersonLocation, { backgroundColor: colors.muted }]}>
+          <Icon name="map-pin" size={13} color={colors.mutedForeground} />
+          <Text numberOfLines={2} style={[styles.inPersonLocationText, { color: colors.mutedForeground, writingDirection: direction }]}>
+            {t('موقع الطالب غير متاح', 'Student location unavailable')}
+          </Text>
+        </View>
+      ) : null}
+      {confirmed ? (
+        <Text style={[styles.inPersonActionHint, { color: colors.teal }]}>{t('تم تأكيد الحضور — الحصة جارية', 'Attendance confirmed — lesson in progress')}</Text>
+      ) : role === 'teacher' ? (
+        <>
+          {code ? null : teacherCanRevealCode ? (
+            <Pressable disabled={busy} onPress={(event) => { event.stopPropagation(); void revealCode(); }} style={[styles.requestCancelButton, { borderColor: colors.teal, opacity: busy ? 0.6 : 1 }]}>
+              <Icon name="key" size={14} color={colors.teal} />
+              <Text style={[styles.requestCancelText, { color: colors.teal }]}>{busy ? t('جارٍ إظهار الرمز…', 'Loading code…') : t('إظهار كود الحضور', 'Show attendance code')}</Text>
+            </Pressable>
+          ) : (
+            <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>
+              {nowMs >= new Date(scheduledAt).getTime() + 15 * 60 * 1000
+                ? t('انتهت مهلة إظهار كود الحضور.', 'The attendance-code window has ended.')
+                : t('يمكن إظهار الكود فور قبول الحصة وحتى 15 دقيقة بعد موعدها.', 'The code is available as soon as the lesson is accepted and until 15 minutes after its scheduled time.')}
+            </Text>
+          )}
+          {code ? <Text selectable style={[styles.inPersonCode, { color: colors.primary }]}>{code}</Text> : null}
+          {error ? <Text accessibilityRole="alert" style={[styles.inPersonActionHint, { color: colors.destructive }]}>{error}</Text> : null}
+        </>
+      ) : showStudentCode ? (
+        <>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !studentCodeEnabled || busy }}
+            disabled={!studentCodeEnabled || busy}
+            onPress={(event) => { event.stopPropagation(); setError(''); setModalOpen(true); }}
+            style={[styles.requestCancelButton, {
+              borderColor: studentCodeEnabled ? colors.teal : colors.border,
+              backgroundColor: studentCodeEnabled ? colors.tealSoft : colors.muted,
+              opacity: studentCodeEnabled ? 1 : 0.72,
+            }]}
+          >
+            <Icon name={studentCodeEnabled ? 'key' : attendanceAction === 'expired' ? 'x-circle' : 'clock'} size={14} color={studentCodeEnabled ? colors.teal : colors.mutedForeground} />
+            <Text style={[styles.requestCancelText, { color: studentCodeEnabled ? colors.teal : colors.mutedForeground }]}>
+              {studentCodeEnabled
+                ? t('إدخال كود الحضور', 'Enter attendance code')
+                : attendanceAction === 'expired'
+                  ? t('انتهت مهلة إدخال الكود', 'Code entry period ended')
+                  : t('إدخال الكود عند بدء الحصة', 'Enter code when the lesson starts')}
+            </Text>
+          </Pressable>
+          <Modal visible={modalOpen} transparent animationType="fade" onRequestClose={() => setModalOpen(false)}>
+            <View style={styles.codeModalBackdrop}>
+              <View style={[styles.codeModalCard, { backgroundColor: colors.card }]}>
+                <Text style={[styles.requestSubject, { color: colors.foreground, writingDirection: direction }]}>{t('تأكيد الحضور الحضوري', 'Confirm in-person attendance')}</Text>
+                <Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{t('أدخل الرمز الذي يعرضه المعلم لبدء الحصة.', 'Enter the code shown by the teacher to start the lesson.')}</Text>
+                <TextInput autoFocus value={enteredCode} onChangeText={(value) => { setEnteredCode(value); setError(''); }} keyboardType="number-pad" maxLength={12} placeholder={t('كود الحضور', 'Attendance code')} placeholderTextColor={colors.mutedForeground} style={[styles.codeInput, { color: colors.foreground, borderColor: error ? colors.destructive : colors.border }]} />
+                {error ? <Text accessibilityRole="alert" style={{ color: colors.destructive, textAlign: 'right' }}>{error}</Text> : null}
+                <View style={styles.codeModalActions}>
+                  <Pressable disabled={busy || !enteredCode.trim()} onPress={() => void confirmCode()} style={[styles.requestButton, { backgroundColor: colors.teal, borderColor: colors.teal, opacity: busy || !enteredCode.trim() ? 0.55 : 1 }]}><Text style={[styles.requestButtonText, { color: colors.primaryForeground }]}>{busy ? t('جارٍ التحقق…', 'Checking…') : t('تأكيد وبدء الجلسة', 'Confirm and start')}</Text></Pressable>
+                  <Pressable disabled={busy} onPress={() => setModalOpen(false)} style={[styles.requestButton, { borderColor: colors.border }]}><Text style={[styles.requestButtonText, { color: colors.mutedForeground }]}>{t('إلغاء', 'Cancel')}</Text></Pressable>
+                </View>
+              </View>
+            </View>
+          </Modal>
+        </>
+      ) : (
+        attendanceAction === 'expired'
+          ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{t('انتهت مهلة إدخال كود الحضور.', 'The attendance-code window has ended.')}</Text>
+          : null
+      )}
+    </View>
+  );
+}
+
+function InPersonRequestCard({ item, role, details, onConfirmed, onDecisionComplete, onCancel, cancelling }: { item: Record<string, unknown>; role: 'teacher' | 'student'; details?: Record<string, unknown>; onConfirmed?: () => void; onDecisionComplete?: () => void; onCancel?: () => void; cancelling?: boolean }) {
+  const colors = useColors();
+  const { t, locale, direction } = useAppPreferences();
+  const [codeModalOpen, setCodeModalOpen] = useState(false);
+  const [attendanceCode, setAttendanceCode] = useState('');
+  const [codeError, setCodeError] = useState('');
+  const [codeBusy, setCodeBusy] = useState(false);
+  const [decisionBusy, setDecisionBusy] = useState(false);
+  const [attendanceConfirmed, setAttendanceConfirmed] = useState(Boolean(item.attendance_confirmed_at));
+  const status = String(item.status ?? 'open');
+  const isOpen = status === 'open';
+  const bookingId = typeof item.booking_id === 'string' ? item.booking_id : '';
+  const scheduledAt = typeof item.scheduled_at === 'string' ? item.scheduled_at : '';
+  const codeWindowOpen = Boolean(bookingId && canConfirmInPersonAttendance(scheduledAt));
+  const canEnterCode = role === 'student' && status === 'accepted' && !attendanceConfirmed && codeWindowOpen;
+  const time = typeof item.scheduled_at === 'string' ? new Date(item.scheduled_at) : null;
+  const dateLabel = time && !Number.isNaN(time.getTime())
+    ? `${time.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' })} · ${time.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })}`
+    : t('موعد غير محدد', 'Time not specified');
+  const subjectTitle = String(item.subject_name ?? '').trim();
+  const person = role === 'teacher' ? item.student_name : item.teacher_name;
+  const personLabel = typeof person === 'string' && person.trim() ? person : '';
+  const addressSnapshot = item.visit_address_snapshot && typeof item.visit_address_snapshot === 'object'
+    ? item.visit_address_snapshot as Record<string, unknown>
+    : null;
+  const bookingSnapshot = getInPersonBookingSnapshot(details ?? {});
+  const location = [item.street_address ?? addressSnapshot?.street_address, item.district ?? addressSnapshot?.district, item.city_name ?? addressSnapshot?.city_name]
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .filter(Boolean)
+    .join(' · ');
+  const submitAttendanceCode = async () => {
+    const code = attendanceCode.trim();
+    if (!supabase || !bookingId || !code || codeBusy) return;
+    setCodeBusy(true);
+    setCodeError('');
+    const result = await supabase.rpc('confirm_in_person_attendance_code', { p_booking_id: bookingId, p_code: code });
+    setCodeBusy(false);
+    if (result.error) {
+      setCodeError(result.error.message || t('تعذر التحقق من الكود. أعد المحاولة.', 'Could not verify the code. Try again.'));
+      return;
+    }
+    if (result.data !== true) {
+      setAttendanceCode('');
+      setCodeError(t('الكود خطأ. أعد إدخاله.', 'Incorrect code. Enter it again.'));
+      return;
+    }
+    setAttendanceConfirmed(true);
+    setCodeModalOpen(false);
+    setAttendanceCode('');
+    onConfirmed?.();
+  };
+  const decideRequest = async (decision: 'accepted' | 'rejected') => {
+    const groupId = typeof item.request_group_id === 'string' ? item.request_group_id : '';
+    if (!supabase || !groupId || decisionBusy) return;
+    setDecisionBusy(true);
+    const { data, error } = await supabase.rpc(decision === 'accepted' ? 'accept_in_person_request' : 'reject_in_person_request', { p_request_group_id: groupId });
+    setDecisionBusy(false);
+    const outcome = getTeacherInPersonDecisionOutcome(data, error);
+    if (outcome === 'error') {
+      const message = error instanceof Error ? error.message : t('تحقق من الاتصال وحاول مرة أخرى.', 'Check your connection and try again.');
+      Alert.alert(t('تعذر تحديث الطلب', 'Could not update request'), message);
+      onDecisionComplete?.();
+      return;
+    }
+    if (outcome === 'conflict') {
+      Alert.alert(t('تمت معالجة الطلب', 'Request already handled'), t('قد يكون معلم آخر قبله أو انتهت مهلة القبول.', 'Another teacher may have accepted it, or it may have expired.'));
+      onDecisionComplete?.();
+      return;
+    }
+    Alert.alert(decision === 'accepted' ? t('تم قبول الحصة', 'Lesson accepted') : t('تم رفض الطلب', 'Request declined'));
+    onDecisionComplete?.();
+  };
+  return (
+    <View style={[styles.requestCard, { backgroundColor: colors.card, borderColor: colors.border, borderRightColor: colors.teal }]}>
+      <View style={styles.requestTop}>
+        <View style={styles.requestTopToggle}>
+          <View style={[styles.requestStatus, { backgroundColor: colors.tealSoft }]}><Text style={[styles.requestStatusText, { color: colors.teal }]}>{t('حضوري', 'In person')}</Text></View>
+          <View style={[styles.requestStatus, { backgroundColor: isOpen ? colors.goldSoft : colors.navySoft }]}><Text style={[styles.requestStatusText, { color: isOpen ? colors.accentForeground : colors.primary }]}>{isOpen ? t('طلب جديد', 'New request') : t('مقبول', 'Accepted')}</Text></View>
+          {subjectTitle && subjectTitle !== 'تاريخ' ? <Text numberOfLines={1} style={[styles.inPersonRequestTitle, { color: colors.foreground, writingDirection: direction }]}>{subjectTitle}</Text> : null}
+        </View>
+      </View>
+      <View style={styles.inPersonRequestDetails}>
+        {personLabel ? <View style={styles.inPersonRequestDetailLine}><Icon name="user" size={13} color={colors.mutedForeground} /><Text style={[styles.inPersonRequestDetailText, { color: colors.mutedForeground, writingDirection: direction }]}>{personLabel}</Text></View> : null}
+        <View style={styles.inPersonRequestDetailLine}><Icon name="calendar" size={13} color={colors.mutedForeground} /><Text style={[styles.inPersonRequestDetailText, { color: colors.mutedForeground, writingDirection: direction }]}>{dateLabel}</Text></View>
+        {bookingSnapshot.instructionMinutes !== null ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{bookingSnapshot.instructionMinutes} {t('دقيقة تدريس', 'teaching minutes')}</Text> : null}
+        {bookingSnapshot.packageMinutes !== null ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{bookingSnapshot.packageMinutes} {t('دقيقة محجوزة من الباقة', 'package minutes reserved')}</Text> : null}
+        {role === 'teacher' && location ? <StudentLocationLink
+          address={location}
+          latitude={item.latitude ?? addressSnapshot?.latitude}
+          longitude={item.longitude ?? addressSnapshot?.longitude}
+          containerStyle={styles.inPersonRequestDetailLine}
+          textStyle={[styles.inPersonRequestDetailText, { color: colors.foreground, writingDirection: direction }]}
+          backgroundColor="transparent"
+          iconColor={colors.teal}
+          textColor={colors.foreground}
+        /> : null}
+      </View>
+      {role === 'student' && status === 'accepted' ? attendanceConfirmed ? (
+        <View style={[styles.requestStatus, { backgroundColor: colors.tealSoft }]}><Text style={[styles.requestStatusText, { color: colors.teal }]}>{t('تم تأكيد الحضور — بدأت الجلسة الحضورية', 'Attendance confirmed — in-person session started')}</Text></View>
+      ) : canEnterCode ? (
+        <Pressable accessibilityRole="button" onPress={() => { setCodeError(''); setCodeModalOpen(true); }} style={[styles.requestCancelButton, { borderColor: colors.teal }]}>
+          <Icon name="key" size={14} color={colors.teal} />
+          <Text style={[styles.requestCancelText, { color: colors.teal }]}>{t('إدخال كود الحضور وبدء الجلسة', 'Enter attendance code and start')}</Text>
+        </Pressable>
+      ) : (
+        <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{bookingId ? t('يظهر إدخال الكود في بطاقة الحصة القادمة عند موعدها، ويظل متاحاً لمدة 15 دقيقة.', 'Code entry appears on the upcoming lesson card at the scheduled time and remains available for 15 minutes.') : t('بانتظار إنشاء موعد الحصة بعد قبول المعلم.', 'Waiting for the teacher to accept and create the lesson.')}</Text>
+      ) : null}
+      {role === 'student' && isOpen && !personLabel ? <Text style={[styles.inPersonActionHint, { color: colors.mutedForeground }]}>{t('الطلب متاح للمعلمين؛ يظهر اسم المعلم بعد القبول.', 'The request is available to teachers; the teacher’s name appears after acceptance.')}</Text> : null}
+      {canStudentCancelInPersonRequest(role, status) && onCancel ? (
+        <Pressable
+          testID={`cancel-in-person-request-${String(item.request_group_id ?? '')}`}
+          accessibilityRole="button"
+          disabled={cancelling}
+          onPress={onCancel}
+          style={({ pressed }) => [styles.requestCancelButton, { borderColor: colors.destructive, opacity: cancelling ? 0.55 : 1 }, pressed && styles.pressed]}
+        >
+          <Icon name="x-circle" size={14} color={colors.destructive} />
+          <Text style={[styles.requestCancelText, { color: colors.destructive }]}>{cancelling ? t('جارٍ الإلغاء…', 'Cancelling…') : t('إلغاء الطلب', 'Cancel request')}</Text>
+        </Pressable>
+      ) : null}
+      {role === 'teacher' && isOpen ? (
+        <SwipeDecisionControl disabled={decisionBusy} onDecision={(decision) => void decideRequest(decision)} />
+      ) : null}
+      <Modal visible={codeModalOpen} transparent animationType="fade" onRequestClose={() => setCodeModalOpen(false)}>
+        <View style={{ flex: 1, justifyContent: 'center', padding: 22, backgroundColor: 'rgba(10,25,45,0.45)' }}>
+          <View style={{ borderRadius: 20, padding: 18, gap: 12, backgroundColor: colors.card }}>
+            <Text style={[styles.requestSubject, { color: colors.foreground, writingDirection: direction }]}>{t('تأكيد الحضور الحضوري', 'Confirm in-person attendance')}</Text>
+            <Text style={[styles.requestMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{t('أدخل الكود الذي يعرضه المعلم. عند صحته ستبدأ الجلسة ويُسجل الحضور.', 'Enter the code shown by the teacher. A valid code starts the session and confirms attendance.')}</Text>
+            <TextInput
+              autoFocus
+              value={attendanceCode}
+              onChangeText={(value) => { setAttendanceCode(value); setCodeError(''); }}
+              keyboardType="number-pad"
+              maxLength={12}
+              placeholder={t('كود الحضور', 'Attendance code')}
+              placeholderTextColor={colors.mutedForeground}
+              style={{ minHeight: 48, borderWidth: 1, borderColor: codeError ? colors.destructive : colors.border, borderRadius: 12, paddingHorizontal: 12, color: colors.foreground, textAlign: 'center', letterSpacing: 4, fontSize: 18 }}
+            />
+            {codeError ? <Text accessibilityRole="alert" style={{ color: colors.destructive, textAlign: 'right' }}>{codeError}</Text> : null}
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable disabled={codeBusy || !attendanceCode.trim()} onPress={() => void submitAttendanceCode()} style={[styles.requestButton, { backgroundColor: colors.teal, borderColor: colors.teal, opacity: codeBusy || !attendanceCode.trim() ? 0.55 : 1 }]}>
+                <Text style={[styles.requestButtonText, { color: colors.primaryForeground }]}>{codeBusy ? t('جارٍ التحقق…', 'Checking…') : t('تأكيد وبدء الجلسة', 'Confirm and start')}</Text>
+              </Pressable>
+              <Pressable disabled={codeBusy} onPress={() => setCodeModalOpen(false)} style={[styles.requestButton, { borderColor: colors.border }]}>
+                <Text style={[styles.requestButtonText, { color: colors.mutedForeground }]}>{t('إلغاء', 'Cancel')}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -951,13 +1409,28 @@ const styles = StyleSheet.create({
   requestSectionHeader: { minHeight: 50, borderRadius: 18, borderWidth: 1, paddingHorizontal: 12, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   requestSectionTitle: { flex: 1, fontSize: 12, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   requestCard: { borderRadius: 18, borderWidth: 1, borderRightWidth: 2, padding: 12, gap: 7, shadowColor: '#173E8C', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  requestCardCompact: { borderRadius: 13, padding: 8, gap: 4, shadowOpacity: 0.035, shadowRadius: 4, elevation: 1 },
   requestTop: { flexDirection: 'row-reverse', alignItems: 'center', gap: 7 },
   requestTopToggle: { flex: 1, flexDirection: 'row-reverse', alignItems: 'center', gap: 10, minHeight: 40 },
   requestDeleteButton: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   requestSubject: { flex: 1, fontSize: 14, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  requestSubjectCompact: { fontSize: 12 },
+  inPersonRequestTitle: { flex: 1, fontSize: 12, lineHeight: 16, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
   requestStatus: { borderRadius: 9, paddingHorizontal: 9, paddingVertical: 6 },
   requestStatusText: { fontSize: 10, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   requestMeta: { fontSize: 10, lineHeight: 16, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
+  inPersonRequestDetails: { gap: 4, paddingVertical: 2 },
+  inPersonRequestDetailLine: { flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
+  inPersonRequestDetailText: { flex: 1, fontSize: 10, lineHeight: 15, fontFamily: 'Inter_500Medium', textAlign: 'right', writingDirection: 'rtl' },
+  inPersonSessionFooter: { gap: 5 },
+  inPersonLocation: { minHeight: 30, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
+  inPersonLocationText: { flex: 1, fontSize: 10, lineHeight: 14, fontFamily: 'Inter_500Medium', textAlign: 'right' },
+  inPersonActionHint: { fontSize: 9, lineHeight: 14, fontFamily: 'Inter_500Medium', textAlign: 'right', writingDirection: 'rtl' },
+  inPersonCode: { fontSize: 20, fontFamily: 'Inter_700Bold', letterSpacing: 5, textAlign: 'center' },
+  codeModalBackdrop: { flex: 1, justifyContent: 'center', padding: 22, backgroundColor: 'rgba(10,25,45,0.45)' },
+  codeModalCard: { borderRadius: 20, padding: 18, gap: 12 },
+  codeInput: { minHeight: 48, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, textAlign: 'center', letterSpacing: 4, fontSize: 18 },
+  codeModalActions: { flexDirection: 'row', gap: 8 },
   requestSlotList: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 6, marginTop: 2 },
   requestSlot: { borderRadius: 8, paddingHorizontal: 7, paddingVertical: 5, fontSize: 9, fontFamily: 'Inter_500Medium', writingDirection: 'rtl' },
   requestReserveNote: { fontSize: 9, lineHeight: 14, fontFamily: 'Inter_600SemiBold', textAlign: 'right', writingDirection: 'rtl' },

@@ -11,11 +11,13 @@ import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/lib/auth';
 import { useInternalCallWebRTC } from '@/hooks/useInternalCallWebRTC';
+
 import { supabase } from '@/lib/supabase';
 import { useColors } from '@/hooks/useColors';
 import { Icon } from '@/components/AjyalUI';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { shouldSuppressActiveConversationNotification } from '@/lib/activeChatNotifications';
+import { chooseInternalCallProvider, type InternalCallProvider } from '@/lib/internalCallTransport';
 import {
   registerPushToken as registerPushTokenOnServer,
   sendCallAccepted as sendCallAcceptedNotification,
@@ -49,6 +51,8 @@ export type IncomingCall = {
   callerName: string;
   callerRole?: string;
   roomId?: string;
+  transportProvider?: InternalCallProvider;
+  callerAgoraCapable?: boolean;
   status: CallStatus;
 };
 
@@ -59,6 +63,8 @@ type CallPayload = {
   callerName?: unknown;
   callerRole?: unknown;
   roomId?: unknown;
+  transportProvider?: unknown;
+  callerAgoraCapable?: unknown;
 };
 
 type RemoteCallRow = Record<string, unknown>;
@@ -223,6 +229,10 @@ function parseCallPayload(data: Record<string, unknown>): IncomingCall | null {
     callerName,
     callerRole: asString(payload.callerRole),
     roomId: rawRoomId?.startsWith('call:') ? undefined : rawRoomId,
+    transportProvider: payload.transportProvider === 'agora' ? 'agora' : 'webrtc',
+    callerAgoraCapable: typeof payload.callerAgoraCapable === 'boolean'
+      ? payload.callerAgoraCapable
+      : undefined,
     status: 'ringing',
   };
 }
@@ -265,6 +275,8 @@ function remoteIncomingCall(row: RemoteCallRow, userId: string): { call: Incomin
       callerName,
       callerRole: asString(row.caller_role) ?? 'معلم',
       roomId: asString(row.booking_id) ?? asString(row.room_id),
+      transportProvider: row.transport_provider === 'agora' ? 'agora' : 'webrtc',
+      callerAgoraCapable: row.caller_agora_capable === true,
       status,
     },
   };
@@ -621,6 +633,7 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
     call,
     userId: user?.id,
     enabled: Boolean(isAuthenticated && call?.status === 'active'),
+    transportProvider: call?.transportProvider ?? 'webrtc',
   });
 
   useEffect(() => {
@@ -727,15 +740,40 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
     await sendCallEndedNotification(currentCall.id, { recipientId });
   }, [user?.id]);
 
-  const respondToCall = useCallback(async (currentCall: IncomingCall, accepted: boolean): Promise<void> => {
+  const respondToCall = useCallback(async (currentCall: IncomingCall, accepted: boolean): Promise<InternalCallProvider> => {
+    let callerAgoraCapable = currentCall.callerAgoraCapable;
+    let transportProvider = currentCall.transportProvider ?? 'webrtc';
     if (supabase && !currentCall.id.startsWith('test-')) {
+      if (accepted && callerAgoraCapable === undefined) {
+        const { data: callRow, error: lookupError } = await supabase
+          .from('internal_calls')
+          .select('transport_provider,caller_agora_capable')
+          .eq('id', currentCall.id)
+          .maybeSingle();
+        if (lookupError || !callRow) throw new Error(lookupError?.message ?? 'تعذر قراءة إعدادات المكالمة.');
+        callerAgoraCapable = callRow.caller_agora_capable === true;
+        transportProvider = callRow.transport_provider === 'agora' ? 'agora' : 'webrtc';
+      }
+      const requestedProvider = accepted
+        ? chooseInternalCallProvider({ transportProvider, callerAgoraCapable })
+        : 'webrtc';
       const { data, error } = await supabase.rpc('respond_internal_call', {
         p_call_id: currentCall.id,
         p_accept: accepted,
+        p_transport_provider: requestedProvider,
       });
-      const result = data && typeof data === 'object' ? data as { success?: boolean; message?: string } : null;
+      const result = data && typeof data === 'object'
+        ? data as { success?: boolean; message?: string; call?: RemoteCallRow }
+        : null;
       if (error || result?.success === false) {
         throw new Error(error?.message ?? result?.message ?? (accepted ? 'تعذر قبول المكالمة' : 'تعذر رفض المكالمة'));
+      }
+      if (accepted) {
+        const confirmedProvider = result?.call?.transport_provider;
+        if (confirmedProvider !== requestedProvider) {
+          throw new Error('لم يثبت الخادم مزوّد المكالمة المطلوب؛ لن يتم الانضمام.');
+        }
+        transportProvider = requestedProvider;
       }
     }
     if (currentCall.callerId) {
@@ -745,6 +783,7 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
         await notifyCallEnded(currentCall);
       }
     }
+    return transportProvider;
   }, [notifyCallEnded]);
 
   const rememberNotification = useCallback((callId: string, notificationId: string) => {
@@ -785,16 +824,18 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
 
     const data = notificationData(response);
     const action = response.actionIdentifier;
-    const status = action === ACCEPT_CALL_ACTION
-      ? 'active'
-      : action === DECLINE_CALL_ACTION
-        ? 'declined'
-        : undefined;
+    const status = action === DECLINE_CALL_ACTION ? 'declined' : undefined;
     const parsedCall = parseCallPayload(data);
     if (parsedCall) rememberNotification(parsedCall.id, notificationId);
     applyCallPayload(data, status);
     if (parsedCall && (action === ACCEPT_CALL_ACTION || action === DECLINE_CALL_ACTION)) {
-      void respondToCall(parsedCall, action === ACCEPT_CALL_ACTION).catch(() => undefined);
+      void respondToCall(parsedCall, action === ACCEPT_CALL_ACTION)
+        .then((provider) => {
+          if (action === ACCEPT_CALL_ACTION) {
+            setCall({ ...parsedCall, status: 'active', transportProvider: provider });
+          }
+        })
+        .catch(() => undefined);
     }
     if (parsedCall) void dismissCallNotifications(parsedCall.id, notificationId);
     else {
@@ -1005,6 +1046,8 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       const { data, error } = await supabase.rpc('start_internal_call', {
         p_student_id: recipientId,
         p_booking_id: roomId?.trim() || null,
+        p_transport_provider: 'webrtc',
+        p_caller_agora_capable: true,
       });
       if (error) throw new Error(error.message);
       const remote = data && typeof data === 'object' ? data as { call?: { id?: unknown }; id?: unknown; success?: boolean; message?: string } : null;
@@ -1025,6 +1068,8 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       // WebRTC; otherwise the initial offer can be sent before the callee
       // subscribes and the call has no audio.
       status: 'ringing',
+      transportProvider: 'webrtc',
+      callerAgoraCapable: true,
     });
     try {
       const result = await sendIncomingCallNotification({
@@ -1061,9 +1106,9 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
   const acceptCall = useCallback(async () => {
     const current = callRef.current;
     if (!current) return;
-    await respondToCall(current, true);
+    const transportProvider = await respondToCall(current, true);
     void dismissCallNotifications(current.id);
-    setCall({ ...current, status: 'active' });
+    setCall({ ...current, status: 'active', transportProvider });
   }, [dismissCallNotifications, respondToCall]);
 
   const declineCall = useCallback(() => {
@@ -1129,8 +1174,10 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       }
       setCall(current);
       if (action === 'accept') {
-        if (current.status === 'ringing') await respondToCall(current, true);
-        setCall({ ...current, status: 'active' });
+        const transportProvider = current.status === 'ringing'
+          ? await respondToCall(current, true)
+          : current.transportProvider ?? 'webrtc';
+        setCall({ ...current, status: 'active', transportProvider });
         void dismissCallNotifications(callId);
         return;
       }

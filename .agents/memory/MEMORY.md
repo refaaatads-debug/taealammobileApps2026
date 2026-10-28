@@ -9,7 +9,10 @@
 - [Production PostgREST timeout](production-postgrest-timeout.md) — the public Supabase domain can return 57014/500 on REST introspection while Auth and table probes remain available.
 - [Teacher directory parity](teacher-directory-parity.md) — original teacher search joins approved profiles with subjects; empty availability means no schedule, not unrestricted availability.
 - [Booking lifecycle parity](booking-lifecycle-parity.md) — booking decisions are group-aware RPC flows with source-specific conflict, session, notification, and cancellation rules.
+- [In-person address sync](in-person-address-sync.md) — student bookings should reuse the saved profile address and refresh it when returning to the booking screen.
+- [In-person booking flow](in-person-booking-flow.md) — student request history belongs in Bookings; the creation flow selects stage before its related subjects.
 - [Session billing parity](session-billing-parity.md) — only ending a session through the platform session trigger can deduct minutes; cancellation has no proven automatic refund path.
+- [Teacher financial lifecycle](teacher-financial-lifecycle.md) — manual earnings and bonuses become withdrawable; requested and completed payouts must be tracked once.
 - [Mobile logout reliability](mobile-logout-reliability.md) — clear the local Supabase session without waiting for global network sign-out.
 - [Authenticated API caching](authenticated-api-caching.md) — 304 responses without a body must be retried or disabled for React Query API calls.
 - [Profile bootstrap caching](profile-bootstrap-caching.md) — identity bootstrap should use a short user-scoped cache and parallel upstream checks; cold Supabase latency is not a reason to poll.
@@ -17,16 +20,17 @@
 - [Expo native WebRTC](expo-native-webrtc.md) — native calls require a Development Build and Expo config plugin; Expo Go is not enough.
 - [WebRTC receive-only fallback](webrtc-receive-only-fallback.md) — missing mobile media devices must not block joining; negotiate recvonly audio/video and show a nonfatal warning.
 - [Expo Go notifications](expo-go-notifications.md) — avoid importing expo-notifications at module evaluation time on Android Expo Go; load it only in supported builds.
-- [Mobile session device policy](mobile-session-device-policy.md) — mobile is a student join client; teacher lifecycle and billing stay desktop-owned.
+- [Mobile session device policy](mobile-session-device-policy.md) — students may request global end after confirmation; the teacher platform owns the persisted billing transition.
 - [Expo Router custom tabs](expo-router-custom-tabs.md) — current Expo Router expects the custom tab bar on Tabs itself, not inside screenOptions.
+- [Expo Router platform code separation](expo-router-platform-separation.md) — keep platform-only test modules outside app route files when native bundle exclusion must be verified.
 - [Chat attachments in production](chat-attachments-production.md) — chat-files uploads must use booking paths; production storage is private and needs signed URL resolution.
-- [Internal call delivery](internal-call-delivery.md) — teacher calls are persisted in internal_calls; student clients need Realtime plus push for reliable ringing.
+- [Internal call delivery](internal-call-delivery.md) — foreground calls use Realtime and background pushes use a durable outbox; provider acceptance is not proof of device delivery.
 - [Mobile startup timeouts](mobile-startup-timeouts.md) — auth/session and bootstrap API requests must fail visibly instead of holding the native app on its launch skeleton forever.
 - [Supabase SecureStore sizing](supabase-secure-storage-sizing.md) — native Supabase sessions can exceed Android SecureStore's per-value limit and must be stored in safe-size chunks.
 - [Auth loading layout](auth-loading-layout.md) — full-width auth form containers need a separate centered loading style to avoid top-left skeletons.
-- [Supabase session hydration race](supabase-session-hydration-race.md) — initial getSession must not overwrite a newer password-login state.
+- [Supabase session hydration race](supabase-session-hydration-race.md) — only newer auth actions invalidate hydration; both initial sources must be empty before showing sign-in.
 - [Same-path navigation cancellation](same-path-navigation-cancellation.md) — avoid replacing the current route after auth when it is already the dashboard path.
-- [Platform session transport](platform-session-transport.md) — original web sessions use Supabase Realtime signaling with direct WebRTC and TURN, not a separate VPS room protocol.
+- [Platform session transport](platform-session-transport.md) — Agora media and Realtime control messages coexist; a local Agora connection is not proof the remote participant joined.
 - [Expo DevTools on NixOS](expo-devtools-nixos.md) — missing libglib affects optional DevTools only; Metro and the mobile preview can still be healthy.
 - [Supabase connector schema limits](supabase-connector-schema-limits.md) — OpenAPI may be blocked and concurrent metadata probes throttled; treat 403/429 as inconclusive.
 - [Supabase production DDL path](supabase-production-ddl-path.md) — the project’s live self-hosted Supabase policies require the VPS Postgres path, not the limited REST connector.
@@ -39,6 +43,7 @@
 - [Assignment review status parity](assignment-review-status-parity.md) — teacher review labels come from submission statuses, not the assignment's active lifecycle.
 - [Group booking contract](group-booking-contract.md) — keep grouped slots on a separate endpoint; local parity is not Production E2E proof.
 - [Supabase Realtime channel lifecycle](supabase-realtime-channel-lifecycle.md) — use unique topics or await cleanup when effects create postgres_changes channels under React Strict Mode.
+- [Supabase transient retry boundary](supabase-transient-retry-boundary.md) — retry only short-lived transport failures; keep permissions and data errors immediate.
 - [Production assignments schema](production-assignments-schema.md) — do not assume assignments exposes a progress column when building teacher student lists.
 - [Web native video style](web-native-video-style.md) — raw HTML video elements on Expo web need plain CSS style objects, not React Native style arrays.
 - [Whiteboard data-channel compatibility](whiteboard-datachannel-compatibility.md) — accept event/kind envelopes and normalize varied path/permission payloads before rendering.
@@ -57,14 +62,26 @@
 - [Foreground push deduplication](foreground-push-deduplication.md) — Realtime and Expo Push can represent the same foreground event, so render one app banner and dedupe by identity.
 - [VPS Supavisor API connection](vps-supavisor-api-connection.md) — self-hosted pooler needs the qualified supabase_admin.default API user for the existing local pooler password.
 - [Mobile onboarding order](mobile-onboarding-order.md) — show first-use onboarding before login, but never cover a restored authenticated session.
-- [Production push-token storage](production-push-token-storage.md) — API push delivery requires a separate public push_tokens table; production has Supabase profiles/auth users, not the local users table.
+- [Production push-token storage](production-push-token-storage.md) — production push needs a separate token table; re-register on foreground because the server can invalidate stale tokens.
 - [Expo static Preview isolation](expo-static-preview-isolation.md) — never expose the temporary Metro build port as the artifact Preview port; Preview requests can race the build and exhaust the Workspace.
 - [Expo web Preview host](expo-web-preview-host.md) — Replit's remote Simulate on Web needs Expo's LAN host mode; localhost can cause periodic blank reloads.
 - [Expo Metro watch folders](expo-metro-watchfolders.md) — pnpm monorepo defaults can watch every workspace package and exhaust inotify during a clean Web rebuild.
+- [pnpm store version mismatch](pnpm-store-version-mismatch.md) — use the pnpm version recorded by the installed workspace when the shell's pnpm reports an unexpected store location.
 - [Expo Preview build gating](expo-preview-build-gating.md) — reuse a fresh static bundle on workflow restarts; repeated export can restart the Workspace and look like Preview reloads.
 - [Replit Expo Go simulator routing](expo-go-simulator-routing.md) — force Expo Go when expo-dev-client is installed and proxy native requests through the artifact port.
 - [Mobile API workflow dependency](mobile-api-workflow-dependency.md) — authenticated native startup needs the API artifact workflow running alongside Expo.
-- [GitHub connector publishing](github-connector-publishing.md) — use the connected GitHub API when the git remote lacks auth, and exclude generated builds and credential files.
+- [GitHub connector publishing](github-connector-publishing.md) — sync app/API changes to `replit-dev`; deploy VPS only for API changes, and keep remote history intact.
+- [Agora development branch](agora-replit-branching.md) — keep Agora changes in Replit until the user approves specific changes for GitHub.
 - [GitHub workflow publishing](github-workflow-publishing.md) — workflow files may need GitHub web UI creation when the connector lacks workflow-write permission.
 - [EAS build quota](eas-build-quota.md) — a generic GitHub exit 1 can mean Expo cloud Android builds are exhausted after upload succeeds.
 - [VPS API deployment](vps-api-deployment.md) — preserve the production `.env`, build through Corepack, and verify service plus public health after updates.
+- [Tailwind class collisions](mockup-tailwind-class-collisions.md) — avoid generic CSS class names that overlap Tailwind utilities and can hide mockup controls.
+- [Expo Web E2E harness](expo-web-e2e-harness.md) — Metro, Node type stripping, and synthetic file-picker behavior constrain headless Expo UI tests.
+- [Review-agent fallback](review-agent-fallback.md) — when the runtime disables review subagents, review the diff directly and rely on local builds/tests.
+- [In-app certificate previews](in-app-certificate-previews.md) — never open a certificate externally; preview supported formats in-app and keep unsupported-file notices in-app too.
+- [Platform notification push](platform-notification-push.md) — use each notification row as the durable push identity and dedupe legacy direct sends against it.
+- [GitHub attachment hygiene](github-attachment-hygiene.md) — inspect branch history for uploaded files before pushing review branches; workspace commits can include them.
+- [Platform parity reference](platform-parity-reference.md) — use the user's `taealam` GitHub repository as the source of truth for app-to-platform parity.
+- [Mobile card touch targets](mobile-card-touch-targets.md) — interactive actions inside React Native cards must not be nested under a parent `Pressable`.
+- [In-person session lifecycle parity](in-person-session-lifecycle.md) — attendance starts in-person teaching; the saved admin duration controls completion, separate from saved package debit.
+- [In-person credit history access](in-person-credit-history-access.md) — read reservation/refund ledgers through an ownership-checked RPC; the student client lacks table-level SELECT.

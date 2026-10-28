@@ -10,6 +10,7 @@ import { useAjyal } from "@/hooks/useAjyal";
 import { EmptyState, Header, Icon, Screen, SectionHeading } from "@/components/AjyalUI";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { hasAiTutorFeature, isSubscriptionActive } from "@/lib/subscriptionEntitlements";
+import { getAvailableTeacherBalance, groupTeacherEarningsByMonthAndType } from "@/lib/teacherFinance";
 
 type Row = Record<string, unknown>;
 type AiReport = Row & {
@@ -35,7 +36,15 @@ type ConsumptionRecord = {
   id: string;
   subjectName: string;
   teacherName: string;
+  packageName: string;
+  deliveryMode: string;
+  recordStatus: string;
+  packageMinutes: number;
+  reservedMinutes: number;
+  teachingMinutes: number;
   actualMinutes: number;
+  releasedMinutes: number;
+  reservationStatus: string | null;
   shortSession: boolean;
   scheduledAt: string | null;
   startedAt: string | null;
@@ -124,11 +133,8 @@ function planFeatures(plan: Row): string[] {
 function subscriptionStatus(row: Row | null): "فعال" | "منتهي" | "موقوف" | "غير مشترك" {
   if (!row) return "غير مشترك";
   if (isSubscriptionActive(row)) return "فعال";
-  const endsAt = text(row, "ends_at");
-  const endsAtMs = endsAt ? new Date(endsAt).getTime() : Number.NaN;
-  const hasExpired = Boolean(endsAt) && (!Number.isFinite(endsAtMs) || endsAtMs <= Date.now());
   const depleted = (number(row, "remaining_minutes") ?? 0) <= 0;
-  if (hasExpired || depleted) return "منتهي";
+  if (depleted) return "منتهي";
   if (boolean(row, "is_active") === false) return "موقوف";
   return "غير مشترك";
 }
@@ -356,13 +362,17 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
     const profile = profileResult.data;
     let deductions: ConsumptionRecord[] = [];
     if (detail) {
+      const subscriptions = (subscriptionsResult.data ?? []) as Row[];
+      const subscriptionIds = subscriptions.map((row) => text(row, "id")).filter(Boolean) as string[];
+      const subscriptionById = new Map(subscriptions.map((row) => [String(row.id), row]));
+      const planById = new Map(((plansResult.data ?? []) as Row[]).map((row) => [String(row.id), row]));
       const bookingsResult = await supabase
         .from("bookings")
-        .select("id, teacher_id, subject_id, subjects(name), scheduled_at")
+        .select("id, teacher_id, subject_id, subjects(name), scheduled_at, subscription_id, status, delivery_mode, duration_minutes, instruction_duration_minutes, balance_cost_minutes, in_person_package_minutes")
         .eq("student_id", user.id)
-        .eq("status", "completed")
+        .in("subscription_id", subscriptionIds.length ? subscriptionIds : ["00000000-0000-0000-0000-000000000000"])
         .order("scheduled_at", { ascending: false })
-        .limit(50);
+        .limit(500);
       if (bookingsResult.error) throw bookingsResult.error;
       const bookings = (bookingsResult.data ?? []) as Row[];
       if (bookings.length) {
@@ -407,21 +417,88 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
         deductions = bookings.map((booking) => {
           const bookingId = String(booking.id);
           const session = sessionsByBooking.get(bookingId);
-          if (!session) return null;
           const teacherId = text(booking, "teacher_id") ?? "";
           const nestedSubject = booking.subjects && typeof booking.subjects === "object" ? text(booking.subjects as Row, "name") : null;
-          const minutes = actualMinutes(session);
+          const deliveryMode = text(booking, "delivery_mode") ?? "online";
+          const minutes = session
+            ? number(session, "deducted_minutes") ?? (deliveryMode === "in_person" ? 0 : actualMinutes(session))
+            : 0;
+          const subscriptionId = text(booking, "subscription_id");
+          const subscription = subscriptionId ? subscriptionById.get(subscriptionId) : undefined;
+          const plan = subscription ? planById.get(String(subscription.plan_id)) : undefined;
           return {
             id: bookingId,
             subjectName: nestedSubject ?? subjectsByTeacher.get(teacherId) ?? "غير محدد",
             teacherName: namesByTeacher.get(teacherId) ?? "معلم",
+            packageName: plan ? text(plan, "name_ar", "name", "title") ?? "باقة تعليمية" : "باقة تعليمية",
+            deliveryMode,
+            recordStatus: text(booking, "status") ?? "unknown",
+            packageMinutes: number(booking, "in_person_package_minutes", "balance_cost_minutes") ?? number(session ?? {}, "deducted_minutes") ?? 0,
+            reservedMinutes: deliveryMode === "in_person" ? number(booking, "in_person_package_minutes", "balance_cost_minutes") ?? 0 : 0,
+            teachingMinutes: number(booking, "instruction_duration_minutes", "duration_minutes") ?? (session ? actualMinutes(session) : 0),
             actualMinutes: minutes,
-            shortSession: minutes > 0 && minutes < 5 ? true : boolean(session, "short_session") === true,
+            releasedMinutes: 0,
+            reservationStatus: null,
+            shortSession: Boolean(session && minutes > 0 && minutes < 5) || boolean(session ?? {}, "short_session") === true,
             scheduledAt: text(booking, "scheduled_at"),
-            startedAt: text(session, "started_at"),
-            endedAt: text(session, "ended_at"),
+            startedAt: text(session ?? {}, "started_at"),
+            endedAt: text(session ?? {}, "ended_at"),
           };
-        }).filter((record): record is ConsumptionRecord => Boolean(record));
+        });
+      }
+      const creditHistoryRows = (
+        await Promise.all(subscriptionIds.map(async (subscriptionId) => {
+          const result = await supabase!.rpc(
+            "get_my_in_person_package_credit_history" as any,
+            { p_subscription_id: subscriptionId },
+          );
+          if (result.error) throw result.error;
+          return (result.data ?? []) as Row[];
+        }))
+      ).flat();
+      if (creditHistoryRows.length) {
+        const ledgerBookingIds = new Set(
+          creditHistoryRows.map((row) => text(row, "booking_id")).filter(Boolean) as string[],
+        );
+        const existingByBooking = new Map(deductions.map((record) => [record.id, record]));
+        const ledgerRecords: ConsumptionRecord[] = creditHistoryRows.map((row) => {
+          const bookingId = text(row, "booking_id");
+          const existing = bookingId ? existingByBooking.get(bookingId) : undefined;
+          const reservationStatus = text(row, "reservation_status");
+          const subscriptionId = text(row, "subscription_id");
+          const subscription = subscriptionId ? subscriptionById.get(subscriptionId) : undefined;
+          const plan = subscription ? planById.get(String(subscription.plan_id)) : undefined;
+          const reservedMinutes = number(row, "reserved_minutes") ?? 0;
+          const consumedMinutes = number(row, "consumed_minutes") ?? 0;
+          const releasedMinutes = number(row, "released_minutes") ?? 0;
+          return {
+            ...existing,
+            id: bookingId ?? `in-person-reservation:${text(row, "reservation_id") ?? ""}`,
+            subjectName: text(row, "subject_name") ?? existing?.subjectName ?? "غير محدد",
+            teacherName: text(row, "teacher_name") ?? existing?.teacherName ?? "معلم",
+            packageName: plan ? text(plan, "name_ar", "name", "title") ?? "باقة تعليمية" : "باقة تعليمية",
+            deliveryMode: "in_person",
+            recordStatus: text(row, "booking_status") ?? existing?.recordStatus ?? reservationStatus ?? "unknown",
+            packageMinutes: reservedMinutes,
+            reservedMinutes,
+            teachingMinutes: number(row, "instruction_duration_minutes") ?? existing?.teachingMinutes ?? 0,
+            actualMinutes: consumedMinutes,
+            releasedMinutes,
+            reservationStatus,
+            shortSession: false,
+            scheduledAt: text(row, "scheduled_at") ?? existing?.scheduledAt ?? text(row, "created_at"),
+            startedAt: existing?.startedAt ?? null,
+            endedAt: existing?.endedAt ?? null,
+          };
+        });
+        deductions = [
+          ...deductions.filter((record) => !(record.deliveryMode === "in_person" && ledgerBookingIds.has(record.id))),
+          ...ledgerRecords,
+        ].sort((a, b) => {
+          const aTime = Date.parse(a.scheduledAt ?? a.startedAt ?? "");
+          const bTime = Date.parse(b.scheduledAt ?? b.startedAt ?? "");
+          return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+        });
       }
     }
     return {
@@ -506,7 +583,7 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
       </View>
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
          <View style={styles.cardTop}><Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{activePlan ? text(activePlan, "name", "name_en", "name_ar") ?? t("الاشتراك الحالي", "Current plan") : query.data ? t("لا يوجد اشتراك فعال", "No active plan") : t("جارٍ تحميل بيانات الاشتراك…", "Loading subscription…")}</Text>{overallStatus ? <Text style={[styles.badge, statusStyle(overallStatus, colors)]}>{t(overallStatus, overallStatus === "فعال" ? "Active" : overallStatus === "منتهي" ? "Ended" : overallStatus === "موقوف" ? "Paused" : "Not subscribed")}</Text> : <Text style={[styles.badge, { color: colors.mutedForeground, backgroundColor: colors.background }]}>{t("جارٍ التحميل…", "Loading…")}</Text>}</View>
-         {activeRows.length ? <><ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(aggregateRemainingSessions)} ${t("جلسة", "sessions")}`} /><ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(aggregateRemainingMinutes)} ${t("دقيقة", "min")}`} /><ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(active, "starts_at", "created_at"), locale)} /><ValueRow label={t("تاريخ الانتهاء", "End date")} value={dateLabel(text(active, "ends_at"), locale)} /></> : query.data ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("يمكنك اختيار إحدى الباقات المتاحة للبدء في حجز الجلسات.", "Choose one of the available plans to start booking sessions.")}</Text> : null}
+          {activeRows.length ? <><ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(aggregateRemainingSessions)} ${t("جلسة", "sessions")}`} /><ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(aggregateRemainingMinutes)} ${t("دقيقة", "min")}`} /><ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(active, "starts_at", "created_at"), locale)} /><ValueRow label={t("صلاحية الدقائق", "Minute validity")} value={t("مفتوحة ما دام الرصيد متاحًا", "Open while balance remains")} /></> : query.data ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("يمكنك اختيار إحدى الباقات المتاحة للبدء في حجز الجلسات.", "Choose one of the available plans to start booking sessions.")}</Text> : null}
       </View>
       {detail && query.data && activeRows.length ? (
         <View style={[styles.usageCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -566,8 +643,8 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
       {detail && !query.loading && !query.error && query.data ? (
         <>
            <SectionHeading title={t("الاستهلاك حسب الجلسات", "Usage by session")} />
-          {!query.data.deductions.length ? (
-             <EmptyState icon="clock" title={t("لا توجد جلسات مكتملة بعد", "No completed sessions yet")} body={t("سيظهر استهلاك الباقة هنا بعد إنهاء جلسة من المنصة.", "Plan usage will appear here after a session is completed on the platform.")} />
+           {!query.data.deductions.length ? (
+              <EmptyState icon="clock" title={t("لا توجد جلسات مرتبطة بالباقة", "No sessions linked to this plan")} body={t("ستظهر هنا الجلسات المحجوزة والمكتملة والمبالغ المستردة من سجل المنصة.", "Reserved, completed, and refunded sessions from your platform history will appear here.")} />
           ) : query.data.deductions.map((record) => (
             <View key={record.id} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={styles.cardTop}>
@@ -577,16 +654,42 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
                 <View style={styles.consumptionTitle}>
                   <Text style={[styles.cardTitle, { color: colors.foreground }]}>{record.subjectName}</Text>
                   <Text style={[styles.cardBody, { color: colors.mutedForeground, marginTop: 3 }]}>{record.teacherName}</Text>
+                   <Text style={[styles.cardBody, { color: colors.mutedForeground, marginTop: 3 }]}>{record.packageName}</Text>
                 </View>
-                {record.shortSession ? (
+                {record.deliveryMode === "in_person" && record.reservationStatus ? (
+                   <Text style={[styles.badge, { color: colors.teal, backgroundColor: colors.tealSoft }]}>
+                     {record.reservationStatus === "released"
+                       ? t("مستردة", "Refunded")
+                       : record.reservationStatus === "consumed"
+                         ? t("مستهلكة", "Consumed")
+                         : record.reservationStatus === "partially_settled"
+                           ? t("تسوية جزئية", "Partially settled")
+                           : t("محجوزة", "Reserved")}
+                   </Text>
+                ) : record.shortSession ? (
                    <Text style={[styles.badge, { color: colors.mutedForeground, backgroundColor: colors.background }]}>{t("لم تُحتسب", "Not counted")}</Text>
                 ) : (
                    <Text style={[styles.deductionAmount, { color: colors.destructive }]}>-{formatNumber(record.actualMinutes)} {t("د", "min")}</Text>
                 )}
               </View>
                <ValueRow label={t("موعد الجلسة", "Session time")} value={dateTimeLabel(record.scheduledAt ?? record.startedAt, locale)} />
-               <ValueRow label={t("حالة الخصم", "Deduction status")} value={record.shortSession ? t("أقل من 5 دقائق", "Under 5 minutes") : `${t("مدة الجلسة:", "Session duration:")} ${formatNumber(record.actualMinutes)} ${t("دقيقة", "min")}`} />
-               {record.shortSession ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("الجلسة أقل من 5 دقائق، لذلك لم يتم الخصم من الباقة.", "The session was under 5 minutes, so no plan minutes were deducted.")}</Text> : null}
+               <ValueRow label={t("نوع الجلسة", "Session type")} value={record.deliveryMode === "in_person" ? t("حضوري", "In person") : t("أونلاين", "Online")} />
+               <ValueRow label={t("حالة الحجز", "Booking status")} value={record.recordStatus === "completed" ? t("مكتملة", "Completed") : record.recordStatus === "confirmed" ? t("مؤكدة", "Confirmed") : record.recordStatus === "cancelled" ? t("ملغاة", "Cancelled") : record.recordStatus === "pending" ? t("قيد الانتظار", "Pending") : record.recordStatus} />
+               <ValueRow label={t("مدة التدريس", "Teaching duration")} value={`${formatNumber(record.teachingMinutes)} ${t("دقيقة", "min")}`} />
+               {record.deliveryMode === "in_person" ? (
+                 <>
+                   <ValueRow label={t("الدقائق المحجوزة", "Minutes reserved")} value={`${formatNumber(record.reservedMinutes)} ${t("دقيقة", "min")}`} />
+                   <ValueRow label={t("الدقائق المستهلكة من الرصيد", "Credit minutes consumed")} value={`${formatNumber(record.actualMinutes)} ${t("دقيقة", "min")}`} />
+                   <ValueRow label={t("الدقائق المستردة", "Minutes refunded")} value={`${formatNumber(record.releasedMinutes)} ${t("دقيقة", "min")}`} />
+                 </>
+               ) : (
+                 <>
+                   <ValueRow label={t("دقائق الباقة", "Plan minutes")} value={`${formatNumber(record.packageMinutes)} ${t("دقيقة", "min")}`} />
+                   <ValueRow label={t("الدقائق المخصومة", "Minutes deducted")} value={`${formatNumber(record.actualMinutes)} ${t("دقيقة", "min")}`} />
+                   <ValueRow label={t("حالة الاستهلاك", "Usage status")} value={record.shortSession ? t("أقل من 5 دقائق", "Under 5 minutes") : record.actualMinutes > 0 ? t("تم الاستهلاك", "Consumed") : t(record.recordStatus, record.recordStatus)} />
+                   {record.shortSession ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("الجلسة أقل من 5 دقائق، لذلك لم يتم الخصم من الباقة.", "The session was under 5 minutes, so no plan minutes were deducted.")}</Text> : null}
+                 </>
+               )}
             </View>
           ))}
         </>
@@ -624,7 +727,7 @@ function SubscriptionRow({ subscription, plan, locale, t, formatNumber }: {
     <ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(number(subscription, "sessions_remaining") ?? 0)} ${t("جلسة", "sessions")}`} />
     <ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(number(subscription, "remaining_minutes") ?? 0)} ${t("دقيقة", "min")}`} />
     <ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(subscription, "starts_at", "created_at"), locale)} />
-    <ValueRow label={t("تاريخ الانتهاء", "End date")} value={dateLabel(text(subscription, "ends_at"), locale)} />
+    <ValueRow label={t("صلاحية الدقائق", "Minute validity")} value={t("مفتوحة ما دام الرصيد متاحًا", "Open while balance remains")} />
   </View>;
 }
 
@@ -711,24 +814,105 @@ function WalletScreen() {
   const colors = useColors();
   const { user } = useAuth();
   const { role } = useAjyal();
-  const { t, direction, locale } = useAppPreferences();
+  const { t, direction, locale, formatNumber } = useAppPreferences();
   const query = useRemoteData(["wallet", user?.id, role], async () => {
-    if (role !== "teacher" || !supabase || !user) return { wallet: null, transactions: [], earnings: [] };
-    const [walletResult, transactionsResult, earningsResult] = await Promise.all([
+    if (role !== "teacher" || !supabase || !user) return { wallet: null, transactions: [], earnings: [], earningsSummary: null, earningsBalanceError: null };
+    const [walletResult, transactionsResult, earningsResult, withdrawalSummaryResult] = await Promise.all([
       supabase.from("wallets").select("*").eq("user_id", user.id).maybeSingle(),
       supabase.from("wallet_transactions").select("*").eq("user_id", user.id).order("created_at", { ascending: false }),
       supabase.from("teacher_earnings").select("*").eq("teacher_id", user.id).order("created_at", { ascending: false }),
+      supabase.rpc("get_teacher_withdrawal_summary" as any, { _teacher_id: user.id }),
     ]);
     if (walletResult.error) throw walletResult.error;
     if (transactionsResult.error) throw transactionsResult.error;
     if (earningsResult.error) throw earningsResult.error;
-    return { wallet: walletResult.data as Row | null, transactions: (transactionsResult.data ?? []) as Row[], earnings: (earningsResult.data ?? []) as Row[] };
+    const withdrawalSummary = Array.isArray(withdrawalSummaryResult.data)
+      ? (withdrawalSummaryResult.data[0] as Row | undefined) ?? null
+      : withdrawalSummaryResult.data as Row | null;
+    const earningsSummary = withdrawalSummary
+      ? { available_balance: withdrawalSummary.online_available }
+      : null;
+    return {
+      wallet: walletResult.data as Row | null,
+      transactions: (transactionsResult.data ?? []) as Row[],
+      earnings: (earningsResult.data ?? []) as Row[],
+      earningsSummary,
+      earningsBalanceError: withdrawalSummaryResult.error?.message ?? null,
+    };
   });
   if (role !== "teacher") {
     return <Screen><SectionHeader eyebrow={t("صلاحيات الحساب", "Account access")} title={t("المحفظة والأرباح", "Wallet and earnings")} avatarText={user?.email?.slice(0, 1)} /><EmptyState icon="lock" title={t("هذه الصفحة للمعلم فقط", "Teachers only")} body={t("لا يمكن الوصول إلى بيانات المحفظة من حساب الطالب.", "Student accounts cannot access wallet data.")} /></Screen>;
   }
-  const hasRows = Boolean(query.data?.wallet || query.data?.transactions.length || query.data?.earnings.length);
-  return <Screen><SectionHeader eyebrow={t("إدارة دخلك التعليمي", "Manage your teaching income")} title={t("المحفظة والأرباح", "Wallet and earnings")} avatarText={user?.email?.slice(0, 1)} /><View style={[styles.hero, { backgroundColor: colors.primary }]}><View style={[styles.heroIcon, { backgroundColor: colors.goldSoft }]}><Icon name="credit-card" size={22} color={colors.accentForeground} /></View><View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("حساب المعلم", "Teacher account")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{t("رصيدك وحركتك المالية", "Your balance and financial activity")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("تُعرض الأرقام كما هي محفوظة في محفظة المنصة.", "Figures are shown exactly as stored in the platform wallet.")}</Text></View></View><StateBlock loading={query.loading} error={query.error} empty={!hasRows} onRetry={query.reload} />{query.data?.wallet ? <View style={[styles.balanceCard, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}><Text style={[styles.balanceLabel, { color: colors.mutedForeground }]}>{t("الرصيد الحالي", "Current balance")}</Text><Text style={[styles.balance, { color: colors.teal }]}>{money(number(query.data.wallet, "balance", "available_balance", "current_balance"))}</Text></View> : null}<SectionHeading title={t("آخر الحركات", "Latest activity")} />{query.data?.transactions.map((row) => <View key={`tx-${String(row.id)}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.cardTop}><Text style={[styles.price, { color: row.type === "debit" ? colors.destructive : colors.teal }]}>{money(number(row, "amount", "amount_sar"))}</Text><Text style={[styles.badge, { color: colors.mutedForeground }]}>{text(row, "type", "transaction_type") ?? t("حركة", "Transaction")}</Text></View><Text style={[styles.cardTitle, { color: colors.foreground }]}>{text(row, "description", "reason") ?? t("حركة مالية", "Financial transaction")}</Text><Text style={[styles.cardBody, { color: colors.mutedForeground }]}>{dateLabel(text(row, "created_at"), locale)}</Text></View>)}</Screen>;
+  const groupedEarnings = groupTeacherEarningsByMonthAndType(query.data?.earnings ?? []);
+  const earningStatusLabel = (statuses: Set<string>) => {
+    if (statuses.size !== 1) return statuses.size > 1 ? t("حالات متعددة", "Multiple statuses") : "—";
+    const status = [...statuses][0];
+    if (status === "confirmed") return t("مؤكدة", "Confirmed");
+    if (status === "pending") return t("قيد المراجعة", "Pending");
+    if (status === "paid") return t("مدفوعة", "Paid");
+    if (status === "rejected") return t("مرفوضة", "Rejected");
+    return status;
+  };
+  const hasRows = Boolean(query.data?.wallet || query.data?.transactions.length || query.data?.earnings.length || query.data?.earningsSummary);
+  return (
+    <Screen>
+      <SectionHeader eyebrow={t("إدارة دخلك التعليمي", "Manage your teaching income")} title={t("المحفظة والأرباح", "Wallet and earnings")} avatarText={user?.email?.slice(0, 1)} />
+      <View style={[styles.hero, { backgroundColor: colors.primary }]}>
+        <View style={[styles.heroIcon, { backgroundColor: colors.goldSoft }]}><Icon name="credit-card" size={22} color={colors.accentForeground} /></View>
+        <View style={styles.heroCopy}>
+          <Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("حساب المعلم", "Teacher account")}</Text>
+          <Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{t("رصيدك وحركتك المالية", "Your balance and financial activity")}</Text>
+          <Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("يعرض رصيد السحب والأرباح المسجلة في المنصة.", "Shows your withdrawable balance and earnings recorded on the platform.")}</Text>
+        </View>
+      </View>
+      <StateBlock loading={query.loading} error={query.error} empty={!hasRows} onRetry={query.reload} />
+      {query.data?.earningsBalanceError ? (
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.cardBody, { color: colors.destructive }]}>{t("تعذر تحميل رصيد الأرباح من المنصة", "Could not load the platform earnings balance")}: {query.data.earningsBalanceError}</Text>
+        </View>
+      ) : null}
+      {query.data?.earningsSummary ? (
+        <View style={[styles.balanceCard, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}>
+          <Text style={[styles.balanceLabel, { color: colors.mutedForeground }]}>{t("الرصيد المتاح للسحب", "Available for withdrawal")}</Text>
+          <Text style={[styles.balance, { color: colors.teal }]}>{money(getAvailableTeacherBalance(query.data.earningsSummary))}</Text>
+        </View>
+      ) : null}
+      {query.data?.wallet ? (
+        <View style={[styles.balanceCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.balanceLabel, { color: colors.mutedForeground }]}>{t("رصيد المحفظة", "Wallet balance")}</Text>
+          <Text style={[styles.balance, { color: colors.foreground }]}>{money(number(query.data.wallet, "balance", "available_balance", "current_balance"))}</Text>
+        </View>
+      ) : null}
+      <SectionHeading title={t("الأرباح حسب الشهر والنوع", "Earnings by month and type")} />
+      {query.data ? groupedEarnings.length ? groupedEarnings.map((item) => (
+        <View key={`${item.month}:${item.earningType}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.cardTop}>
+            <Text style={[styles.price, { color: item.earningType === "deduction" ? colors.destructive : colors.teal }]}>{money(item.amount)}</Text>
+            <Text style={[styles.badge, { color: colors.mutedForeground }]}>{item.earningType === "bonus" ? t("مكافأة", "Bonus") : item.earningType === "deduction" ? t("خصم", "Deduction") : t("تحويل شهري", "Monthly transfer")}</Text>
+          </View>
+          <Text style={[styles.cardTitle, { color: colors.foreground }]}>{item.month}</Text>
+          <Text style={[styles.cardBody, { color: colors.mutedForeground }]}>
+            {item.hours > 0 ? `${formatNumber(item.hours)} ${t("ساعة", "hours")} · ` : ""}
+            {earningStatusLabel(item.statuses)}
+          </Text>
+        </View>
+      )) : <EmptyState icon="briefcase" title={t("لا توجد أرباح مسجلة", "No earnings recorded")} body={t("ستظهر التحويلات الشهرية والمكافآت والخصومات هنا.", "Monthly transfers, bonuses, and deductions will appear here.")} /> : null}
+      <Pressable onPress={() => router.push("/teacher-withdrawals")} style={[styles.card, { backgroundColor: colors.navySoft, borderColor: colors.border }]}>
+        <Text style={[styles.cardTitle, { color: colors.primary, textAlign: "center" }]}>{t("عرض طلبات السحب والمدفوعات", "View withdrawal requests and payments")}</Text>
+      </Pressable>
+      <SectionHeading title={t("آخر الحركات", "Latest activity")} />
+      {query.data?.transactions.map((row) => (
+        <View key={`tx-${String(row.id)}`} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.cardTop}>
+            <Text style={[styles.price, { color: row.type === "debit" ? colors.destructive : colors.teal }]}>{money(number(row, "amount", "amount_sar"))}</Text>
+            <Text style={[styles.badge, { color: colors.mutedForeground }]}>{text(row, "type", "transaction_type") ?? t("حركة", "Transaction")}</Text>
+          </View>
+          <Text style={[styles.cardTitle, { color: colors.foreground }]}>{text(row, "description", "reason") ?? t("حركة مالية", "Financial transaction")}</Text>
+          <Text style={[styles.cardBody, { color: colors.mutedForeground }]}>{dateLabel(text(row, "created_at"), locale)}</Text>
+        </View>
+      ))}
+    </Screen>
+  );
 }
 
 async function resolveRecordingUrl(url: string | null) {

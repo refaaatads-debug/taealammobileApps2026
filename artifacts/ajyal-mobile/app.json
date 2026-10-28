@@ -29,6 +29,8 @@
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.INTERNET",
         "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.WAKE_LOCK",
         "android.permission.BLUETOOTH"
@@ -58,6 +60,7 @@
       "expo-router",
       "./plugins/withIncomingCallNative",
       "./plugins/withAjyalNativeCalls",
+      "./plugins/withGoogleMapsKeys",
       "@config-plugins/react-native-blob-util",
       "@config-plugins/react-native-pdf",
       [

@@ -10,6 +10,7 @@ import { useAjyal } from "@/hooks/useAjyal";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
+import ProfileInPersonSection from "@/components/ProfileInPersonSection";
 import {
   deleteTeacherCertificate,
   getCertificateOpenUrl,
@@ -39,6 +40,15 @@ type ProfileTestHarness = {
   client: ProfileDataClient;
 };
 const STAGES = ["رياض الأطفال", "الابتدائية", "المتوسطة", "الثانوية", "قدرات", "تحصيلي"];
+const WEEK_DAYS = [
+  { key: "sunday", ar: "الأحد", en: "Sunday" },
+  { key: "monday", ar: "الإثنين", en: "Monday" },
+  { key: "tuesday", ar: "الثلاثاء", en: "Tuesday" },
+  { key: "wednesday", ar: "الأربعاء", en: "Wednesday" },
+  { key: "thursday", ar: "الخميس", en: "Thursday" },
+  { key: "friday", ar: "الجمعة", en: "Friday" },
+  { key: "saturday", ar: "السبت", en: "Saturday" },
+];
 const STAGE_TRANSLATIONS: Record<string, string> = {
   "رياض الأطفال": "Kindergarten",
   "الابتدائية": "Elementary",
@@ -126,17 +136,19 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
       }
     : ajyal.profile;
   const retryProfile = testHarness ? async () => {} : ajyal.retryProfile;
-  const logout = testHarness ? async () => {} : ajyal.logout;
   const profileClient = testHarness?.client ?? supabase;
+  const performLogout = testHarness ? async () => {} : ajyal.logout;
   const teacher = role === "teacher";
   const [loading, setLoading] = useState(true);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [showLogoutConfirmation, setShowLogoutConfirmation] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const [profileRefreshError, setProfileRefreshError] = useState<string | null>(null);
   const [refreshingProfile, setRefreshingProfile] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
   const [teacherProfileId, setTeacherProfileId] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
@@ -149,6 +161,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   const [nationality, setNationality] = useState("");
   const [availableFrom, setAvailableFrom] = useState("");
   const [availableTo, setAvailableTo] = useState("");
+  const [availableDays, setAvailableDays] = useState<string[]>([]);
   const [bankName, setBankName] = useState("");
   const [iban, setIban] = useState("");
   const [accountHolder, setAccountHolder] = useState("");
@@ -198,6 +211,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
       setNationality(data.nationality);
       setAvailableFrom(data.availableFrom);
       setAvailableTo(data.availableTo);
+      setAvailableDays(data.availableDays);
       setBankName(data.bankName);
       setIban(data.iban);
       setAccountHolder(data.accountHolder);
@@ -214,6 +228,32 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   }, [profileClient, role, user, t]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const openLogoutConfirmation = () => {
+    if (loggingOut) return;
+    setLogoutError(null);
+    setShowLogoutConfirmation(true);
+  };
+
+  const cancelLogout = () => {
+    if (loggingOut) return;
+    setShowLogoutConfirmation(false);
+    setLogoutError(null);
+  };
+
+  const confirmLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    setLogoutError(null);
+    try {
+      await performLogout();
+      setShowLogoutConfirmation(false);
+      setLoggingOut(false);
+    } catch {
+      setLoggingOut(false);
+      setLogoutError(t("تعذر تسجيل الخروج. تحقق من الاتصال ثم حاول مرة أخرى.", "Could not sign out. Check your connection and retry."));
+    }
+  };
 
   const save = async () => {
     if (!profileClient || !user || saving || !dataLoaded || (role !== "student" && role !== "teacher")) return;
@@ -242,6 +282,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
           nationality,
           availableFrom,
           availableTo,
+           availableDays,
           bankName,
           iban,
           accountHolder,
@@ -408,29 +449,25 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
     }
   };
 
-  const handleLogout = async () => {
-    if (loggingOut) return;
-    setLoggingOut(true);
-     try { await logout(); } catch (error) { Alert.alert(t("تعذر تسجيل الخروج", "Could not sign out"), message(error, t("حاول مرة أخرى.", "Please try again."))); }
-    finally { setLoggingOut(false); }
-  };
-
   return (
     <>
     <Screen>
        <Header avatarText={profile?.displayName?.slice(0, 1)} eyebrow={t("مساحتك الشخصية", "Your personal space")} title={t("حسابي", "Profile")} onBell={() => router.push("/notifications")} />
-        <View style={[styles.hero, { backgroundColor: colors.primary, flexDirection: isRTL ? "row" : "row-reverse", shadowColor: colors.primary }]}>
-          <View style={[styles.avatar, { backgroundColor: colors.accent }]}>
-            <Icon name={role === "student" ? "book-open" : "briefcase"} size={28} color={colors.accentForeground} />
+         <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row" : "row-reverse", shadowColor: colors.primary }]}>
+           <View style={[styles.heroGlow, { backgroundColor: colors.navySoft, pointerEvents: "none" }]} />
+           <View style={[styles.heroGlowSecondary, { backgroundColor: colors.tealSoft, pointerEvents: "none" }]} />
+           <View style={[styles.heroAccent, { backgroundColor: colors.primary, pointerEvents: "none" }]} />
+           <View style={[styles.avatar, { backgroundColor: colors.primary }]}>
+             <Icon name={role === "student" ? "book-open" : "briefcase"} size={28} color={colors.primaryForeground} />
           </View>
           <View style={[styles.heroCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
-            <Text style={[styles.heroEyebrow, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("ملف الحساب", "Account profile")}</Text>
-            <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.heroName, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{profile?.displayName ?? "—"}</Text>
+             <Text style={[styles.heroEyebrow, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("ملف الحساب", "Account profile")}</Text>
+             <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.heroName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{profile?.displayName ?? "—"}</Text>
             <View style={[styles.heroMetaRow, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
-              <View style={[styles.rolePill, { backgroundColor: colors.teal }]}>
-                <Text style={[styles.rolePillText, { color: colors.primaryForeground, writingDirection: direction }]}>{profile?.roleLabel === "طالب" ? t("طالب", "Student") : profile?.roleLabel === "معلم" ? t("معلم", "Teacher") : profile?.roleLabel}</Text>
+               <View style={[styles.rolePill, { backgroundColor: colors.tealSoft }]}>
+                 <Text style={[styles.rolePillText, { color: colors.teal, writingDirection: direction }]}>{profile?.roleLabel === "طالب" ? t("طالب", "Student") : profile?.roleLabel === "معلم" ? t("معلم", "Teacher") : profile?.roleLabel}</Text>
               </View>
-              <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.heroMeta, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{profile?.email}</Text>
+               <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.heroMeta, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{profile?.email}</Text>
             </View>
             {teacher ? (
               <View
@@ -469,7 +506,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
         </View>
       ) : (
         <>
-            <ProfileSection number="٠١" title={t("بياناتك الشخصية", "Your personal details")} hint={t("معلومات التواصل المرتبطة بحسابك", "Contact information linked to your account")} icon="user">
+            <ProfileSection number="٠١" defaultExpanded title={t("بياناتك الشخصية", "Your personal details")} hint={t("معلومات التواصل المرتبطة بحسابك", "Contact information linked to your account")} icon="user">
               <FormCard>
               <Field testID="profile-full-name" label={t("الاسم الكامل", "Full name")} value={fullName} onChangeText={setFullName} placeholder={t("الاسم كما يظهر في المنصة", "Name as shown on the platform")} />
               <Field testID="profile-phone" label={t("رقم الجوال", "Phone number")} value={phone} onChangeText={setPhone} placeholder="05xxxxxxxx" keyboardType="phone-pad" />
@@ -477,6 +514,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
               </FormCard>
             </ProfileSection>
 
+          {!teacher && !testHarness && user?.id ? <ProfileInPersonSection number="٠٢" role="student" userId={user.id} /> : null}
           {teacher ? <>
             <ProfileSection number="٠٢" title={t("ملفك التعليمي", "Your teaching profile")} hint={t("عرّف الطلاب بخبرتك ومواعيدك", "Introduce students to your experience and availability")} icon="book-open">
               <FormCard>
@@ -484,12 +522,14 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
                <Field testID="teacher-years-experience" label={t("سنوات الخبرة", "Years of experience")} value={yearsExperience} onChangeText={setYearsExperience} keyboardType="number-pad" />
                <Field testID="teacher-nationality" label={t("الجنسية", "Nationality")} value={nationality} onChangeText={setNationality} />
                <View style={styles.pair}><View style={styles.half}><Field testID="teacher-available-to" label={t("متاح إلى", "Available until")} value={availableTo} onChangeText={setAvailableTo} placeholder="20:00" /></View><View style={styles.half}><Field testID="teacher-available-from" label={t("متاح من", "Available from")} value={availableFrom} onChangeText={setAvailableFrom} placeholder="08:00" /></View></View>
+                <ChoiceGroup testID="teacher-available-days" label={t("أيام التوفر الأسبوعية", "Weekly availability")} options={WEEK_DAYS.map((day) => t(day.ar, day.en))} selected={WEEK_DAYS.filter((day) => availableDays.includes(day.key)).map((day) => t(day.ar, day.en))} onToggle={(label) => { const day = WEEK_DAYS.find((item) => t(item.ar, item.en) === label); if (day) setAvailableDays((current) => current.includes(day.key) ? current.filter((value) => value !== day.key) : [...current, day.key]); }} />
                <ChoiceGroup testID="teacher-subject" label={t("التخصص (اختر تخصصاً واحداً)", "Subject (choose one)")} options={subjects.map((item) => item.name)} selected={subjects.filter((item) => item.id === selectedSubject).map((item) => item.name)} onToggle={(name) => { const chosen = subjects.find((item) => item.name === name); setSelectedSubject(chosen?.id === selectedSubject ? null : chosen?.id ?? null); }} single />
                <ChoiceGroup testID="teacher-stage" label={t("المراحل التي تدرّسها", "Stages you teach")} options={STAGES} selected={teachingStages} onToggle={(stage) => setTeachingStages((current) => current.includes(stage) ? current.filter((item) => item !== stage) : [...current, stage])} />
               </FormCard>
             </ProfileSection>
 
-            <ProfileSection number="٠٣" title={t("البيانات البنكية", "Bank details")} hint={t("لتسهيل معالجة طلبات السحب", "For withdrawal processing")} icon="credit-card">
+            {!testHarness && user?.id ? <ProfileInPersonSection number="٠٣" role="teacher" userId={user.id} /> : null}
+            <ProfileSection number="٠٤" title={t("البيانات البنكية", "Bank details")} hint={t("لتسهيل معالجة طلبات السحب", "For withdrawal processing")} icon="credit-card">
               <FormCard>
                <Field testID="teacher-bank-name" label={t("اسم البنك", "Bank name")} value={bankName} onChangeText={setBankName} />
                <Field testID="teacher-iban" label={t("رقم الآيبان (IBAN)", "IBAN")} value={iban} onChangeText={setIban} placeholder="SA00 0000 0000 0000 0000 0000" />
@@ -498,7 +538,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
               </FormCard>
             </ProfileSection>
 
-            <ProfileSection number="٠٤" title={t("المؤهلات والشهادات", "Qualifications and certificates")} hint={t("أضف مستنداتك المهنية واحتفظ بها هنا", "Add and keep your professional documents here")} icon="file-text">
+            <ProfileSection number="٠٥" title={t("المؤهلات والشهادات", "Qualifications and certificates")} hint={t("أضف مستنداتك المهنية واحتفظ بها هنا", "Add and keep your professional documents here")} icon="file-text">
               <FormCard>
                <Field testID="certificate-name" label={t("اسم الشهادة", "Certificate name")} value={certificateName} onChangeText={setCertificateName} placeholder={t("مثال: بكالوريوس تربية", "Example: Bachelor of Education")} />
                <Pressable testID="pick-certificate" onPress={() => void pickCertificate()} style={[styles.outlineButton, { borderColor: colors.border }]}><Icon name="paperclip" size={16} color={colors.teal} /><Text style={[styles.outlineText, { color: colors.foreground }]}>{certificateFile?.name ?? t("اختيار ملف الشهادة", "Choose certificate file")}</Text></Pressable>
@@ -559,12 +599,12 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
               </FormCard>
             </ProfileSection>
           </> : (
-            <ProfileSection number="٠٢" title={t("المرحلة الدراسية", "School stage")} hint={t("اختر مرحلتك لعرض ما يناسب رحلتك التعليمية", "Choose your stage to personalize your learning journey")} icon="book-open">
+            <ProfileSection number="٠٣" title={t("المرحلة الدراسية", "School stage")} hint={t("اختر مرحلتك لعرض ما يناسب رحلتك التعليمية", "Choose your stage to personalize your learning journey")} icon="book-open">
               <StagePicker testID="student-stage" value={studentStage} options={STAGES} onChange={setStudentStage} />
             </ProfileSection>
           )}
 
-          <ProfileSection number={teacher ? "٠٥" : "٠٣"} title={t("الإعدادات والإشعارات", "Settings and notifications")} hint={t("اختر التنبيهات التي تناسبك", "Choose the notifications that work for you")} icon="calendar">
+          <ProfileSection number={teacher ? "٠٦" : "٠٤"} title={t("الإعدادات والإشعارات", "Settings and notifications")} hint={t("اختر التنبيهات التي تناسبك", "Choose the notifications that work for you")} icon="calendar">
             <FormCard>
               <ToggleRow testID="notify-before-session" icon="calendar" label={t("تنبيه قبل موعد الجلسة", "Notify before a session")} value={notifyBefore} onValueChange={setNotifyBefore} />
               <ToggleRow testID="notify-after-session" icon="check-circle" label={t("تنبيه بعد انتهاء الجلسة", "Notify after a session")} value={notifyAfter} onValueChange={setNotifyAfter} />
@@ -581,12 +621,70 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
              <LinkRow icon="message-circle" label={t("تواصل مع الفريق", "Contact the team")} onPress={() => router.push("/support")} />
              <LinkRow icon="shield" label={t("سياسة الخصوصية", "Privacy policy")} onPress={() => router.push("/privacy")} />
              <LinkRow icon="file-text" label={t("شروط الاستخدام", "Terms of use")} onPress={() => router.push("/terms")} />
-             <LinkRow icon="log-out" label={loggingOut ? t("جارٍ تسجيل الخروج...", "Signing out...") : t("تسجيل الخروج", "Sign out")} destructive onPress={() => void handleLogout()} />
             </FormCard>
           </ProfileSection>
+          <View
+            testID="profile-sign-out-section"
+            style={[styles.profileSection, { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius + 8, shadowColor: colors.primary }]}
+          >
+            <View style={[styles.profileSectionGlow, { backgroundColor: colors.muted, pointerEvents: "none" }]} />
+            <View style={[styles.profileSectionAccent, isRTL ? { right: 0 } : { left: 0 }, { backgroundColor: colors.destructive, pointerEvents: "none" }]} />
+            <View style={styles.profileSectionBody}>
+              <FormCard>
+                <LinkRow testID="profile-sign-out" icon="log-out" label={loggingOut ? t("جارٍ تسجيل الخروج...", "Signing out...") : t("تسجيل الخروج", "Sign out")} destructive onPress={openLogoutConfirmation} />
+              </FormCard>
+            </View>
+          </View>
         </>
       )}
     </Screen>
+    {showLogoutConfirmation ? (
+      <Modal
+        testID="logout-confirmation"
+        transparent
+        animationType="fade"
+        onRequestClose={cancelLogout}
+      >
+        <View style={styles.logoutOverlay}>
+          <View style={[styles.logoutDialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.logoutDialogIcon, { backgroundColor: `${colors.destructive}18` }]}>
+              <Icon name="log-out" size={20} color={colors.destructive} />
+            </View>
+            <Text accessibilityRole="header" style={[styles.logoutDialogTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+              {t("تسجيل الخروج", "Sign out")}
+            </Text>
+            <Text style={[styles.logoutDialogBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+              {t("هل تريد تسجيل الخروج من حسابك؟", "Do you want to sign out of your account?")}
+            </Text>
+            {logoutError ? (
+              <Text accessibilityRole="alert" style={[styles.logoutDialogError, { color: colors.destructive, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+                {logoutError}
+              </Text>
+            ) : null}
+            <View style={[styles.logoutDialogActions, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+              <Pressable
+                testID="cancel-profile-sign-out"
+                accessibilityRole="button"
+                disabled={loggingOut}
+                onPress={cancelLogout}
+                style={[styles.logoutDialogButton, { backgroundColor: colors.muted, opacity: loggingOut ? 0.6 : 1 }]}
+              >
+                <Text style={[styles.logoutDialogButtonText, { color: colors.foreground }]}>{t("إلغاء", "Cancel")}</Text>
+              </Pressable>
+              <Pressable
+                testID="confirm-profile-sign-out"
+                accessibilityRole="button"
+                disabled={loggingOut}
+                onPress={() => void confirmLogout()}
+                style={[styles.logoutDialogButton, { backgroundColor: colors.destructive, opacity: loggingOut ? 0.7 : 1 }]}
+              >
+                {loggingOut ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Text style={[styles.logoutDialogButtonText, { color: colors.primaryForeground }]}>{t("تسجيل الخروج", "Sign out")}</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    ) : null}
     <Modal
       visible={certificateViewer !== null}
       animationType="fade"
@@ -699,16 +797,25 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   );
 }
 
-type ProfileSectionIcon = "user" | "book-open" | "credit-card" | "file-text" | "calendar" | "help-circle";
+type ProfileSectionIcon = "user" | "book-open" | "credit-card" | "file-text" | "calendar" | "help-circle" | "log-out";
 
-function ProfileSection({ number, kicker, title, hint, icon, children }: { number?: string; kicker?: string; title: string; hint: string; icon: ProfileSectionIcon; children: React.ReactNode }) {
+function ProfileSection({ number, kicker, title, hint, icon, children, defaultExpanded = false }: { number?: string; kicker?: string; title: string; hint: string; icon: ProfileSectionIcon; children: React.ReactNode; defaultExpanded?: boolean }) {
   const colors = useColors();
   const { t, direction } = useAppPreferences();
   const isRTL = direction === "rtl";
+  const [expanded, setExpanded] = useState(defaultExpanded);
   return (
     <View style={[styles.profileSection, { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius + 8, shadowColor: colors.primary }]}>
-      <View style={[styles.profileSectionHeader, { flexDirection: isRTL ? "row-reverse" : "row", borderBottomColor: colors.border }]}>
-        <View style={[styles.profileSectionIcon, { backgroundColor: colors.accent }]}>
+      <View style={[styles.profileSectionGlow, { backgroundColor: colors.muted, pointerEvents: "none" }]} />
+      <View style={[styles.profileSectionAccent, isRTL ? { right: 0 } : { left: 0 }, { backgroundColor: icon === "credit-card" ? colors.accentForeground : icon === "file-text" ? colors.teal : colors.primary, pointerEvents: "none" }]} />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={`${title}, ${expanded ? t("إخفاء القسم", "Collapse section") : t("فتح القسم", "Expand section")}`}
+        onPress={() => setExpanded((current) => !current)}
+        style={({ pressed }) => [styles.profileSectionHeader, { flexDirection: isRTL ? "row-reverse" : "row", borderBottomColor: colors.border, borderBottomWidth: expanded ? 1 : 0, opacity: pressed ? 0.82 : 1 }]}
+      >
+        <View style={[styles.profileSectionIcon, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Icon name={icon} size={18} color={colors.teal} />
         </View>
         <View style={[styles.profileSectionCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
@@ -718,8 +825,11 @@ function ProfileSection({ number, kicker, title, hint, icon, children }: { numbe
           <Text accessibilityRole="header" style={[styles.profileSectionTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{title}</Text>
           <Text style={[styles.profileSectionHint, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{hint}</Text>
         </View>
-      </View>
-      <View style={styles.profileSectionBody}>{children}</View>
+        <View style={[styles.profileSectionArrow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Icon name={expanded ? "chevron-up" : "chevron-down"} size={15} color={colors.teal} />
+        </View>
+      </Pressable>
+      {expanded ? <View style={styles.profileSectionBody}>{children}</View> : null}
     </View>
   );
 }
@@ -787,17 +897,20 @@ function ToggleRow({ testID, icon, label, value, onValueChange }: { testID?: str
   return <View style={[styles.toggle, { borderBottomColor: colors.border, flexDirection: direction === "rtl" ? "row" : "row-reverse" }]}><Switch testID={testID} value={value} onValueChange={onValueChange} trackColor={{ false: colors.muted, true: colors.teal }} thumbColor={colors.card} /><Text style={[styles.toggleText, { color: colors.foreground, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]}>{label}</Text><View style={[styles.toggleIcon, { backgroundColor: iconBackground }]}><Icon name={icon} size={16} color={iconColor} /></View></View>;
 }
 
-function LinkRow({ icon, label, onPress, destructive = false }: { icon: "help-circle" | "message-circle" | "shield" | "file-text" | "log-out"; label: string; onPress: () => void; destructive?: boolean }) {
+function LinkRow({ icon, label, onPress, destructive = false, testID }: { icon: "help-circle" | "message-circle" | "shield" | "file-text" | "log-out"; label: string; onPress: () => void; destructive?: boolean; testID?: string }) {
   const colors = useColors();
   const { direction } = useAppPreferences();
   const iconColor = destructive ? colors.destructive : icon === "help-circle" ? colors.primary : icon === "message-circle" ? colors.teal : colors.accentForeground;
   const iconBackground = destructive ? `${colors.destructive}18` : icon === "help-circle" ? colors.navySoft : icon === "message-circle" ? colors.tealSoft : colors.goldSoft;
-  return <Pressable onPress={onPress} style={[styles.linkRow, { borderBottomColor: colors.border, flexDirection: direction === "rtl" ? "row" : "row-reverse" }]}><Icon name={direction === "rtl" ? "arrow-left" : "arrow-right"} size={15} color={colors.mutedForeground} /><Text style={[styles.linkText, { color: destructive ? colors.destructive : colors.foreground, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]}>{label}</Text><View style={[styles.linkIcon, { backgroundColor: iconBackground }]}><Icon name={icon} size={17} color={iconColor} /></View></Pressable>;
+  return <Pressable testID={testID} accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={[styles.linkRow, { borderBottomColor: colors.border, flexDirection: direction === "rtl" ? "row" : "row-reverse" }]}><Icon name={direction === "rtl" ? "arrow-left" : "arrow-right"} size={15} color={colors.mutedForeground} /><Text style={[styles.linkText, { color: destructive ? colors.destructive : colors.foreground, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]}>{label}</Text><View style={[styles.linkIcon, { backgroundColor: iconBackground }]}><Icon name={icon} size={17} color={iconColor} /></View></Pressable>;
 }
 
 const styles = StyleSheet.create({
-  hero: { minHeight: 142, borderRadius: 24, padding: 17, alignItems: "center", marginBottom: 16, shadowOpacity: 0.14, shadowRadius: 14, shadowOffset: { width: 0, height: 7 }, elevation: 3 },
-  avatar: { width: 62, height: 62, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  hero: { minHeight: 142, borderWidth: 1, borderRadius: 24, padding: 17, alignItems: "center", marginBottom: 16, overflow: "hidden", position: "relative", shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 4 },
+  heroGlow: { position: "absolute", width: 180, height: 180, borderRadius: 90, top: -116, left: -46, opacity: 0.72 },
+  heroGlowSecondary: { position: "absolute", width: 112, height: 112, borderRadius: 56, bottom: -78, right: -30, opacity: 0.7 },
+  heroAccent: { position: "absolute", height: 4, width: 64, borderRadius: 2, top: 0, left: 22, opacity: 0.9 },
+  avatar: { width: 62, height: 62, borderRadius: 20, alignItems: "center", justifyContent: "center", shadowColor: "#173E8C", shadowOpacity: 0.18, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
   heroCopy: { flex: 1, marginHorizontal: 13 },
   heroEyebrow: { fontSize: 9, fontFamily: "Inter_600SemiBold", writingDirection: "rtl", marginBottom: 4, opacity: 0.82 },
   heroName: { maxWidth: "100%", fontSize: 20, lineHeight: 26, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
@@ -814,13 +927,16 @@ const styles = StyleSheet.create({
   introTag: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
   introTagText: { fontSize: 9, fontFamily: "Inter_600SemiBold" },
   center: { minHeight: 180, alignItems: "center", justifyContent: "center" },
-  profileSection: { borderWidth: 1, overflow: "hidden", marginBottom: 13, shadowOpacity: 0.05, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 1 },
-  profileSectionHeader: { minHeight: 76, alignItems: "center", gap: 11, paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1 },
-  profileSectionIcon: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  profileSection: { borderWidth: 1, overflow: "hidden", marginBottom: 15, position: "relative", shadowOpacity: 0.1, shadowRadius: 15, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  profileSectionGlow: { position: "absolute", width: 132, height: 132, borderRadius: 66, top: -70, left: -46, opacity: 0.42 },
+  profileSectionAccent: { position: "absolute", top: 13, bottom: 13, width: 4, borderRadius: 2, opacity: 0.82 },
+  profileSectionHeader: { minHeight: 82, alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1 },
+  profileSectionIcon: { width: 43, height: 43, borderRadius: 14, alignItems: "center", justifyContent: "center", borderWidth: 1, shadowColor: "#173E8C", shadowOpacity: 0.12, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  profileSectionArrow: { width: 30, height: 30, borderRadius: 10, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   profileSectionCopy: { flex: 1, minWidth: 0 },
   profileSectionKicker: { fontSize: 9, fontFamily: "Inter_500Medium", marginBottom: 2 },
-  profileSectionTitle: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_700Bold" },
-  profileSectionHint: { fontSize: 9, lineHeight: 14, fontFamily: "Inter_400Regular", marginTop: 2 },
+  profileSectionTitle: { fontSize: 13, lineHeight: 19, fontFamily: "Inter_700Bold" },
+  profileSectionHint: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular", marginTop: 3 },
   profileSectionBody: { paddingHorizontal: 14, paddingTop: 15, paddingBottom: 1 },
   stageLabelRow: { alignItems: "center", justifyContent: "space-between", marginBottom: 9 },
   stageLabel: { fontSize: 10, fontFamily: "Inter_700Bold" },
@@ -875,4 +991,13 @@ const styles = StyleSheet.create({
   linkRow: { minHeight: 57, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   linkText: { flex: 1, textAlign: "right", fontSize: 11, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
   linkIcon: { width: 35, height: 35, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  logoutOverlay: { flex: 1, alignItems: "center", justifyContent: "center", padding: 22, backgroundColor: "rgba(8, 18, 38, 0.48)" },
+  logoutDialog: { width: "100%", maxWidth: 360, borderWidth: 1, borderRadius: 22, padding: 20, shadowColor: "#10264A", shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: 9 }, elevation: 8 },
+  logoutDialogIcon: { width: 42, height: 42, borderRadius: 14, alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  logoutDialogTitle: { fontSize: 16, lineHeight: 22, fontFamily: "Inter_700Bold" },
+  logoutDialogBody: { fontSize: 12, lineHeight: 18, fontFamily: "Inter_400Regular", marginTop: 5 },
+  logoutDialogError: { fontSize: 11, lineHeight: 16, fontFamily: "Inter_500Medium", marginTop: 10 },
+  logoutDialogActions: { gap: 9, marginTop: 18 },
+  logoutDialogButton: { flex: 1, minHeight: 44, borderRadius: 12, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 },
+  logoutDialogButtonText: { fontSize: 12, fontFamily: "Inter_700Bold" },
 });
