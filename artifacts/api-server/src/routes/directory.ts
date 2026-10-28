@@ -12,6 +12,7 @@ import { and, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { getSupabaseProfile, hasSupabaseRole, readBearerToken, supabaseTable } from "../lib/supabaseAuth";
 import { normalizeStageList } from "../lib/teachingStages";
+import { incomingStudentRequestQuery, linkedStudentIds, studentDirectoryEntries } from "../lib/teacherStudentDirectory";
 
 const router: IRouter = Router();
 
@@ -176,15 +177,10 @@ router.get("/students", async (req, res): Promise<void> => {
       }),
       // RLS exposes only requests this teacher is allowed to see: open
       // requests for the teacher's subjects and requests accepted by them.
-      supabaseTable<Record<string, unknown>>(supabaseToken, "booking_requests", {
-        select: "student_id",
-      }),
+      supabaseTable<Record<string, unknown>>(supabaseToken, "booking_requests",
+        incomingStudentRequestQuery(teacherId, new Date().toISOString())),
     ]);
-    const studentIds = [...new Set([
-      ...bookingRows.map((row) => typeof row.student_id === "string" ? row.student_id : null),
-      ...assignmentRows.map((row) => typeof row.student_id === "string" ? row.student_id : null),
-      ...requestRows.map((row) => typeof row.student_id === "string" ? row.student_id : null),
-    ].filter((id): id is string => Boolean(id)))];
+    const studentIds = linkedStudentIds(bookingRows, assignmentRows, requestRows);
     if (!studentIds.length) {
       res.json(ListMyStudentsResponse.parse([]));
       return;
@@ -193,15 +189,7 @@ router.get("/students", async (req, res): Promise<void> => {
       user_id: `in.(${studentIds.join(",")})`,
       select: "user_id,full_name,avatar_url",
     });
-    res.json(ListMyStudentsResponse.parse(students.map((student) => {
-      return {
-        id: String(student.user_id ?? student.id),
-        displayName: remoteDisplayName(student),
-        email: null,
-        profileImageUrl: typeof student.avatar_url === "string" ? student.avatar_url : null,
-        progress: 0,
-      };
-    })));
+    res.json(ListMyStudentsResponse.parse(studentDirectoryEntries(studentIds, students)));
     return;
   }
   const [currentUser] = await db

@@ -1,4 +1,5 @@
 - [RLS policy verification](rls-policy-verification.md) — verify generated PostgreSQL policy expressions directly after schema pushes.
+- [Teacher student membership](teacher-student-membership.md) — students with requests visible to a teacher must appear before acceptance, not only after a booking or assignment.
 - [Workspace TypeScript references](typescript-workspace-project-references.md) — standalone app checks can read stale or missing declaration outputs from referenced workspace libraries.
 - [Expo build concurrency](expo-build-concurrency.md) — Metro needs a free port, and codegen cleanup can require an Expo restart before judging logs.
 - [Supabase runtime verification](supabase-runtime-verification.md) — secret existence does not prove the key is valid for the live custom domain.
