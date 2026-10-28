@@ -12,6 +12,7 @@ export type ProfileFormValues = {
   nationality: string;
   availableFrom: string;
   availableTo: string;
+  availableDays: string[];
   bankName: string;
   iban: string;
   accountHolder: string;
@@ -123,6 +124,7 @@ async function loadProfileDataOnce(
     nationality: "",
     availableFrom: "",
     availableTo: "",
+    availableDays: [],
     bankName: "",
     iban: "",
     accountHolder: "",
@@ -155,6 +157,9 @@ async function loadProfileDataOnce(
   data.nationality = text(teacher, "nationality");
   data.availableFrom = text(teacher, "available_from");
   data.availableTo = text(teacher, "available_to");
+  data.availableDays = Array.isArray(teacher.available_days)
+    ? teacher.available_days.filter((day): day is string => typeof day === "string")
+    : [];
   data.bankName = text(teacher, "bank_name");
   data.iban = text(teacher, "iban");
   data.accountHolder = text(teacher, "account_holder_name");
@@ -207,6 +212,7 @@ export async function saveProfileData(
     nationality: values.nationality || null,
     available_from: values.availableFrom || null,
     available_to: values.availableTo || null,
+    available_days: values.availableDays,
     bank_name: values.bankName || null,
     iban: values.iban || null,
     account_holder_name: values.accountHolder || null,

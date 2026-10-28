@@ -4,7 +4,7 @@ const {
   withAppBuildGradle,
   withAndroidManifest,
   withDangerousMod,
-} = require("@expo/config-plugins");
+} = require("expo/config-plugins");
 
 const INCOMING_CALL_ACTIVITY = ".IncomingCallActivity";
 const INCOMING_CALL_SERVICE = ".IncomingCallMessagingService";

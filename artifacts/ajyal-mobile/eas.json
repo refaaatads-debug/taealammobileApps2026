@@ -1,5 +1,11 @@
 {
   "build": {
+    "development": {
+      "extends": "preview",
+      "developmentClient": true,
+      "distribution": "internal",
+      "pnpm": "12.9.1"
+    },
     "production": {
       "environment": "production",
       "distribution": "store",

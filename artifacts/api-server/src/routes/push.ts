@@ -19,7 +19,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import crypto from "node:crypto";
 import { decodePushTokenBundle, mergePushTokenBundle } from "../lib/pushTokenBundle";
 import { findNotificationImageUrl } from "../lib/notificationImage";
-import { persistPlatformNotificationOnce } from "../lib/platformNotifications";
+import { buildAssignmentNotification, persistPlatformNotificationOnce } from "../lib/platformNotifications";
 import { getSupabaseRoles, readBearerToken, supabaseTable } from "../lib/supabaseAuth";
 import { sendUserPushNotification } from "../lib/userPush";
 import {
@@ -355,25 +355,18 @@ router.post("/push/assignment-submissions", async (req, res): Promise<void> => {
     return;
   }
 
-  const recipientId = isStudentSubmission ? teacherId : studentId;
-  const title = isStudentSubmission ? "حل واجب جديد" : "تم تصحيح واجبك";
   const assignmentTitle = typeof assignment.title === "string" && assignment.title.trim()
     ? assignment.title.trim()
     : "واجب";
-  const body = isStudentSubmission
-    ? `تم تسليم حل جديد لواجب "${assignmentTitle}".`
-    : `تم تصحيح واجب "${assignmentTitle}". افتح المهام لعرض الدرجة والملاحظات.`;
-  const delivered = await sendUserPushNotification(recipientId, {
-    title,
-    body,
-    data: {
-      type: isStudentSubmission ? "assignment_submission" : "assignment_graded",
-      assignmentId,
-      submissionId,
-      route: "/assignments",
-    },
+  const notification = buildAssignmentNotification({
+    recipientId: isStudentSubmission ? teacherId : studentId,
+    assignmentId,
+    submissionId,
+    event,
+    assignmentTitle,
   });
-  res.status(202).json({ delivered });
+  const created = await persistPlatformNotificationOnce(notification);
+  res.status(202).json({ delivered: false, queued: true, duplicate: !created });
 });
 
 router.post("/calls/incoming", async (req, res): Promise<void> => {

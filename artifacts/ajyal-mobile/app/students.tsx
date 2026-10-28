@@ -1,21 +1,32 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { getListMyStudentsQueryKey, useListMyStudents } from '@workspace/api-client-react';
 import { EmptyState, Header, Icon, LoadingBlock, ProgressBar, Screen, SectionHeading } from '@/components/AjyalUI';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { useInternalCall } from '@/contexts/InternalCallContext';
-import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/lib/auth';
+import { MaskedPhoneCallModal } from '@/components/MaskedPhoneCallModal';
 
 export default function StudentsScreen() {
   const colors = useColors();
   const { profile } = useAjyal();
+  const { user } = useAuth();
   const { startOutgoingCall } = useInternalCall();
-  const query = useListMyStudents({ query: { queryKey: getListMyStudentsQueryKey(), staleTime: 30_000 } });
+  const query = useListMyStudents({
+    query: {
+      queryKey: [...getListMyStudentsQueryKey(), user?.id ?? 'signed-out'],
+      staleTime: 30_000,
+    },
+  });
   const students = query.data ?? [];
   const [callingStudentId, setCallingStudentId] = useState<string | null>(null);
-  const [phoneCallingStudentId, setPhoneCallingStudentId] = useState<string | null>(null);
+  const [phoneStudent, setPhoneStudent] = useState<{ id: string; displayName: string } | null>(null);
+
+  useFocusEffect(useCallback(() => {
+    if (user?.id) void query.refetch();
+  }, [query.refetch, user?.id]));
 
   const startInternalCall = async (studentId: string, displayName: string) => {
     if (callingStudentId) return;
@@ -30,22 +41,6 @@ export default function StudentsScreen() {
     }
   };
 
-  const startPhoneCall = async (studentId: string, displayName: string) => {
-    if (!supabase || phoneCallingStudentId) return;
-    setPhoneCallingStudentId(studentId);
-    try {
-      const { error } = await supabase.functions.invoke('make-phone-call', {
-        body: { student_id: studentId },
-      });
-      if (error) throw error;
-      Alert.alert('تم طلب الاتصال الهاتفي', `سيتم تنفيذ الاتصال عبر نظام المنصة إلى ${displayName}.`);
-    } catch (error) {
-      Alert.alert('تعذر الاتصال الهاتفي', error instanceof Error ? error.message : 'تحقق من رصيد الاتصال وإعدادات الهاتف في المنصة.');
-    } finally {
-      setPhoneCallingStudentId(null);
-    }
-  };
-
   return (
     <Screen>
       <Header onBack={() => router.back()} avatarText={profile?.displayName?.slice(0, 1)} eyebrow="صورة طلابك التعليمية" title="طلابي" onAvatar={() => router.push('/profile')} />
@@ -53,12 +48,12 @@ export default function StudentsScreen() {
         <View style={[styles.heroIcon, { backgroundColor: colors.navySoft }]}><Icon name="users" size={23} color={colors.primary} /></View>
         <View style={styles.heroCopy}>
           <Text style={[styles.heroTitle, { color: colors.primaryForeground }]}>تابع تقدم طلابك</Text>
-          <Text style={[styles.heroBody, { color: colors.tint }]}>البيانات هنا محسوبة من الحجوزات والمهام المرتبطة بحسابك.</Text>
+          <Text style={[styles.heroBody, { color: colors.tint }]}>طلاب الحجوزات وطلبات الحجز والمهام المرتبطة بحسابك، دون تكرار.</Text>
         </View>
       </View>
       <SectionHeading title={students.length ? `${students.length} طلاب مرتبطين` : 'قائمة الطلاب'} />
       {query.isLoading ? <LoadingBlock /> : null}
-      {query.isError ? <EmptyState icon="alert-circle" title="تعذر تحميل الطلاب" body="تأكد من أن الحساب الحالي حساب معلم ثم أعد المحاولة." action="إعادة المحاولة" onAction={() => void query.refetch()} /> : students.length ? (
+      {query.isError ? <EmptyState icon="alert-circle" title="تعذر تحميل الطلاب" body="تعذر جلب قائمة الطلاب من المنصة. أعد المحاولة وتحقق من اكتمال تحديث الخادم." action="إعادة المحاولة" onAction={() => void query.refetch()} /> : students.length ? (
         <View style={styles.list}>
            {students.map((student) => (
                <View key={student.id} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -78,20 +73,18 @@ export default function StudentsScreen() {
                    <Icon name="phone" size={15} color={colors.teal} />
                    <Text style={[styles.actionText, { color: colors.teal }]}>{callingStudentId === student.id ? 'جارٍ' : 'داخلي'}</Text>
                  </Pressable>
-                 <Pressable
-                   testID={`phone-call-${student.id}`}
-                   disabled={Boolean(phoneCallingStudentId)}
-                   onPress={() => void startPhoneCall(student.id, student.displayName)}
-                   style={({ pressed }) => [styles.actionButton, { backgroundColor: colors.navySoft }, pressed && styles.pressed]}
-                 >
+                 <Pressable testID={`phone-call-${student.id}`} onPress={() => setPhoneStudent(student)}
+                   style={[styles.actionButton, { backgroundColor: colors.navySoft }]}>
                    <Icon name="phone-call" size={15} color={colors.primary} />
-                   <Text style={[styles.actionText, { color: colors.primary }]}>{phoneCallingStudentId === student.id ? 'جارٍ' : 'هاتف'}</Text>
+                   <Text style={[styles.actionText, { color: colors.primary }]}>اتصال مخفي</Text>
                  </Pressable>
                </View>
              </View>
           ))}
         </View>
-      ) : <EmptyState icon="users" title="لا يوجد طلاب متزامنون" body="ستظهر قائمة الطلاب بعد إنشاء حجز أو مهمة مرتبطة بحسابك." />}
+      ) : <EmptyState icon="users" title="لا يوجد طلاب متزامنون" body="ستظهر هنا أسماء الطلاب المرتبطين بحجوزاتك وطلبات الحجز والمهام." />}
+      {phoneStudent && <MaskedPhoneCallModal visible studentId={phoneStudent.id} studentName={phoneStudent.displayName}
+        onClose={() => setPhoneStudent(null)} />}
     </Screen>
   );
 }

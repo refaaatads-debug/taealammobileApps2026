@@ -386,20 +386,13 @@ export default function BookingScreen() {
       }
       setDirectTeacherAvailabilityLoading(true);
       setDirectTeacherAvailabilityError(false);
-      const [publicResult, profileResult] = await Promise.all([
-        supabase
+      const publicResult = await supabase
           .from('public_teacher_profiles')
           .select('available_days, available_from, available_to')
           .eq('user_id', teacherId)
-          .maybeSingle(),
-        supabase
-          .from('teacher_profiles')
-          .select('available_days, available_from, available_to')
-          .eq('user_id', teacherId)
-          .maybeSingle(),
-      ]);
+          .maybeSingle();
       if (!mounted) return;
-      if (publicResult.error && profileResult.error) {
+      if (publicResult.error) {
         setDirectTeacherAvailability(null);
         setDirectTeacherAvailabilityError(true);
         setDirectTeacherAvailabilityLoading(false);
@@ -410,23 +403,13 @@ export default function BookingScreen() {
         available_from?: unknown;
         available_to?: unknown;
       } | null;
-      const profileRow = profileResult.data as {
-        available_days?: unknown;
-        available_from?: unknown;
-        available_to?: unknown;
-      } | null;
       const publicDays = normalizeDays(publicRow?.available_days);
-      const profileDays = normalizeDays(profileRow?.available_days);
       setDirectTeacherAvailability({
-        availableDays: publicDays.length ? publicDays : profileDays,
-        availableFrom: typeof profileRow?.available_from === 'string'
-          ? profileRow.available_from
-          : typeof publicRow?.available_from === 'string'
+        availableDays: publicDays,
+        availableFrom: typeof publicRow?.available_from === 'string'
             ? publicRow.available_from
             : null,
-        availableTo: typeof profileRow?.available_to === 'string'
-          ? profileRow.available_to
-          : typeof publicRow?.available_to === 'string'
+        availableTo: typeof publicRow?.available_to === 'string'
             ? publicRow.available_to
             : null,
       });

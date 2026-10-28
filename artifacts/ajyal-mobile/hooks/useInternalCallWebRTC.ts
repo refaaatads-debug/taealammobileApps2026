@@ -1,13 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NativeModules, Platform } from "react-native";
-import { setAudioModeAsync } from "expo-audio";
+import { requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
 import { supabase } from "@/lib/supabase";
+import { parseInternalCallTransport, type InternalCallProvider } from "@/lib/internalCallTransport";
 
 type InternalCall = {
   id: string;
   callerId?: string;
   roomId?: string;
   status: string;
+};
+
+type AgoraEngine = {
+  initialize(options: unknown): number;
+  enableAudio(): number;
+  setClientRole(role: number): number;
+  joinChannelWithUserAccount(token: string, channel: string, userAccount: string, options?: unknown): number;
+  leaveChannel(): number;
+  release(): void;
+  muteLocalAudioStream(muted: boolean): number;
+  setEnableSpeakerphone(enabled: boolean): number;
+  renewToken(token: string): number;
+  registerEventHandler(handler: Record<string, (...args: any[]) => void>): void;
 };
 
 type RtcModule = {
@@ -79,10 +93,12 @@ export function useInternalCallWebRTC({
   call,
   userId,
   enabled,
+  transportProvider = "webrtc",
 }: {
   call: InternalCall | null;
   userId?: string;
   enabled: boolean;
+  transportProvider?: InternalCallProvider;
 }) {
   const callId = call?.id;
   const callerId = call?.callerId;
@@ -90,6 +106,7 @@ export function useInternalCallWebRTC({
   const peerRef = useRef<any>(null);
   const localStreamRef = useRef<any>(null);
   const remoteAudioRef = useRef<any>(null);
+  const agoraEngineRef = useRef<AgoraEngine | null>(null);
   const rtcRef = useRef<RtcModule | null>(null);
   const pendingCandidatesRef = useRef<unknown[]>([]);
   const startedRef = useRef(false);
@@ -182,6 +199,15 @@ export function useInternalCallWebRTC({
       remoteAudio.pause?.();
       remoteAudio.srcObject = null;
     }
+    if (agoraEngineRef.current) {
+      try {
+        agoraEngineRef.current.leaveChannel();
+        agoraEngineRef.current.release();
+      } catch {
+        // An interrupted native join can already have released the engine.
+      }
+      agoraEngineRef.current = null;
+    }
     setMuted(false);
     setConnectionState("idle");
   }, []);
@@ -196,6 +222,66 @@ export function useInternalCallWebRTC({
     setConnectionState("connecting");
     setError(null);
     try {
+      if (transportProvider === "agora") {
+        const client = supabase;
+        if (!client) throw new Error("خدمة المكالمات غير متاحة.");
+        const permission = await requestRecordingPermissionsAsync();
+        if (!permission.granted) throw new Error("يلزم السماح بالميكروفون لقبول مكالمة Agora.");
+        await setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+          shouldPlayInBackground: true,
+          interruptionMode: "doNotMix",
+          shouldRouteThroughEarpiece: !speakerEnabledRef.current,
+        });
+        const { data, error } = await client.functions.invoke("internal-call-transport-token", {
+          body: { callId },
+        });
+        if (error) throw error;
+        const transport = parseInternalCallTransport(data, userId);
+        const agora = await import("react-native-agora");
+        const engine = agora.createAgoraRtcEngine() as unknown as AgoraEngine;
+        agoraEngineRef.current = engine;
+        engine.initialize({
+          appId: transport.appId,
+          channelProfile: agora.ChannelProfileType.ChannelProfileCommunication,
+        });
+        engine.enableAudio();
+        engine.setClientRole(agora.ClientRoleType.ClientRoleBroadcaster);
+        const markConnected = () => {
+          setConnectionState("connected");
+          void client.rpc("mark_internal_call_connected", { p_call_id: callId });
+        };
+        engine.registerEventHandler({
+          onJoinChannelSuccess: markConnected,
+          onUserJoined: markConnected,
+          onTokenPrivilegeWillExpire: async () => {
+            try {
+              const { data: renewed, error: renewalError } = await client.functions.invoke(
+                "internal-call-transport-token",
+                { body: { callId } },
+              );
+              if (renewalError) throw renewalError;
+              engine.renewToken(parseInternalCallTransport(renewed, userId).token);
+            } catch (renewalError) {
+              setConnectionState("failed");
+              setError(renewalError instanceof Error ? renewalError.message : "تعذر تجديد رمز Agora.");
+            }
+          },
+          onError: (_code: number, message: string) => {
+            setConnectionState("failed");
+            setError(message || "تعذر الاتصال بخدمة Agora.");
+          },
+        });
+        const joinResult = engine.joinChannelWithUserAccount(
+          transport.token,
+          transport.channel,
+          transport.userAccount,
+          { publishMicrophoneTrack: true, publishCameraTrack: false },
+        );
+        if (joinResult < 0) throw new Error(`تعذر الانضمام إلى Agora (رمز ${joinResult}).`);
+        return;
+      }
       const rtc = rtcRef.current ?? await getRtcModule();
       if (generation !== generationRef.current) return;
       rtcRef.current = rtc;
@@ -321,10 +407,19 @@ export function useInternalCallWebRTC({
     } catch (reason) {
       if (generation !== generationRef.current) return;
       startedRef.current = false;
+      if (agoraEngineRef.current) {
+        try {
+          agoraEngineRef.current.leaveChannel();
+          agoraEngineRef.current.release();
+        } catch {
+          // Cleanup may follow an interrupted native initialization.
+        }
+        agoraEngineRef.current = null;
+      }
       setConnectionState("failed");
       setError(reason instanceof Error ? reason.message : "تعذر بدء المكالمة الصوتية.");
     }
-  }, [callId, callerId, enabled, handleSignal, sendSignal, userId]);
+  }, [callId, callerId, enabled, handleSignal, sendSignal, transportProvider, userId]);
 
   useEffect(() => {
     if (enabled) void start();
@@ -336,11 +431,16 @@ export function useInternalCallWebRTC({
 
   const toggleMute = useCallback(() => {
     const nextMuted = !muted;
+    if (transportProvider === "agora" && agoraEngineRef.current) {
+      agoraEngineRef.current.muteLocalAudioStream(nextMuted);
+      setMuted(nextMuted);
+      return;
+    }
     localStreamRef.current?.getAudioTracks?.().forEach((track: any) => {
       track.enabled = !nextMuted;
     });
     setMuted(nextMuted);
-  }, [muted]);
+  }, [muted, transportProvider]);
 
   const toggleSpeaker = useCallback(() => {
     const nextSpeakerEnabled = !speakerEnabledRef.current;
@@ -355,7 +455,10 @@ export function useInternalCallWebRTC({
     }).catch((reason) => {
       setError(reason instanceof Error ? reason.message : "تعذر تغيير مخرج الصوت.");
     });
-  }, []);
+    if (transportProvider === "agora") {
+      agoraEngineRef.current?.setEnableSpeakerphone(nextSpeakerEnabled);
+    }
+  }, [transportProvider]);
 
   return { connectionState, muted, error, speakerEnabled, start, stop, toggleMute, toggleSpeaker };
 }
