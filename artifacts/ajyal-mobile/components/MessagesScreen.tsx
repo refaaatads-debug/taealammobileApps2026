@@ -1313,7 +1313,10 @@ export default function MessagesScreen() {
         ),
         Promise.all(
           batches(participantIds).map((participantIdBatch) =>
-            client.from("profiles").select("*").in("user_id", participantIdBatch),
+            client
+              .from("public_profiles")
+              .select("user_id, full_name")
+              .in("user_id", participantIdBatch),
           ),
         ),
       ]);
