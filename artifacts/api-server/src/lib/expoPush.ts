@@ -41,7 +41,10 @@ export function notificationPresentation(type: unknown): NotificationPresentatio
     || type === "automatic_cancellation"
     || type === "session_cancelled"
   ) {
-    return { sound: "session_notification.wav", channelId: SESSION_NOTIFICATION_CHANNEL };
+    // Use the default Android channel for automated session events. Some
+    // already-installed APKs predate the versioned session channel and Android
+    // will not show a remote notification for an unknown channel id.
+    return { sound: "default", channelId: DEFAULT_NOTIFICATION_CHANNEL };
   }
   if (
     type === "booking_request"
@@ -52,7 +55,9 @@ export function notificationPresentation(type: unknown): NotificationPresentatio
     || type === "instant_session"
     || type === "approval"
   ) {
-    return { sound: "approval_notification.wav", channelId: APPROVAL_NOTIFICATION_CHANNEL };
+    // Booking notifications must remain visible on older installed APKs even
+    // when their versioned approval channel was never created on the device.
+    return { sound: "default", channelId: DEFAULT_NOTIFICATION_CHANNEL };
   }
   return { sound: "default", channelId: DEFAULT_NOTIFICATION_CHANNEL };
 }
@@ -62,6 +67,7 @@ export type ExpoPushMessage = {
   title?: string;
   body?: string;
   data: Record<string, unknown>;
+  richContent?: { image: string };
   sound?: string;
   priority: "high";
   ttl: number;
@@ -70,13 +76,15 @@ export type ExpoPushMessage = {
   _contentAvailable?: boolean;
 };
 
+type ExpoPushTicket = {
+  id?: string;
+  status?: string;
+  message?: string;
+  details?: { error?: string };
+};
+
 type ExpoPushResponse = {
-  data?: Array<{
-    id?: string;
-    status?: string;
-    message?: string;
-    details?: { error?: string };
-  }>;
+  data?: ExpoPushTicket | ExpoPushTicket[];
 };
 
 type ExpoReceiptResponse = {
@@ -113,6 +121,7 @@ async function checkExpoPushReceipt(ticketId: string): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ ids: [ticketId] }),
+      signal: AbortSignal.timeout(8_000),
     });
     const result = await response.json() as ExpoReceiptResponse;
     const receipt = result.data?.[ticketId];
@@ -136,7 +145,8 @@ export async function sendExpoPushMessage(message: ExpoPushMessage): Promise<voi
   const response = await fetch("https://exp.host/--/api/v2/push/send", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(message),
+    body: JSON.stringify([message]),
+    signal: AbortSignal.timeout(8_000),
   });
 
   let result: ExpoPushResponse | null = null;
@@ -146,7 +156,8 @@ export async function sendExpoPushMessage(message: ExpoPushMessage): Promise<voi
     // The status below still gives callers a useful provider failure.
   }
 
-  const ticket = result?.data?.[0];
+  const ticketData = result?.data;
+  const ticket = Array.isArray(ticketData) ? ticketData[0] : ticketData;
   const providerCode = ticket?.details?.error;
   console.info("[push] expo_ticket", {
     ticketId: ticket?.id ?? null,

@@ -1,11 +1,26 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
+import { useQuery } from '@tanstack/react-query';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
+import { useAuth } from '@/lib/auth';
+import { getReadChatMessageIds } from '@/lib/localChatReadState';
+import { getStudentUnreadChatMessageCount } from '@/lib/studentUnreadMessages';
+import { getAvailableTeacherBalance } from '@/lib/teacherFinance';
+import {
+  countOpenBookingRequestGroups,
+  getTeacherInPersonRequestCountQueryKey,
+  isTeacherBookingNotification,
+  refetchTeacherBookingTaskQueries,
+} from '@/lib/teacherBookingTaskSync';
+import { supabase } from '@/lib/supabase';
+import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
 import { isAssignmentComplete } from '@/constants/localData';
+import { summarizePendingTeacherSubmissions } from '@/lib/teacherAssignmentTasks';
 import { DashboardActions, EmptyState, Header, Icon, IconName, LoadingBlock, Screen, SectionHeading, SessionCard, WelcomeBanner } from '@/components/AjyalUI';
+import TeacherInPersonCode from '@/components/TeacherInPersonCode';
 import { getListBookingRequestsQueryKey, getListMyAssignmentsQueryKey, useGetStudentDashboard, useGetTeacherDashboard, useListBookingRequests, useListMyAssignments } from '@workspace/api-client-react';
 
 type TodayTask = {
@@ -22,8 +37,10 @@ export default function HomeScreen() {
   const { t, direction, formatNumber } = useAppPreferences();
   const isRTL = direction === 'rtl';
   const { role, profile, isLoading, isAuthenticated, roleResolved } = useAjyal();
+  const { user } = useAuth();
   const isTeacher = role === 'teacher';
   const canLoadRoleData = isAuthenticated && roleResolved;
+  const earningsMonth = new Date().toISOString().slice(0, 7);
   const teacherDashboardQuery = useGetTeacherDashboard({
     query: {
       queryKey: ['teacher-dashboard'],
@@ -33,6 +50,49 @@ export default function HomeScreen() {
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },
+  });
+  const teacherNetSummaryQuery = useQuery({
+    queryKey: ['teacher-net-summary', user?.id, earningsMonth],
+    enabled: canLoadRoleData && isTeacher && Boolean(user?.id) && Boolean(supabase),
+    queryFn: async () => {
+      const client = supabase;
+      const teacherId = user?.id;
+      if (!client || !teacherId) throw new Error('Teacher earnings are unavailable.');
+      const { data, error } = await client.rpc('get_teacher_net_summary', {
+        _teacher_id: teacherId,
+        _month: earningsMonth,
+      });
+      if (error) throw error;
+      const row = (Array.isArray(data) ? data[0] : data) as { net_total?: unknown } | null;
+      if (!row) throw new Error('The platform returned no teacher earnings summary.');
+      const netTotal = Number(row.net_total);
+      if (!Number.isFinite(netTotal)) throw new Error('The platform returned an invalid teacher earnings total.');
+      return netTotal;
+    },
+    staleTime: 30_000,
+    refetchInterval: canLoadRoleData && isTeacher ? 60_000 : false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+  const teacherAvailableBalanceQuery = useQuery({
+    queryKey: ['teacher-available-balance', user?.id],
+    enabled: canLoadRoleData && isTeacher && Boolean(user?.id) && Boolean(supabase),
+    queryFn: async () => {
+      const client = supabase;
+      const teacherId = user?.id;
+      if (!client || !teacherId) throw new Error('Teacher earnings are unavailable.');
+      const { data, error } = await client.rpc('get_teacher_withdrawal_summary' as any, {
+        _teacher_id: teacherId,
+      });
+      if (error) throw error;
+      const summary = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
+      if (!summary) throw new Error('The platform returned no teacher balance summary.');
+      return getAvailableTeacherBalance({ available_balance: summary.online_available });
+    },
+    staleTime: 30_000,
+    refetchInterval: canLoadRoleData && isTeacher ? 60_000 : false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
   const incomingRequestsQuery = useListBookingRequests(
     { view: 'incoming' },
@@ -47,6 +107,25 @@ export default function HomeScreen() {
       },
     },
   );
+  const teacherInPersonRequestsQuery = useQuery({
+    queryKey: getTeacherInPersonRequestCountQueryKey(user?.id),
+    enabled: canLoadRoleData && isTeacher && Boolean(user?.id) && Boolean(supabase),
+    queryFn: async () => {
+      if (!supabase) throw new Error('In-person requests are unavailable.');
+      const { data, error } = await supabase.rpc('list_teacher_in_person_requests_priced');
+      if (error) throw error;
+      const rows = Array.isArray(data) ? data : data ? [data] : [];
+      return rows.filter((item) => {
+        if (!item || typeof item !== 'object') return false;
+        const row = item as Record<string, unknown>;
+        return String(row.status ?? row.request_status ?? '') === 'open';
+      }).length;
+    },
+    staleTime: 15_000,
+    refetchInterval: canLoadRoleData && isTeacher ? 15_000 : false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
   const studentDashboardQuery = useGetStudentDashboard({
     query: {
       queryKey: ['student-dashboard'],
@@ -60,43 +139,174 @@ export default function HomeScreen() {
   const assignmentsQuery = useListMyAssignments({
     query: {
       queryKey: getListMyAssignmentsQueryKey(),
-      enabled: canLoadRoleData && !isTeacher,
+      enabled: canLoadRoleData,
       staleTime: 60_000,
       refetchInterval: false,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },
   });
+  const teacherAssignmentIds = (assignmentsQuery.data ?? []).map((assignment) => assignment.id).filter(Boolean);
+  const teacherSubmissionsQuery = useQuery({
+    queryKey: ['teacher-assignment-submissions', user?.id, teacherAssignmentIds.join(',')],
+    enabled: canLoadRoleData && isTeacher && teacherAssignmentIds.length > 0 && Boolean(supabase),
+    queryFn: async () => {
+      const client = supabase;
+      if (!client || !teacherAssignmentIds.length) return [];
+      const { data, error } = await client
+        .from('assignment_submissions')
+        .select('assignment_id,status')
+        .in('assignment_id', teacherAssignmentIds);
+      if (error) throw error;
+      return data ?? [];
+    },
+    staleTime: 15_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+  const unreadChatQuery = useQuery({
+    queryKey: ['student-unread-chat-count', profile?.id],
+    enabled: canLoadRoleData && !isTeacher && Boolean(profile?.id) && Boolean(supabase),
+    queryFn: async () => {
+      if (!profile?.id || !supabase) throw new Error('Student chat is unavailable.');
+      const readMessageIds = await getReadChatMessageIds(profile.id);
+      return getStudentUnreadChatMessageCount(supabase, profile.id, readMessageIds);
+    },
+    staleTime: 30_000,
+    refetchInterval: canLoadRoleData && !isTeacher ? 60_000 : false,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+  useFocusEffect(useCallback(() => {
+    if (canLoadRoleData && !isTeacher && profile?.id && supabase) {
+      void unreadChatQuery.refetch();
+    }
+  }, [canLoadRoleData, isTeacher, profile?.id, unreadChatQuery.refetch]));
+  useFocusEffect(useCallback(() => {
+    const client = supabase;
+    if (!client || !canLoadRoleData || !isTeacher || !profile?.id) return undefined;
+    void teacherNetSummaryQuery.refetch();
+    void teacherAvailableBalanceQuery.refetch();
+    const refreshTeacherBookings = () => {
+      void refetchTeacherBookingTaskQueries(
+        () => incomingRequestsQuery.refetch(),
+        () => teacherInPersonRequestsQuery.refetch(),
+        () => teacherDashboardQuery.refetch(),
+      ).catch((error) => {
+        console.warn('[teacher-home] Could not refresh booking task counts:', error);
+      });
+    };
+    let earningsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshTeacherEarnings = () => {
+      if (earningsRefreshTimer) clearTimeout(earningsRefreshTimer);
+      earningsRefreshTimer = setTimeout(() => {
+        void teacherNetSummaryQuery.refetch();
+        void teacherAvailableBalanceQuery.refetch();
+      }, 150);
+    };
+    const topic = `teacher-home-bookings-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const channel = client
+      .channel(topic)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'booking_requests',
+      }, refreshTeacherBookings)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${profile.id}`,
+      }, (payload) => {
+        const notification = payload.new as Record<string, unknown>;
+        if (isTeacherBookingNotification(notification.type)) refreshTeacherBookings();
+      })
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'teacher_earnings',
+        filter: `teacher_id=eq.${profile.id}`,
+      }, refreshTeacherEarnings)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'assignment_submissions',
+      }, () => {
+        void assignmentsQuery.refetch();
+        void teacherSubmissionsQuery.refetch();
+      })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[teacher-home] Realtime channel ${status.toLowerCase()}; using query refreshes instead.`);
+        }
+      });
+    return () => {
+      if (earningsRefreshTimer) clearTimeout(earningsRefreshTimer);
+      void client.removeChannel(channel).catch((error) => {
+        console.warn('[teacher-home] Could not remove realtime channel:', error);
+      });
+    };
+  }, [assignmentsQuery.refetch, canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch, teacherInPersonRequestsQuery.refetch, teacherSubmissionsQuery.refetch, teacherNetSummaryQuery.refetch, teacherAvailableBalanceQuery.refetch]));
   const assignments = assignmentsQuery.data ?? [];
   const pendingAssignments = assignments.filter((assignment) => !isAssignmentComplete(assignment));
+  const teacherTaskSummary = summarizePendingTeacherSubmissions(
+    teacherSubmissionsQuery.data ?? [],
+    new Map(assignments.map((assignment) => [assignment.id, assignment.kind])),
+  );
   const teacherDashboard = teacherDashboardQuery.data;
   const studentDashboard = studentDashboardQuery.data;
-  const incomingOpenRequests = incomingRequestsQuery.data?.filter((request) => request.status === 'open').length;
-  const openRequestCount = incomingOpenRequests ?? teacherDashboard?.openRequests ?? 0;
+  const incomingOpenRequests = incomingRequestsQuery.data
+    ? countOpenBookingRequestGroups(incomingRequestsQuery.data)
+    : 0;
+  const inPersonOpenRequests = teacherInPersonRequestsQuery.data ?? 0;
+  const openRequestCount = incomingOpenRequests + inPersonOpenRequests;
   const dashboardSessions = isTeacher ? (teacherDashboard?.upcomingSessions ?? []) : (studentDashboard?.upcomingSessions ?? []);
-  const firstSession = dashboardSessions[0];
+  const canonicalDashboardSessions = useCanonicalSessionModes(dashboardSessions, profile?.id);
+  const firstSession = canonicalDashboardSessions[0];
+  const firstSessionDetailsQuery = useQuery({
+    queryKey: ['home-in-person-booking-details', profile?.id, firstSession?.id],
+    enabled: Boolean(
+      isTeacher
+      && profile?.id
+      && firstSession?.id
+      && firstSession.deliveryMode === 'in_person'
+      && supabase,
+    ),
+    staleTime: 30_000,
+    queryFn: async () => {
+      if (!supabase || !firstSession?.id) return null;
+      const { data, error } = await supabase
+        .from('bookings' as any)
+        .select('scheduled_at,visit_address_snapshot,attendance_confirmed_at')
+        .eq('id', firstSession.id)
+        .maybeSingle();
+      if (error) throw error;
+      return data as Record<string, unknown> | null;
+    },
+  });
   const unread = isTeacher ? (teacherDashboard?.unreadNotifications ?? 0) : (studentDashboard?.unreadNotifications ?? 0);
-  const degradedSections = isTeacher ? (teacherDashboard?.degradedSections ?? []) : (studentDashboard?.degradedSections ?? []);
-  const hasError = isTeacher ? teacherDashboardQuery.isError : studentDashboardQuery.isError || assignmentsQuery.isError;
-  const hasDashboardData = isTeacher ? Boolean(teacherDashboard) : Boolean(studentDashboard || assignmentsQuery.data);
+  const dashboardDegradedSections = isTeacher ? (teacherDashboard?.degradedSections ?? []) : (studentDashboard?.degradedSections ?? []);
+  const degradedSections = !isTeacher && unreadChatQuery.isError
+    ? [...dashboardDegradedSections, 'messages']
+    : dashboardDegradedSections;
+  const hasError = isTeacher
+    ? teacherDashboardQuery.isError || assignmentsQuery.isError || teacherSubmissionsQuery.isError
+    : studentDashboardQuery.isError || assignmentsQuery.isError;
+  const hasDashboardData = isTeacher
+    ? Boolean(teacherDashboard || assignmentsQuery.data)
+    : Boolean(studentDashboard || assignmentsQuery.data);
   const dashboardInitialLoading = !hasDashboardData && (
     isLoading ||
-    (isTeacher ? teacherDashboardQuery.isLoading : studentDashboardQuery.isLoading || assignmentsQuery.isLoading)
+    (isTeacher
+      ? teacherDashboardQuery.isLoading || assignmentsQuery.isLoading || teacherSubmissionsQuery.isLoading
+      : studentDashboardQuery.isLoading || assignmentsQuery.isLoading)
   );
   const dashboardRefreshing = hasDashboardData && (
-    isTeacher ? teacherDashboardQuery.isFetching : studentDashboardQuery.isFetching || assignmentsQuery.isFetching
+    isTeacher
+      ? teacherDashboardQuery.isFetching || assignmentsQuery.isFetching || teacherSubmissionsQuery.isFetching
+      : studentDashboardQuery.isFetching || assignmentsQuery.isFetching
   );
   const todayTasks: TodayTask[] = [];
-  if (!isTeacher && studentDashboard?.openBookingRequests) {
-    todayTasks.push({
-      id: 'open-bookings',
-      icon: 'calendar',
-      tone: 'gold',
-      title: `${formatNumber(studentDashboard.openBookingRequests)} ${t('طلبات حجز مفتوحة', 'open booking requests')}`,
-      body: t('تابع حالتها من الحجوزات', 'Track their status in bookings'),
-      onPress: () => router.push('/bookings'),
-    });
-  }
   if (!isTeacher && firstSession) {
     todayTasks.push({
       id: `session-${firstSession.id}`,
@@ -107,16 +317,68 @@ export default function HomeScreen() {
       onPress: () => router.push('/bookings'),
     });
   }
-  if (!isTeacher) {
-    pendingAssignments.slice(0, 2).forEach((assignment) => {
-      todayTasks.push({
-        id: `assignment-${assignment.id}`,
-        icon: assignment.kind === 'اختبار' ? 'edit-3' : 'clipboard',
-        tone: 'navy',
-        title: assignment.title,
-        body: `${assignment.subject} · ${assignment.due}`,
-        onPress: () => router.push('/assignments'),
-      });
+  const nextAssignment = pendingAssignments[0];
+  if (!isTeacher && nextAssignment) {
+    todayTasks.push({
+      id: `assignment-${nextAssignment.id}`,
+      icon: nextAssignment.kind === 'اختبار' ? 'edit-3' : 'clipboard',
+      tone: 'navy',
+      title: nextAssignment.title,
+      body: `${nextAssignment.subject} · ${nextAssignment.due}`,
+      onPress: () => router.push('/assignments'),
+    });
+  }
+  if (!isTeacher && (unreadChatQuery.data ?? 0) > 0) {
+    todayTasks.push({
+      id: 'unread-chat-messages',
+      icon: 'message-circle',
+      tone: 'teal',
+      title: `${formatNumber(unreadChatQuery.data ?? 0)} ${t('رسائل غير مقروءة', 'unread messages')}`,
+      body: t('افتح محادثاتك لمراجعتها', 'Open your conversations to review them'),
+      onPress: () => router.push('/messages'),
+    });
+  }
+  if (!isTeacher && (studentDashboard?.unreadNotifications ?? 0) > 0) {
+    todayTasks.push({
+      id: 'unread-notifications',
+      icon: 'bell',
+      tone: 'gold',
+      title: `${formatNumber(studentDashboard?.unreadNotifications ?? 0)} ${t('تنبيهات غير مقروءة', 'unread notifications')}`,
+      body: t('افتحها لمراجعة أي تحديث يحتاج انتباهك', 'Open them to review updates that need your attention'),
+      onPress: () => router.push('/notifications'),
+    });
+  }
+  if (!isTeacher && studentDashboard?.openBookingRequests) {
+    todayTasks.push({
+      id: 'open-bookings',
+      icon: 'calendar',
+      tone: 'gold',
+      title: `${formatNumber(studentDashboard.openBookingRequests)} ${t('طلبات حجز مفتوحة', 'open booking requests')}`,
+      body: t('تابع حالتها من الحجوزات', 'Track their status in bookings'),
+      onPress: () => router.push('/bookings'),
+    });
+  }
+  if (isTeacher && teacherTaskSummary.total > 0) {
+    todayTasks.push({
+      id: 'teacher-assignment-submissions',
+      icon: 'clipboard',
+      tone: 'gold',
+      title: `${formatNumber(teacherTaskSummary.total)} ${t('حلول بانتظار المراجعة', 'submissions to review')}`,
+      body: [
+        teacherTaskSummary.assignments ? `${formatNumber(teacherTaskSummary.assignments)} ${t('واجب', 'homework')}` : '',
+        teacherTaskSummary.quizzes ? `${formatNumber(teacherTaskSummary.quizzes)} ${t('اختبار', 'quizzes')}` : '',
+      ].filter(Boolean).join(' · '),
+      onPress: () => router.push('/assignments'),
+    });
+  }
+  if (isTeacher && openRequestCount > 0) {
+    todayTasks.unshift({
+      id: 'teacher-pending-booking-decisions',
+      icon: 'calendar',
+      tone: 'teal',
+      title: `${formatNumber(openRequestCount)} ${t('طلبات حصص بانتظار قرارك', 'lesson requests need your decision')}`,
+      body: `${formatNumber(incomingOpenRequests)} ${t('عن بُعد', 'online')} · ${formatNumber(inPersonOpenRequests)} ${t('حضوري', 'in person')}`,
+      onPress: () => router.push('/bookings'),
     });
   }
   const openDashboardAction = (id: string) => {
@@ -154,7 +416,12 @@ export default function HomeScreen() {
           <Icon name="arrow-left" size={17} color={colors.accentForeground} />
         </Pressable>
       ) : null}
-      <DashboardActions role={role} onAction={openDashboardAction} />
+      <DashboardActions
+        role={role}
+        onAction={openDashboardAction}
+        studentBalance={studentDashboard?.balance}
+        nextAssignment={pendingAssignments[0] ? { title: pendingAssignments[0].title, due: pendingAssignments[0].due } : null}
+      />
 
       {dashboardInitialLoading ? <LoadingBlock /> : null}
       {dashboardRefreshing ? (
@@ -165,7 +432,7 @@ export default function HomeScreen() {
           </Text>
         </View>
       ) : null}
-      {hasError ? <EmptyState icon="alert-circle" title={t('تعذر تحميل بياناتك', 'Could not load your data')} body={t('تحقق من اتصالك ثم حاول المزامنة مرة أخرى.', 'Check your connection and try syncing again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { if (isTeacher) void teacherDashboardQuery.refetch(); else { void studentDashboardQuery.refetch(); void assignmentsQuery.refetch(); } }} /> : null}
+      {hasError ? <EmptyState icon="alert-circle" title={t('تعذر تحميل بياناتك', 'Could not load your data')} body={t('تحقق من اتصالك ثم حاول المزامنة مرة أخرى.', 'Check your connection and try syncing again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => { if (isTeacher) { void teacherDashboardQuery.refetch(); void assignmentsQuery.refetch(); void teacherSubmissionsQuery.refetch(); } else { void studentDashboardQuery.refetch(); void assignmentsQuery.refetch(); } }} /> : null}
       {degradedSections.length ? (
         <View style={[styles.degradedNotice, { backgroundColor: colors.goldSoft, borderColor: colors.border }]}>
           <View style={[styles.requestBadge, { backgroundColor: colors.accent }]}><Icon name="alert-circle" size={16} color={colors.primary} /></View>
@@ -192,16 +459,23 @@ export default function HomeScreen() {
            <View style={[styles.todaySignal, { backgroundColor: colors.tealSoft }]}><View style={[styles.signalDot, { backgroundColor: colors.teal }]} /><Text style={[styles.todaySignalText, { color: colors.teal, writingDirection: direction }]}>{t('محدث الآن', 'Updated now')}</Text></View>
            <View style={[styles.todayHeaderCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start', backgroundColor: colors.navySoft, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6 }]}><Text style={[styles.todayEyebrow, { color: colors.primary, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('نظرة سريعة', 'Quick overview')}</Text><Text style={[styles.todayTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{role === 'student' ? t('ما ينتظرك اليوم', 'What awaits you today') : t('صورة يومك التعليمية', 'Your teaching day')}</Text></View>
         </View>
-         {isTeacher ? (
-           <View style={styles.metrics}>
-             <Metric value={formatNumber(teacherDashboard?.stats.students ?? 0)} label={t('طلاب نشطون', 'Active students')} icon="users" color={colors.teal} />
-             <Metric value={formatNumber(teacherDashboard?.stats.sessions ?? 0)} label={t('إجمالي الجلسات', 'Total sessions')} icon="activity" color={colors.accent} />
-             <Metric value={`${teacherDashboard?.stats.rating?.toFixed(1) ?? '0.0'}`} label={t('التقييم العام', 'Overall rating')} icon="star" color={colors.primary} />
-           </View>
+          {isTeacher ? (
+            <View style={styles.teacherQuickOverview}>
+              <View style={styles.metrics}>
+                <Metric value={formatNumber(teacherDashboard?.stats.students ?? 0)} label={t('طلاب نشطون', 'Active students')} icon="users" color={colors.teal} />
+                <Metric value={formatNumber(teacherDashboard?.stats.sessions ?? 0)} label={t('إجمالي الجلسات', 'Total sessions')} icon="activity" color={colors.accent} />
+                <Metric value={`${teacherDashboard?.stats.rating?.toFixed(1) ?? '0.0'}`} label={t('التقييم العام', 'Overall rating')} icon="star" color={colors.primary} />
+              </View>
+              {todayTasks.length ? (
+                <View style={styles.todayTasks}>
+                  {todayTasks.slice(0, 4).map((task) => <TodayTaskRow key={task.id} {...task} />)}
+                </View>
+              ) : null}
+            </View>
          ) : (
            <View style={styles.todayTasks}>
-             {todayTasks.slice(0, 3).map((task) => <TodayTaskRow key={task.id} {...task} />)}
-             {!todayTasks.length && !studentDashboardQuery.isLoading && !assignmentsQuery.isLoading ? (
+              {todayTasks.slice(0, 4).map((task) => <TodayTaskRow key={task.id} {...task} />)}
+              {!todayTasks.length && !studentDashboardQuery.isLoading && !assignmentsQuery.isLoading && !unreadChatQuery.isLoading && !unreadChatQuery.isError ? (
                <View style={[styles.todayEmpty, { backgroundColor: colors.tealSoft }]}>
                  <View style={[styles.todayEmptyIcon, { backgroundColor: colors.card }]}><Icon name="check-circle" size={16} color={colors.teal} /></View>
                   <Text style={[styles.todayEmptyText, { color: colors.accentForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('لا توجد مهام معلقة الآن', 'Nothing is waiting for you right now')}</Text>
@@ -230,25 +504,64 @@ export default function HomeScreen() {
       ) : null}
 
        {isTeacher ? (
-         <View style={[styles.earningsCard, { backgroundColor: colors.primary, borderColor: colors.primary }]}>
-            <View style={[styles.earningsIcon, { backgroundColor: colors.accent }]}><Icon name="trending-up" size={21} color={colors.accentForeground} /></View>
-            <View style={[styles.earningsCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+          <View style={[styles.earningsCard, { backgroundColor: colors.primary, borderColor: colors.primary }]}>
+            <View style={[styles.earningsTopRow, { flexDirection: isRTL ? 'row' : 'row-reverse' }]}>
+              <View style={[styles.earningsIcon, { backgroundColor: colors.accent }]}><Icon name="trending-up" size={21} color={colors.accentForeground} /></View>
+              <View style={[styles.earningsCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
                <Text style={[styles.earningsLabel, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('أرباح هذا الشهر', 'This month’s earnings')}</Text>
-              <View style={[styles.earningsValueRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
-                <Text style={[styles.earningsValue, { color: colors.primaryForeground, writingDirection: direction }]}>{formatNumber(teacherDashboard?.stats.earnings ?? 0)}</Text>
+                <View style={[styles.earningsValueRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                 <Text style={[styles.earningsValue, { color: colors.primaryForeground, writingDirection: direction }]}>
+                   {teacherNetSummaryQuery.isLoading
+                     ? '…'
+                     : teacherNetSummaryQuery.isError || teacherNetSummaryQuery.data === undefined
+                       ? '—'
+                       : formatNumber(teacherNetSummaryQuery.data)}
+                 </Text>
                  <Text style={[styles.earningsCurrency, { color: colors.tint, writingDirection: direction }]}>{t('ر.س', 'SAR')}</Text>
+                </View>
+                {teacherNetSummaryQuery.isError ? <Text style={[styles.earningsError, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('تعذر تحميل الأرباح من المنصة', 'Could not load earnings from the platform')}</Text> : null}
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel={t('سحب الأرباح', 'Withdraw earnings')} onPress={() => router.push('/teacher-withdrawals')} style={({ pressed }) => [styles.earningsAction, { backgroundColor: colors.primaryForeground }, pressed && styles.pressed]}>
+                <Text style={[styles.earningsActionText, { color: colors.primary, writingDirection: direction }]}>{t('سحب الأرباح', 'Withdraw earnings')}</Text>
+                <Icon name={isRTL ? 'arrow-left' : 'arrow-right'} size={15} color={colors.primary} />
+              </Pressable>
+            </View>
+            <View style={[styles.withdrawableRow, { flexDirection: isRTL ? 'row' : 'row-reverse', borderTopColor: colors.tint }]}>
+              <View style={{ alignItems: isRTL ? 'flex-end' : 'flex-start' }}>
+                <Text style={[styles.withdrawableLabel, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('الأرباح القابلة للسحب', 'Available to withdraw')}</Text>
+                <Text style={[styles.withdrawableHint, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>
+                  {teacherAvailableBalanceQuery.isError
+                    ? t('تعذر تحميل الرصيد', 'Could not load balance')
+                    : t('الرصيد المتاح الآن', 'Available now')}
+                </Text>
+              </View>
+              <View style={[styles.withdrawableValueRow, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                <Text style={[styles.withdrawableValue, { color: colors.primaryForeground, writingDirection: direction }]}>
+                  {teacherAvailableBalanceQuery.isLoading
+                    ? '…'
+                    : teacherAvailableBalanceQuery.isError || teacherAvailableBalanceQuery.data === undefined
+                      ? '—'
+                      : formatNumber(teacherAvailableBalanceQuery.data)}
+                </Text>
+                <Text style={[styles.withdrawableCurrency, { color: colors.tint, writingDirection: direction }]}>{t('ر.س', 'SAR')}</Text>
               </View>
             </View>
-              <Pressable accessibilityRole="button" accessibilityLabel={t('سحب الأرباح', 'Withdraw earnings')} onPress={() => router.push('/teacher-withdrawals')} style={({ pressed }) => [styles.earningsAction, { backgroundColor: colors.primaryForeground }, pressed && styles.pressed]}>
-               <Text style={[styles.earningsActionText, { color: colors.primary, writingDirection: direction }]}>{t('سحب الأرباح', 'Withdraw earnings')}</Text>
-               <Icon name={isRTL ? 'arrow-left' : 'arrow-right'} size={15} color={colors.primary} />
-             </Pressable>
         </View>
       ) : null}
 
        {isTeacher ? <>
          <SectionHeading title={t('أقرب جلساتك', 'Upcoming sessions')} action={t('عرض الكل', 'View all')} onAction={() => router.push('/bookings')} />
-         {firstSession ? <SessionCard session={firstSession} role={role} onPress={() => router.push('/bookings')} onJoin={() => router.push({ pathname: '/live-session', params: { booking: firstSession.id } })} /> : <EmptyState icon="calendar" title={t('لا توجد جلسات قادمة', 'No upcoming sessions')} body={t('ستظهر حجوزاتك هنا بعد مزامنتها مع المنصة.', 'Your bookings will appear here after syncing with the platform.')} action={t('عرض الجلسات', 'View sessions')} onAction={() => router.push('/bookings')} />}
+          {firstSession ? (
+            <SessionCard
+              session={firstSession}
+              role={role}
+              footer={firstSession.deliveryMode === 'in_person'
+                ? <TeacherInPersonCode bookingId={firstSession.id} details={firstSessionDetailsQuery.data ?? undefined} />
+                : undefined}
+              onPress={() => router.push('/bookings')}
+              onJoin={() => router.push({ pathname: '/live-session', params: { booking: firstSession.id } })}
+            />
+          ) : <EmptyState icon="calendar" title={t('لا توجد جلسات قادمة', 'No upcoming sessions')} body={t('ستظهر حجوزاتك هنا بعد مزامنتها مع المنصة.', 'Your bookings will appear here after syncing with the platform.')} action={t('عرض الجلسات', 'View sessions')} onAction={() => router.push('/bookings')} />}
          <View style={styles.teacherSummary}>
          <SectionHeading title={t('تنبيهات المعلّم', 'Teacher alerts')} action={t('كل التنبيهات', 'All alerts')} onAction={() => router.push('/notifications')} />
          {teacherDashboard?.warningCount ? <SummaryRow icon="alert-circle" title={t('تحتاج إلى مراجعة التحذيرات', 'Warnings need review')} body={`${formatNumber(teacherDashboard.warningCount)} ${t('تنبيه مرتبط بحسابك', 'alert linked to your account')}`} onPress={() => router.push('/profile')} /> : null}
@@ -322,6 +635,8 @@ const styles = StyleSheet.create({
   signalDot: { width: 6, height: 6, borderRadius: 3 },
   todaySignalText: { fontSize: 9, fontFamily: 'Inter_600SemiBold' },
   metrics: { flexDirection: 'row', alignItems: 'stretch', gap: 7 },
+  teacherQuickOverview: { gap: 10 },
+  teacherTasksEmpty: { paddingHorizontal: 5, fontSize: 10, lineHeight: 16, fontFamily: 'Inter_500Medium', textAlign: 'center' },
   metric: { flex: 1, minHeight: 78, borderRadius: 15, paddingVertical: 9, paddingHorizontal: 3, alignItems: 'center', justifyContent: 'center' },
   metricIcon: { width: 24, height: 24, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginBottom: 5 },
   metricValue: { fontSize: 19, lineHeight: 24, fontFamily: 'Inter_700Bold' },
@@ -348,7 +663,7 @@ const styles = StyleSheet.create({
   requestCopy: { flex: 1, alignItems: 'flex-end' },
   requestTitle: { fontSize: 13, lineHeight: 18, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   requestBody: { fontSize: 11, lineHeight: 16, fontFamily: 'Inter_400Regular', marginTop: 3, writingDirection: 'rtl' },
-  earningsCard: { minHeight: 112, borderRadius: 22, borderWidth: 1, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24 },
+  earningsCard: { minHeight: 158, borderRadius: 22, borderWidth: 1, padding: 14, flexDirection: 'column', justifyContent: 'center', gap: 9, marginBottom: 24 },
   balanceIcon: { width: 43, height: 43, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   balanceCopy: { flex: 1, minWidth: 0 },
   balanceTopline: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 7 },
@@ -360,11 +675,19 @@ const styles = StyleSheet.create({
   balanceBadgeText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   balanceArrow: { width: 28, height: 36, alignItems: 'center', justifyContent: 'center' },
   earningsIcon: { width: 46, height: 46, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  earningsCopy: { flex: 1, alignItems: 'flex-end' },
+  earningsTopRow: { minHeight: 52, alignItems: 'center', gap: 10 },
+  earningsCopy: { flex: 1, minWidth: 0, alignItems: 'flex-end' },
   earningsLabel: { fontSize: 13, lineHeight: 19, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   earningsValueRow: { alignItems: 'baseline', gap: 7, marginTop: 2 },
   earningsValue: { fontSize: 28, lineHeight: 35, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   earningsCurrency: { fontSize: 13, lineHeight: 19, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  earningsError: { fontSize: 9, lineHeight: 13, marginTop: 2, fontFamily: 'Inter_500Medium' },
+  withdrawableRow: { minHeight: 44, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8, alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  withdrawableLabel: { fontSize: 11, lineHeight: 16, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  withdrawableHint: { fontSize: 9, lineHeight: 13, fontFamily: 'Inter_500Medium', marginTop: 1, writingDirection: 'rtl' },
+  withdrawableValueRow: { alignItems: 'baseline', gap: 5 },
+  withdrawableValue: { fontSize: 18, lineHeight: 23, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  withdrawableCurrency: { fontSize: 11, lineHeight: 15, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   earningsAction: { minHeight: 48, minWidth: 116, borderRadius: 14, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
   earningsActionText: { fontSize: 12, lineHeight: 18, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   teacherSummary: { marginTop: 4 },

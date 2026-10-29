@@ -15,7 +15,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { AjyalProvider, useAjyal } from '@/hooks/useAjyal';
 import { setAuthTokenGetter, setBaseUrl } from '@workspace/api-client-react';
 import { AuthProvider, getAuthToken, useAuth } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
+import { profileUiTestMode, supabase } from '@/lib/supabase';
 import { useColors } from '@/hooks/useColors';
 import { InternalCallProvider } from '@/contexts/InternalCallContext';
 import { IncomingCallOverlay } from '@/components/IncomingCallOverlay';
@@ -25,6 +25,7 @@ import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollV
 import { AppPreferencesProvider, useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { StatusBar } from 'expo-status-bar';
 import { clearRememberedLogin } from '@/lib/rememberedLogin';
+import { shouldAutoOpenStartedSession } from '@/lib/liveSessionRoute';
 import OnboardingScreen from '@/components/OnboardingScreen';
 import TeacherReviewAccessScreen from '@/components/TeacherReviewAccessScreen';
 
@@ -52,7 +53,9 @@ const appFontsReady = loadAsync(APP_FONT_MAP)
     console.warn('[fonts] Could not preload app fonts:', error);
     return false;
   });
-const apiDomain = process.env.EXPO_PUBLIC_DOMAIN;
+// The API is hosted outside Replit. EXPO_PUBLIC_DOMAIN remains the Expo
+// preview/packager domain, so it must not be used as the mobile API origin.
+const apiDomain = process.env.EXPO_PUBLIC_API_DOMAIN;
 if (apiDomain) setBaseUrl(`https://${apiDomain}`);
 setAuthTokenGetter(getAuthToken);
 
@@ -64,6 +67,7 @@ const PUBLIC_PATHS = new Set([
   '/reset-password',
   '/payment-success',
 ]);
+if (profileUiTestMode) PUBLIC_PATHS.add('/profile-test');
 const ONBOARDING_COMPLETED_KEY = 'ajyal.onboarding.completed.v1';
 const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
   '/profile',
@@ -77,7 +81,7 @@ const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
 
 function RootLayoutNav() {
   const colors = useColors();
-  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, user } = useAuth();
+  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, retrySessionRestore, user } = useAuth();
   const { profile, role, roleResolved, profileError, retryProfile, logout: logoutAjyal, isLoading: profileLoading } = useAjyal();
   const { t } = useAppPreferences();
   const pathname = usePathname();
@@ -167,7 +171,7 @@ function RootLayoutNav() {
   // update first.
   useEffect(() => {
     const client = supabase;
-    if (!client || !profile?.id || role !== 'student' || pathname === '/live-session') return undefined;
+    if (!client || !homeReady || !profile?.id || role !== 'student' || pathname === '/live-session') return undefined;
     let mounted = true;
     const openStartedBooking = (bookingId: string) => {
       if (!mounted || pathname === '/live-session' || autoOpenedSessionIds.current.has(bookingId)) return;
@@ -188,17 +192,19 @@ function RootLayoutNav() {
       if (lifecycleBookingIds.length) {
         const { data: ownedLifecycleBookings } = await client
           .from('bookings')
-          .select('id')
+          .select('id, status, session_status, delivery_mode')
           .eq('student_id', profile.id)
           .in('id', lifecycleBookingIds);
         for (const row of ownedLifecycleBookings ?? []) {
-          if (typeof row.id === 'string') openStartedBooking(row.id);
+          if (typeof row.id === 'string' && shouldAutoOpenStartedSession(row.id, row.status, row.session_status, row.delivery_mode)) {
+            openStartedBooking(row.id);
+          }
         }
       }
 
       const { data } = await client
         .from('bookings')
-        .select('id, session_status, scheduled_at, created_at')
+        .select('id, status, session_status, delivery_mode, scheduled_at, created_at')
         .eq('student_id', profile.id)
         .in('session_status', ['waiting_acceptance', 'in_progress']);
       if (!mounted) return;
@@ -207,7 +213,7 @@ function RootLayoutNav() {
         if (row.session_status === 'waiting_acceptance') {
           continue;
         }
-        if (row.session_status === 'in_progress') {
+        if (shouldAutoOpenStartedSession(bookingId, row.status, row.session_status, row.delivery_mode)) {
           openStartedBooking(bookingId);
         }
       }
@@ -224,7 +230,9 @@ function RootLayoutNav() {
       }, (payload) => {
         const updated = payload.new as {
           id?: unknown;
+          status?: unknown;
           session_status?: unknown;
+          delivery_mode?: unknown;
           scheduled_at?: unknown;
           created_at?: unknown;
         };
@@ -233,7 +241,8 @@ function RootLayoutNav() {
         if (updated.session_status === 'waiting_acceptance') {
           return;
         }
-        if (updated.session_status !== 'in_progress') {
+        if (updated.session_status !== 'in_progress'
+          || !shouldAutoOpenStartedSession(bookingId, updated.status, updated.session_status, updated.delivery_mode)) {
           return;
         }
         openStartedBooking(bookingId);
@@ -252,12 +261,15 @@ function RootLayoutNav() {
         if (!bookingId || typeof updated.started_at !== 'string' || updated.ended_at) return;
         void client
           .from('bookings')
-          .select('id')
+          .select('id, status, session_status, delivery_mode')
           .eq('id', bookingId)
           .eq('student_id', profile.id)
           .maybeSingle()
           .then(({ data }) => {
-            if (data?.id && typeof data.id === 'string') openStartedBooking(data.id);
+            if (data?.id && typeof data.id === 'string'
+              && shouldAutoOpenStartedSession(data.id, data.status, data.session_status, data.delivery_mode)) {
+              openStartedBooking(data.id);
+            }
           });
       })
       .subscribe();
@@ -266,7 +278,7 @@ function RootLayoutNav() {
       mounted = false;
       void client.removeChannel(channel);
     };
-  }, [pathname, profile?.id, role]);
+  }, [homeReady, pathname, profile?.id, role]);
 
   const isPublicRoute = PUBLIC_PATHS.has(pathname);
   let overlay: React.ReactNode = null;
@@ -285,10 +297,18 @@ function RootLayoutNav() {
       <AccessStateScreen
         title={authLoading ? t("تعذر استعادة الجلسة", "Couldn't restore your session") : t("تعذر تحميل ملف الحساب", "Couldn't load your account")}
         body={authLoading
-          ? t("استغرق الاتصال بمنصة أجيال المعرفة وقتاً أطول من المتوقع. يمكنك العودة لتسجيل الدخول والمحاولة مرة أخرى.", "Connecting to Ajyal Knowledge is taking longer than expected. Return to sign in and try again.")
+          ? t("استغرقت استعادة الجلسة وقتاً أطول من المتوقع. أعد المحاولة؛ لن يتم تسجيل الخروج تلقائياً.", "Restoring your session is taking longer than expected. Retry; you won't be signed out automatically.")
           : t("تم تسجيل الدخول، لكن لم تصل بيانات الملف والصلاحيات من المنصة. تحقق من الاتصال ثم أعد المحاولة.", "You are signed in, but your profile and permissions did not arrive. Check your connection and try again.")}
-        actionLabel={authLoading ? t("العودة لتسجيل الدخول", "Return to sign in") : t("إعادة المحاولة", "Try again")}
-        onAction={() => void (authLoading ? logoutAjyal() : retryProfile())}
+        actionLabel={t("إعادة المحاولة", "Try again")}
+        onAction={() => {
+          if (authLoading) {
+            void retrySessionRestore().catch((error) => {
+              console.warn("[auth] Session restore retry failed:", error instanceof Error ? error.message : error);
+            });
+            return;
+          }
+          void retryProfile();
+        }}
         colors={colors}
       />
     );
@@ -546,6 +566,7 @@ function RootLayoutNav() {
         <Stack.Screen name="teacher-withdrawals" options={{ headerShown: false }} />
         <Stack.Screen name="call-wallet" options={{ headerShown: false }} />
         <Stack.Screen name="chat" options={{ headerShown: false }} />
+        <Stack.Screen name="help-center" options={{ headerShown: false }} />
         <Stack.Screen name="support" options={{ headerShown: false }} />
         <Stack.Screen name="rating" options={{ headerShown: false }} />
         <Stack.Screen name="booking" options={{ headerShown: false }} />

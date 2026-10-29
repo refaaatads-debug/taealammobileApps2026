@@ -149,32 +149,92 @@ function proxyRequest(req, res) {
   // platform explicitly so Metro returns the native manifest instead of Web HTML.
   if (shouldServeNativeManifest) {
     headers['expo-platform'] = platform;
-    headers.accept = 'application/json';
+    // Expo Go requests multipart/mixed so it can receive the certificate chain.
+    // Only choose JSON when the caller does not ask for a specific format.
+    if (!headers.accept || headers.accept === '*/*') {
+      headers.accept = 'application/json';
+    }
+    // Keep the signing error readable so a transient cache-write race can be retried.
+    headers['accept-encoding'] = 'identity';
   }
 
-  const upstream = http.request(
-    {
-      hostname: '127.0.0.1',
-      port: metroPort,
-      method: req.method,
-      path: `${requestUrl.pathname}${requestUrl.search}`,
-      headers,
-    },
-    (upstreamResponse) => {
-      const responseHeaders = { ...upstreamResponse.headers };
-      if (shouldServeNativeManifest && (upstreamResponse.statusCode || 0) < 400) {
-        responseHeaders['content-type'] = 'application/json; charset=utf-8';
-      }
-      res.writeHead(upstreamResponse.statusCode || 502, responseHeaders);
-      upstreamResponse.pipe(res);
-    },
-  );
+  const sendResponse = (upstreamResponse) => {
+    if (res.writableEnded) return;
+    res.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+    upstreamResponse.pipe(res);
+  };
 
-  upstream.once('error', (error) => {
-    unavailableResponse(res, `Expo preview is starting: ${error.message}`);
-  });
+  const forward = (retrying = false) => {
+    const upstream = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: metroPort,
+        method: req.method,
+        path: `${requestUrl.pathname}${requestUrl.search}`,
+        headers,
+      },
+      (upstreamResponse) => {
+        const mayRetrySigningCache =
+          !retrying &&
+          req.method === 'GET' &&
+          shouldServeNativeManifest &&
+          Boolean(req.headers['expo-expect-signature']) &&
+          upstreamResponse.statusCode === 500;
+        if (!mayRetrySigningCache) {
+          sendResponse(upstreamResponse);
+          return;
+        }
 
-  req.pipe(upstream);
+        const chunks = [];
+        let bytes = 0;
+        let streaming = false;
+        upstreamResponse.on('data', (chunk) => {
+          if (streaming) {
+            res.write(chunk);
+            return;
+          }
+          bytes += chunk.length;
+          if (bytes > 16_384) {
+            streaming = true;
+            const responseHeaders = { ...upstreamResponse.headers };
+            res.writeHead(upstreamResponse.statusCode || 502, responseHeaders);
+            for (const buffered of chunks) res.write(buffered);
+            res.write(chunk);
+            return;
+          }
+          chunks.push(chunk);
+        });
+        upstreamResponse.once('end', () => {
+          if (streaming) {
+            res.end();
+            return;
+          }
+          const body = Buffer.concat(chunks);
+          const message = body.toString('utf8');
+          if (
+            message.includes('ENOENT') &&
+            message.includes('rename') &&
+            message.includes('development-code-signing-settings-2.json')
+          ) {
+            setTimeout(() => forward(true), 150);
+            return;
+          }
+          if (res.writableEnded) return;
+          res.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+          res.end(body);
+        });
+      },
+    );
+
+    upstream.once('error', (error) => {
+      unavailableResponse(res, `Expo preview is starting: ${error.message}`);
+    });
+
+    if (retrying) upstream.end();
+    else req.pipe(upstream);
+  };
+
+  forward();
 }
 
 const proxy = http.createServer((req, res) => {

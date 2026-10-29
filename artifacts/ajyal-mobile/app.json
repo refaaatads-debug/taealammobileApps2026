@@ -2,7 +2,7 @@
   "expo": {
     "name": "ajyalalmaerifa",
     "slug": "ajyal-mobile",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "default",
     "icon": "./assets/images/ajyal-icon.png",
     "scheme": "ajyalalmaerifa",
@@ -21,7 +21,7 @@
     "android": {
       "package": "com.ajyalalmaerifa.app",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 1,
+      "versionCode": 192,
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.RECORD_AUDIO",
@@ -29,6 +29,8 @@
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.INTERNET",
         "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.WAKE_LOCK",
         "android.permission.BLUETOOTH"
@@ -56,6 +58,11 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withIncomingCallNative",
+      "./plugins/withAjyalNativeCalls",
+      "./plugins/withGoogleMapsKeys",
+      "@config-plugins/react-native-blob-util",
+      "@config-plugins/react-native-pdf",
       [
         "@config-plugins/react-native-webrtc",
         {

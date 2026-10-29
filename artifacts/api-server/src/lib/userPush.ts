@@ -1,29 +1,19 @@
 import { db, pushTokensTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
-import { DEFAULT_NOTIFICATION_CHANNEL, ExpoPushError, isExpoPushToken, sendExpoPushMessage, type ExpoPushMessage } from "./expoPush";
+import {
+  ExpoPushError,
+  isExpoPushToken,
+  notificationPresentation,
+  sendExpoPushMessage,
+  type ExpoPushMessage,
+} from "./expoPush";
+import { pushDedupeKey } from "./pushDedupe";
+import { decodePushTokenBundle } from "./pushTokenBundle";
 
-export type UserPushPayload = Pick<ExpoPushMessage, "title" | "body" | "data"> & Partial<Pick<ExpoPushMessage, "sound" | "priority" | "ttl" | "channelId">>;
+export type UserPushPayload = Pick<ExpoPushMessage, "title" | "body" | "data"> & Partial<Pick<ExpoPushMessage, "richContent" | "sound" | "priority" | "ttl" | "channelId">>;
 
 const recentPushes = new Map<string, number>();
 const PUSH_DEDUPE_WINDOW_MS = 60_000;
-
-function pushDedupeKey(userId: string, payload: UserPushPayload): string | null {
-  const data = payload.data ?? {};
-  const explicitKey = [data.notificationId, data.eventId, data.dedupeKey]
-    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
-  if (explicitKey) return `${userId}:${explicitKey}`;
-
-  const type = typeof data.type === "string" ? data.type : "";
-  const bookingId = typeof data.bookingId === "string" ? data.bookingId : "";
-  if (type && bookingId) return `${userId}:${type}:booking:${bookingId}`;
-
-  const assignmentId = typeof data.assignmentId === "string" ? data.assignmentId : "";
-  const submissionId = typeof data.submissionId === "string" ? data.submissionId : "";
-  if (type && assignmentId && submissionId) {
-    return `${userId}:${type}:assignment:${assignmentId}:${submissionId}`;
-  }
-  return null;
-}
 
 function reservePushKey(key: string): boolean {
   const now = Date.now();
@@ -43,7 +33,7 @@ function reservePushKey(key: string): boolean {
  * result instead of failing the business operation.
  */
 export async function sendUserPushNotification(userId: string, payload: UserPushPayload): Promise<boolean> {
-  const dedupeKey = pushDedupeKey(userId, payload);
+  const dedupeKey = pushDedupeKey(userId, payload.data);
   if (dedupeKey && !reservePushKey(dedupeKey)) {
     console.info("[push] regular_notification_suppressed_duplicate");
     return false;
@@ -59,22 +49,27 @@ export async function sendUserPushNotification(userId: string, payload: UserPush
     });
 
     if (!destination?.token) {
+      if (dedupeKey) recentPushes.delete(dedupeKey);
       console.warn("[push] regular_notification_skipped", { reason: "missing_token" });
       return false;
     }
-    if (!isExpoPushToken(destination.token)) {
+    const tokenBundle = decodePushTokenBundle(destination.token);
+    if (!tokenBundle || !isExpoPushToken(tokenBundle.expoToken)) {
+      if (dedupeKey) recentPushes.delete(dedupeKey);
       console.warn("[push] regular_notification_skipped", { reason: "invalid_token_shape" });
       return false;
     }
+    const presentation = notificationPresentation(payload.data?.type);
     await sendExpoPushMessage({
-      to: destination.token,
+      to: tokenBundle.expoToken,
       title: payload.title,
       body: payload.body,
       data: payload.data,
-      sound: payload.sound ?? "default",
+      ...(payload.richContent ? { richContent: payload.richContent } : {}),
+      sound: payload.sound ?? presentation.sound,
       priority: payload.priority ?? "high",
       ttl: payload.ttl ?? 3600,
-      channelId: payload.channelId ?? DEFAULT_NOTIFICATION_CHANNEL,
+      channelId: payload.channelId ?? presentation.channelId,
     });
     return true;
   } catch (error) {
