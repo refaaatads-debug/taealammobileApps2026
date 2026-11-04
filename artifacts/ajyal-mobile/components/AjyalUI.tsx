@@ -25,13 +25,13 @@ export function Icon({ name, size = 20, color, style }: { name: IconName; size?:
   return <Feather name={name} size={size} color={color ?? colors.foreground} style={style} />;
 }
 
-export function Screen({ children, scroll = true, contentStyle }: { children: React.ReactNode; scroll?: boolean; contentStyle?: object }) {
+export function Screen({ children, scroll = true, contentStyle, animateContent = true }: { children: React.ReactNode; scroll?: boolean; contentStyle?: object; animateContent?: boolean }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const topInset = insets.top + 10;
   const bottomInset = insets.bottom + 112;
   if (!scroll) {
-    return <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: topInset, paddingBottom: bottomInset }, contentStyle]}><Reveal style={styles.revealFill}>{children}</Reveal></View>;
+    return <View style={[styles.screen, { backgroundColor: colors.background, paddingTop: topInset, paddingBottom: bottomInset }, contentStyle]}>{animateContent ? <Reveal style={styles.revealFill}>{children}</Reveal> : children}</View>;
   }
   return (
     <ScrollView
@@ -40,7 +40,7 @@ export function Screen({ children, scroll = true, contentStyle }: { children: Re
       showsVerticalScrollIndicator={false}
       contentInsetAdjustmentBehavior="never"
     >
-      <Reveal>{children}</Reveal>
+      {animateContent ? <Reveal>{children}</Reveal> : children}
     </ScrollView>
   );
 }

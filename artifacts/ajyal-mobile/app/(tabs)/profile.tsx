@@ -451,7 +451,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
 
   return (
     <>
-    <Screen>
+    <Screen animateContent={false}>
        <Header avatarText={profile?.displayName?.slice(0, 1)} eyebrow={t("مساحتك الشخصية", "Your personal space")} title={t("حسابي", "Profile")} onBell={() => router.push("/notifications")} />
          <View style={[styles.hero, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row" : "row-reverse", shadowColor: colors.primary }]}>
            <View style={[styles.heroGlow, { backgroundColor: colors.navySoft, pointerEvents: "none" }]} />
