@@ -659,6 +659,34 @@ export default function BookingScreen() {
             </Pressable>
           </>
         )}
+        <Pressable
+          testID="booking-in-person"
+          accessibilityRole="button"
+          accessibilityLabel={t('حجز معلم حضوري', 'Book an in-person teacher')}
+          onPress={() => router.push('/in-person')}
+          style={({ pressed }) => [
+            styles.inPersonChoice,
+            {
+              backgroundColor: colors.tealSoft,
+              borderColor: colors.border,
+              flexDirection: direction === 'rtl' ? 'row-reverse' : 'row',
+            },
+            pressed && { opacity: 0.75 },
+          ]}
+        >
+          <View style={[styles.inPersonChoiceIcon, { backgroundColor: colors.card }]}>
+            <Icon name="map-pin" size={17} color={colors.teal} />
+          </View>
+          <View style={[styles.inPersonChoiceCopy, { alignItems: direction === 'rtl' ? 'flex-end' : 'flex-start' }]}>
+            <Text style={[styles.inPersonChoiceTitle, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>
+              {t('حجز معلم حضوري', 'Book an in-person teacher')}
+            </Text>
+            <Text style={[styles.inPersonChoiceSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>
+              {t('اختر المدينة والعنوان والموعد', 'Choose a city, address, and time')}
+            </Text>
+          </View>
+          <Icon name={direction === 'rtl' ? 'chevron-left' : 'chevron-right'} size={17} color={colors.teal} />
+        </Pressable>
         {openTeachersQuery.isLoading && (!teacherId || needsTeacherDirectoryFallback) ? <Text style={[styles.availabilityEmpty, { color: colors.mutedForeground }]}>جارٍ قراءة Availability المعلمين المؤهلين…</Text> : null}
         {openTeachersQuery.isError && (!teacherId || needsTeacherDirectoryFallback) ? <Text style={[styles.availabilityEmpty, { color: colors.destructive }]}>تعذر قراءة المعلمين المؤهلين من المنصة.</Text> : null}
          {!balanceLoading && projectedRemainingMinutes !== null ? <View style={[styles.balanceCard, { backgroundColor: projectedRemainingMinutes > 0 ? colors.tealSoft : colors.accent, borderColor: projectedRemainingMinutes > 0 ? colors.teal : colors.border }]}>
@@ -818,6 +846,11 @@ const styles = StyleSheet.create({
   modeOption: { flex: 1, minHeight: 49, borderRadius: 11, borderWidth: 1, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' },
   modeText: { fontSize: 12, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   modeHint: { fontSize: 9, fontFamily: 'Inter_400Regular', marginTop: 3, writingDirection: 'rtl' },
+  inPersonChoice: { minHeight: 60, borderRadius: 14, borderWidth: 1, paddingHorizontal: 11, paddingVertical: 9, alignItems: 'center', gap: 9, marginBottom: 14 },
+  inPersonChoiceIcon: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  inPersonChoiceCopy: { flex: 1, gap: 3 },
+  inPersonChoiceTitle: { width: '100%', fontSize: 12, fontFamily: 'Inter_700Bold' },
+  inPersonChoiceSubtitle: { width: '100%', fontSize: 10, fontFamily: 'Inter_400Regular' },
   selectedTeacherCard: { minHeight: 66, borderRadius: 15, borderWidth: 1, paddingHorizontal: 13, paddingVertical: 10, flexDirection: 'row-reverse', alignItems: 'center', gap: 10 },
   selectedTeacherCopy: { flex: 1, alignItems: 'flex-end' },
   selectedTeacherLabel: { width: '100%', fontSize: 10, fontFamily: 'Inter_500Medium', textAlign: 'right', writingDirection: 'rtl' },

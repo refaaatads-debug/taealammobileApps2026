@@ -408,6 +408,7 @@ type StudentAssignmentSummary = {
 
 const studentDashboardActions: DashboardAction[] = [
   { id: 'find-teacher', title: 'ابحث عن معلم', subtitle: 'معلمون مناسبون لك', icon: 'user-plus', tone: 'teal' },
+  { id: 'in-person', title: 'حجز معلم حضوري', subtitle: 'اختر الموقع والموعد', icon: 'map-pin', tone: 'teal' },
   { id: 'subscriptions', title: 'الباقات والاشتراكات', subtitle: 'خطتك ورصيدك', icon: 'award', tone: 'gold' },
   { id: 'smart-teacher', title: 'المدرس الذكي', subtitle: 'مساعدة أثناء التعلم', icon: 'zap', tone: 'navy' },
   { id: 'materials', title: 'المواد التعليمية', subtitle: 'دروسك وملفاتك', icon: 'book-open', tone: 'teal' },
@@ -427,6 +428,8 @@ const teacherDashboardActions: DashboardAction[] = [
 const dashboardTranslations: Record<string, string> = {
   'ابحث عن معلم': 'Find a teacher',
   'معلمون مناسبون لك': 'Teachers matched to you',
+  'حجز معلم حضوري': 'Book an in-person teacher',
+  'اختر الموقع والموعد': 'Choose a location and time',
   'الباقات والاشتراكات': 'Plans and subscriptions',
   'خطتك ورصيدك': 'Your plan and balance',
   'المدرس الذكي': 'AI tutor',
@@ -494,7 +497,7 @@ function DashboardToolsMosaic({
   const featureActionId = role === 'student' ? 'smart-teacher' : 'students';
   const wideActionId = role === 'student' ? 'assignments' : 'review';
   const visualOrder = role === 'student'
-    ? ['smart-teacher', 'subscriptions', 'find-teacher', 'bookings', 'materials', 'assignments']
+    ? ['smart-teacher', 'subscriptions', 'find-teacher', 'in-person', 'bookings', 'materials', 'assignments']
     : ['students', 'teacher-schedule', 'wallet', 'teacher-sessions', 'teacher-materials', 'review'];
   const orderedActions = [...actions].sort((a, b) => visualOrder.indexOf(a.id) - visualOrder.indexOf(b.id));
 

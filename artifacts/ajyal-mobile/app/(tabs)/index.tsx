@@ -392,6 +392,7 @@ export default function HomeScreen() {
     }
     const routes: Record<string, string> = {
       'find-teacher': '/find-teacher',
+      'in-person': '/in-person',
       subscriptions: '/subscriptions',
       'smart-teacher': '/smart-teacher',
       materials: '/materials',
