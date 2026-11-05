@@ -14,12 +14,15 @@ type Address = { id: string; city_id: string; street_address: string; latitude: 
 export default function ProfileInPersonSection({ number, role, userId }: { number: string; role: "student" | "teacher"; userId: string }) {
   const colors = useColors();
   const { t, direction } = useAppPreferences();
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingAddressId, setDeletingAddressId] = useState<string | null>(null);
   const [addressToDelete, setAddressToDelete] = useState<Address | null>(null);
   const [deleteError, setDeleteError] = useState("");
   const [enabled, setEnabled] = useState(role === "student");
+  const [eligibilityChecked, setEligibilityChecked] = useState(role === "student");
+  const [sectionDataLoaded, setSectionDataLoaded] = useState(false);
+  const [loadAttempted, setLoadAttempted] = useState(false);
   const [cities, setCities] = useState<City[]>([]);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [cityId, setCityId] = useState("");
@@ -33,27 +36,53 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
   const [selectedPlace, setSelectedPlace] = useState<GooglePlaceDetails | null>(null);
   const [locationGranted, setLocationGranted] = useState(false);
   const [error, setError] = useState("");
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
+
+  const checkTeacherEligibility = useCallback(async () => {
+    if (role !== "teacher") return;
+    if (!supabase || !userId) {
+      setEligibilityChecked(true);
+      setError(t("يلزم تسجيل الدخول لتحميل الموقع.", "Sign in to load the location."));
+      return;
+    }
+    try {
+      const pilot = await supabase.rpc("is_in_person_test_user" as any);
+      if (pilot.error) throw pilot.error;
+      setEnabled(Boolean(pilot.data));
+    } catch {
+      setError(t("تعذر تحميل بيانات الموقع الحضوري.", "Could not load the in-person location."));
+    } finally {
+      setEligibilityChecked(true);
+    }
+  }, [role, userId, t]);
 
   const load = useCallback(async () => {
     if (!supabase || !userId) {
-      setLoading(false);
       setError(t("يلزم تسجيل الدخول لتحميل الموقع.", "Sign in to load the location."));
       return;
     }
     setLoading(true);
     setError("");
     try {
-      const cityResult = await supabase.from("cities" as any).select("id,name_ar").eq("country_iso2", "SA").eq("is_active", true).order("name_ar");
-      if (cityResult.error) throw cityResult.error;
-      setCities((cityResult.data ?? []) as City[]);
-      if (role === "student") {
-        const result = await supabase.from("user_addresses" as any)
+      const cityRequest = supabase.from("cities" as any)
+        .select("id,name_ar")
+        .eq("country_iso2", "SA")
+        .eq("is_active", true)
+        .order("name_ar");
+      const detailsRequest = role === "student"
+        ? supabase.from("user_addresses" as any)
           .select("id,city_id,street_address,latitude,longitude,is_primary")
-          .eq("owner_id", userId).order("is_primary", { ascending: false });
-        if (result.error) throw result.error;
-        const rows = (result.data ?? []) as Address[];
+          .eq("owner_id", userId)
+          .order("is_primary", { ascending: false })
+        : supabase.rpc("get_my_teacher_in_person_settings" as any);
+      const [cityResult, detailsResult] = await Promise.all([cityRequest, detailsRequest]);
+      if (cityResult.error) throw cityResult.error;
+      if (detailsResult.error) throw detailsResult.error;
+      setCities((cityResult.data ?? []) as City[]);
+
+      if (role === "student") {
+        const rows = (detailsResult.data ?? []) as Address[];
         setAddresses(rows);
         if (rows[0]) {
           setCityId(rows[0].city_id);
@@ -62,13 +91,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
           setLongitude(String(rows[0].longitude ?? ""));
         }
       } else {
-        const pilot = await supabase.rpc("is_in_person_test_user" as any);
-        if (pilot.error) throw pilot.error;
-        setEnabled(Boolean(pilot.data));
-        if (!pilot.data) return;
-        const result = await supabase.rpc("get_my_teacher_in_person_settings" as any);
-        if (result.error) throw result.error;
-        const settings = Array.isArray(result.data) ? result.data[0] : result.data;
+        const settings = Array.isArray(detailsResult.data) ? detailsResult.data[0] : detailsResult.data;
         if (settings) {
           setCityId(String(settings.city_id ?? ""));
           setStreet(String(settings.street_address ?? ""));
@@ -80,6 +103,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
           setApprovalReason(String(settings.rejection_reason ?? ""));
         }
       }
+      setSectionDataLoaded(true);
     } catch {
       setError(t("تعذر تحميل بيانات الموقع الحضوري.", "Could not load the in-person location."));
     } finally {
@@ -87,7 +111,14 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
     }
   }, [role, userId, t]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void checkTeacherEligibility(); }, [checkTeacherEligibility]);
+
+  useEffect(() => {
+    if (expanded && enabled && eligibilityChecked && !sectionDataLoaded && !loading && !loadAttempted) {
+      setLoadAttempted(true);
+      void load();
+    }
+  }, [expanded, enabled, eligibilityChecked, sectionDataLoaded, loading, loadAttempted, load]);
 
   const getCurrentLocation = async () => {
     const permission = await Location.requestForegroundPermissionsAsync();
@@ -232,7 +263,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
     }
   };
 
-  if (!enabled) return null;
+  if (!eligibilityChecked || !enabled) return null;
   const title = role === "student" ? t("عنوانك للحصص الحضورية", "Address for in-person lessons") : t("موقع التدريس الحضوري", "In-person teaching location");
   const buttonStyle = (active: boolean) => [styles.choice, { borderColor: active ? colors.teal : colors.border, backgroundColor: active ? colors.tealSoft : colors.card }, active && styles.choiceActive];
   const approvalLabel = approval === "approved" ? t("معتمد", "Approved") : approval === "pending" ? t("قيد المراجعة", "Under review") : approval === "rejected" ? t("مرفوض", "Rejected") : t("لم يُطلب بعد", "Not requested");
@@ -244,7 +275,11 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
         accessibilityRole="button"
         accessibilityState={{ expanded }}
         accessibilityLabel={`${title}, ${expanded ? t("إخفاء القسم", "Collapse section") : t("فتح القسم", "Expand section")}`}
-        onPress={() => setExpanded((current) => !current)}
+        onPress={() => {
+          const nextExpanded = !expanded;
+          setExpanded(nextExpanded);
+          if (!nextExpanded && error) setLoadAttempted(false);
+        }}
         style={({ pressed }) => [styles.sectionHeader, { flexDirection: direction === "rtl" ? "row-reverse" : "row", opacity: pressed ? 0.82 : 1 }]}
       >
         <View style={[styles.sectionNumber, { backgroundColor: colors.tealSoft }]}>
@@ -327,7 +362,23 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
           <Text style={[styles.helper, { color: colors.mutedForeground }]}>{t("أدخل نطاقاً من 1 إلى 100 كم.", "Enter a radius from 1 to 100 km.")}</Text>
         </View>}
         {role === "student" && addresses.map((address) => <View key={address.id} style={[styles.saved, { backgroundColor: colors.muted, borderColor: colors.border }]}><View style={styles.savedRow}><View style={styles.savedCopy}><Text style={[styles.savedTitle, { color: colors.foreground }]}>{cities.find((city) => city.id === address.city_id)?.name_ar ?? t("عنوان محفوظ", "Saved address")}</Text><Text style={[styles.savedText, { color: colors.mutedForeground }]}>{address.street_address}</Text></View><Pressable accessibilityRole="button" accessibilityLabel={t("حذف العنوان", "Delete address")} disabled={deletingAddressId === address.id} onPress={() => { setDeleteError(""); setAddressToDelete(address); }} hitSlop={8} style={[styles.deleteAddress, { backgroundColor: colors.card, borderColor: colors.border }]}>{deletingAddressId === address.id ? <ActivityIndicator size="small" color={colors.destructive} /> : <Icon name="trash-2" size={16} color={colors.destructive} />}</Pressable></View></View>)}
-        {error ? <Text accessibilityRole="alert" style={[styles.error, { color: colors.destructive }]}>{error}</Text> : null}
+        {error ? (
+          <View>
+            <Text accessibilityRole="alert" style={[styles.error, { color: colors.destructive }]}>{error}</Text>
+            {!sectionDataLoaded ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setError("");
+                  setLoadAttempted(false);
+                }}
+                style={[styles.secondary, { borderColor: colors.border, backgroundColor: colors.card }]}
+              >
+                <Text style={[styles.secondaryText, { color: colors.teal }]}>{t("إعادة المحاولة", "Retry")}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
         <Pressable disabled={saving} accessibilityRole="button" onPress={() => void save()} style={({ pressed }) => [styles.save, { backgroundColor: colors.primary, opacity: saving ? 0.65 : pressed ? 0.88 : 1 }]}>
           {saving ? <ActivityIndicator color={colors.primaryForeground} /> : <Text style={[styles.saveText, { color: colors.primaryForeground }]}>{role === "student" ? t("حفظ العنوان", "Save address") : t("حفظ الموقع وإرساله للاعتماد", "Save location and request approval")}</Text>}
         </Pressable>

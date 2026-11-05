@@ -127,6 +127,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   const ajyal = useAjyal();
   const user = testHarness?.session.user ?? auth.user;
   const role = testHarness?.session.role ?? ajyal.role;
+  const userId = user?.id;
   const profile = testHarness
     ? {
         displayName: testHarness.session.user.email,
@@ -187,7 +188,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   const load = useCallback(async () => {
     setDataLoaded(false);
     setLoadError(false);
-    if (!profileClient || !user || (role !== "student" && role !== "teacher")) {
+    if (!profileClient || !userId || (role !== "student" && role !== "teacher")) {
       setLoading(false);
       setLoadError(true);
       return;
@@ -196,7 +197,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
     try {
       const data = await loadProfileData(
         profileClient as unknown as ProfileDataClient,
-        user.id,
+        userId,
         role as ProfileRole,
       );
       setFullName(data.fullName);
@@ -225,7 +226,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
     } finally {
       setLoading(false);
     }
-  }, [profileClient, role, user, t]);
+  }, [profileClient, role, userId]);
 
   useEffect(() => { void load(); }, [load]);
 
