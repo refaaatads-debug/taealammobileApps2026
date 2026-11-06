@@ -570,6 +570,7 @@ function RootLayoutNav() {
         <Stack.Screen name="support" options={{ headerShown: false }} />
         <Stack.Screen name="rating" options={{ headerShown: false }} />
         <Stack.Screen name="booking" options={{ headerShown: false }} />
+        <Stack.Screen name="in-person" options={{ headerShown: false }} />
         <Stack.Screen name="live-session" options={{ headerShown: false }} />
         <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
         <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
