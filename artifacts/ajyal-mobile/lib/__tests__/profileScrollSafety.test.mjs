@@ -27,3 +27,13 @@ test("in-person profile data is loaded only after its section is opened", () => 
   assert.match(inPersonSource, /const \[expanded, setExpanded\] = useState\(false\);/);
   assert.match(inPersonSource, /if \(expanded && enabled && eligibilityChecked && !sectionDataLoaded && !loading && !loadAttempted\)/);
 });
+
+test("the native profile map is opened separately instead of mounting inside the long profile scroll", () => {
+  const pickerSource = readFileSync(
+    path.join(projectRoot, "components/InPersonLocationPicker.native.tsx"),
+    "utf8",
+  );
+  assert.match(pickerSource, /const \[mapOpen, setMapOpen\] = useState\(false\);/);
+  assert.match(pickerSource, /visible=\{mapOpen\}/);
+  assert.match(pickerSource, /onPress=\{\(\) => setMapOpen\(true\)\}/);
+});

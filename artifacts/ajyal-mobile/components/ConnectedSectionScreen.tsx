@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Linking, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Linking, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { VideoView, useVideoPlayer } from "expo-video";
@@ -11,6 +11,11 @@ import { EmptyState, Header, Icon, Screen, SectionHeading } from "@/components/A
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { hasAiTutorFeature, isSubscriptionActive } from "@/lib/subscriptionEntitlements";
 import { getAvailableTeacherBalance, groupTeacherEarningsByMonthAndType } from "@/lib/teacherFinance";
+import {
+  configureSessionRecordingWebVideo,
+  getSessionRecordingObjectPath,
+  resolveSessionMaterialRecordingUrl,
+} from "@/lib/sessionMaterialPresentation";
 
 type Row = Record<string, unknown>;
 type AiReport = Row & {
@@ -918,10 +923,9 @@ function WalletScreen() {
 async function resolveRecordingUrl(url: string | null) {
   if (!url) return null;
   let target = url;
-  const marker = "/session-recordings/";
-  const index = url.indexOf(marker);
-  if (index !== -1 && supabase) {
-    const path = decodeURIComponent(url.slice(index + marker.length).split("?")[0]);
+  const path = getSessionRecordingObjectPath(url);
+  if (path) {
+    if (!supabase) throw new Error("Supabase is unavailable for private recording playback");
     const { data, error } = await supabase.storage.from("session-recordings").createSignedUrl(path, 3600);
     if (error) throw error;
     if (!data?.signedUrl) throw new Error("Recording URL was not created");
@@ -936,27 +940,17 @@ function RecordingPlayerModal({
   title,
   error,
   onClose,
+  onRetry,
 }: {
   visible: boolean;
   url: string | null;
   title: string;
   error?: string | null;
   onClose: () => void;
+  onRetry: () => void;
 }) {
   const colors = useColors();
   const { t, direction } = useAppPreferences();
-  const [status, setStatus] = useState<"idle" | "loading" | "readyToPlay" | "error">("loading");
-  const player = useVideoPlayer(url, (instance) => {
-    instance.play();
-  });
-
-  useEffect(() => {
-    setStatus("loading");
-    const subscription = player.addListener("statusChange", ({ status: nextStatus }) => {
-      setStatus(nextStatus);
-    });
-    return () => subscription.remove();
-  }, [player]);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -974,34 +968,29 @@ function RecordingPlayerModal({
             </Pressable>
           </View>
           <View style={[styles.videoStage, { backgroundColor: colors.tint }]}>
-            {error || status === "error" ? (
+            {error ? (
               <View style={styles.videoState}>
                 <Text style={[styles.videoStateTitle, { color: colors.primaryForeground, writingDirection: direction }]}>
                   {t("تعذر تشغيل التسجيل", "Unable to play this recording")}
                 </Text>
                 <Text style={[styles.videoStateBody, { color: colors.tint, writingDirection: direction }]}>
-                  {error ?? t("انتهت صلاحية الرابط أو تعذر الوصول إلى الملف. أغلق النافذة وحاول مرة أخرى.", "The link expired or the file could not be reached. Close this window and try again.")}
+                  {error}
+                </Text>
+                <Pressable onPress={onRetry} style={styles.videoRetry}>
+                  <Text style={[styles.videoRetryText, { color: colors.primaryForeground }]}>
+                    {t("إعادة المحاولة", "Try again")}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : url ? (
+              <RecordingVideoStage url={url} onRetry={onRetry} />
+            ) : (
+              <View style={styles.videoLoading}>
+                <ActivityIndicator color={colors.primaryForeground} />
+                <Text style={[styles.videoLoadingText, { color: colors.primaryForeground, writingDirection: direction }]}>
+                  {t("جارٍ تجهيز رابط التسجيل…", "Preparing the recording…")}
                 </Text>
               </View>
-            ) : (
-              <>
-                <VideoView
-                  player={player}
-                  style={styles.videoView}
-                  contentFit="contain"
-                  nativeControls
-                  fullscreenOptions={{ enable: true }}
-                  allowsPictureInPicture
-                />
-                {status !== "readyToPlay" ? (
-                  <View style={styles.videoLoading}>
-                    <ActivityIndicator color={colors.primaryForeground} />
-                    <Text style={[styles.videoLoadingText, { color: colors.primaryForeground, writingDirection: direction }]}>
-                      {t("جارٍ تحميل التسجيل…", "Loading recording…")}
-                    </Text>
-                  </View>
-                ) : null}
-              </>
             )}
           </View>
           <Pressable onPress={onClose} style={[styles.videoModalDone, { backgroundColor: colors.teal }]}>
@@ -1010,6 +999,125 @@ function RecordingPlayerModal({
         </View>
       </View>
     </Modal>
+  );
+}
+
+function RecordingVideoStage({ url, onRetry }: { url: string; onRetry: () => void }) {
+  if (Platform.OS === "web") {
+    return <WebRecordingVideoStage url={url} onRetry={onRetry} />;
+  }
+
+  return <NativeRecordingVideoStage url={url} onRetry={onRetry} />;
+}
+
+function WebRecordingVideoStage({ url, onRetry }: { url: string; onRetry: () => void }) {
+  const colors = useColors();
+  const { t, direction } = useAppPreferences();
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    setHasError(false);
+    const handleError = () => setHasError(true);
+    video.addEventListener("error", handleError);
+    configureSessionRecordingWebVideo(video, url);
+
+    return () => {
+      video.removeEventListener("error", handleError);
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, [url]);
+
+  if (hasError) {
+    return (
+      <View style={styles.videoState}>
+        <Text style={[styles.videoStateTitle, { color: colors.primaryForeground, writingDirection: direction }]}>
+          {t("تعذر تشغيل التسجيل", "Unable to play this recording")}
+        </Text>
+        <Text style={[styles.videoStateBody, { color: colors.tint, writingDirection: direction }]}>
+          {t("تعذر الوصول إلى الملف. أعد المحاولة لتجديد رابط التشغيل.", "The file could not be reached. Try again to refresh the playback link.")}
+        </Text>
+        <Pressable onPress={onRetry} style={styles.videoRetry}>
+          <Text style={[styles.videoRetryText, { color: colors.primaryForeground }]}>
+            {t("إعادة المحاولة", "Try again")}
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return React.createElement("video", {
+    ref: videoRef,
+    controls: true,
+    playsInline: true,
+    preload: "none",
+    style: {
+      width: "100%",
+      height: "100%",
+      objectFit: "contain",
+      backgroundColor: "#000",
+    },
+  });
+}
+
+function NativeRecordingVideoStage({ url, onRetry }: { url: string; onRetry: () => void }) {
+  const colors = useColors();
+  const { t, direction } = useAppPreferences();
+  const [status, setStatus] = useState<"idle" | "loading" | "readyToPlay" | "error">("loading");
+  const player = useVideoPlayer(url, (instance) => {
+    instance.play();
+  });
+
+  useEffect(() => {
+    setStatus("loading");
+    const subscription = player.addListener("statusChange", ({ status: nextStatus }) => {
+      setStatus(nextStatus);
+    });
+    return () => subscription.remove();
+  }, [player]);
+
+  if (status === "error") {
+    return (
+      <View style={styles.videoState}>
+        <Text style={[styles.videoStateTitle, { color: colors.primaryForeground, writingDirection: direction }]}>
+          {t("تعذر تشغيل التسجيل", "Unable to play this recording")}
+        </Text>
+        <Text style={[styles.videoStateBody, { color: colors.tint, writingDirection: direction }]}>
+          {t("تعذر الوصول إلى الملف. أعد المحاولة لتجديد رابط التشغيل.", "The file could not be reached. Try again to refresh the playback link.")}
+        </Text>
+        <Pressable onPress={onRetry} style={styles.videoRetry}>
+          <Text style={[styles.videoRetryText, { color: colors.primaryForeground }]}>
+            {t("إعادة المحاولة", "Try again")}
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <>
+      <VideoView
+        player={player}
+        style={styles.videoView}
+        contentFit="contain"
+        nativeControls
+        fullscreenOptions={{ enable: true }}
+        allowsPictureInPicture
+      />
+      {status !== "readyToPlay" ? (
+        <View style={styles.videoLoading}>
+          <ActivityIndicator color={colors.primaryForeground} />
+          <Text style={[styles.videoLoadingText, { color: colors.primaryForeground, writingDirection: direction }]}>
+            {t("جارٍ تحميل التسجيل…", "Loading recording…")}
+          </Text>
+        </View>
+      ) : null}
+    </>
   );
 }
 
@@ -1086,7 +1194,7 @@ function MaterialsScreen({ teacher }: { teacher: boolean }) {
       .filter((value): value is string => Boolean(value));
     const [{ data: sessions, error: sessionsError }, { data: profiles, error: profilesError }] = await Promise.all([
       sessionIds.length
-        ? supabase.from("sessions").select("id, ai_report, booking_id").in("id", sessionIds)
+        ? supabase.from("sessions").select("id, ai_report, booking_id, recording_url").in("id", sessionIds)
         : Promise.resolve({ data: [], error: null }),
       teacher && studentIds.length
         ? supabase.from("public_profiles").select("user_id, full_name").in("user_id", [...new Set(studentIds)])
@@ -1120,6 +1228,10 @@ function MaterialsScreen({ teacher }: { teacher: boolean }) {
       const bookingId = session ? text(session, "booking_id") : null;
       return {
         ...material,
+        recording_url: resolveSessionMaterialRecordingUrl(
+          value(material, "recording_url"),
+          session ? value(session, "recording_url") : null,
+        ),
         subject_name: subjectMap.get(bookingId ?? "") ?? null,
         ai_report: session ? value(session, "ai_report") : null,
         student_name: profileMap.get(text(material, "student_id") ?? "") ?? null,
@@ -1128,12 +1240,14 @@ function MaterialsScreen({ teacher }: { teacher: boolean }) {
     }) as Row[];
   }, materialsRevision);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  const [recordingSourceUrl, setRecordingSourceUrl] = useState<string | null>(null);
   const [recordingTitle, setRecordingTitle] = useState("");
   const [recordingLoading, setRecordingLoading] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const openRecording = useCallback(async (url: string | null, title: string) => {
     setRecordingLoading(true);
     setRecordingError(null);
+    setRecordingSourceUrl(url);
     setRecordingUrl(null);
     setRecordingTitle(title);
     try {
@@ -1147,11 +1261,97 @@ function MaterialsScreen({ teacher }: { teacher: boolean }) {
   }, [t]);
   const closeRecording = useCallback(() => {
     setRecordingUrl(null);
+    setRecordingSourceUrl(null);
     setRecordingError(null);
     setRecordingLoading(false);
   }, []);
+  const retryRecording = useCallback(() => {
+    if (recordingSourceUrl) void openRecording(recordingSourceUrl, recordingTitle);
+  }, [openRecording, recordingSourceUrl, recordingTitle]);
   const materialTitle = (material: Row) => text(material, "title", "name") ?? text(material, "subject_name") ?? t("جلسة تعليمية", "Learning session");
-  return <Screen><SectionHeader eyebrow={teacher ? t("مصادر طلابك التعليمية", "Your students’ learning resources") : t("مصادر التعلم الخاصة بك", "Your learning resources")} title={teacher ? t("مواد طلابي", "My students’ materials") : t("المواد التعليمية", "Learning materials")} avatarText={user?.email?.slice(0, 1)} /><View style={[styles.hero, { backgroundColor: colors.primary }]}><View style={[styles.heroIcon, { backgroundColor: colors.tealSoft }]}><Icon name="book-open" size={22} color={colors.teal} /></View><View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("جلساتك المرتبطة", "Your linked sessions")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{teacher ? t("مواد شاركتها مع الطلاب", "Materials shared with students") : t("ملفات ومراجعات جلساتك", "Your session files and reviews")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("تسجيلات الجلسات المكتملة تبقى متاحة خلال مدة الإتاحة المحددة.", "Completed session recordings stay available during their configured access period.")}</Text></View></View><SectionHeading title={t("المواد المتاحة", "Available materials")} /><StateBlock loading={query.loading} error={query.error} empty={!query.data?.length} onRetry={query.reload} />{query.data?.map((material) => <View key={String(material.id)} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.cardTop}><View style={[styles.iconBox, { backgroundColor: colors.tealSoft }]}><Icon name="file-text" size={18} color={colors.teal} /></View><View style={{ flex: 1, marginRight: 10, alignItems: "flex-end" }}><Text style={[styles.cardTitle, { color: colors.foreground, width: "100%", writingDirection: direction }]}>{text(material, "title", "name") ?? text(material, "subject_name") ?? t("جلسة تعليمية", "Learning session")}</Text><Text style={[styles.cardMeta, { color: colors.mutedForeground, writingDirection: direction }]}>{text(material, "subject_name") ?? text(material, "student_name") ?? t("جلسة مرتبطة بحسابك", "Session linked to your account")}</Text></View></View><Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{text(material, "description") ?? t("تسجيل ومواد مرتبطة بجلسة تعليمية مكتملة.", "Recording and materials linked to a completed learning session.")}</Text><ValueRow label={t("تاريخ الإضافة", "Added")} value={dateLabel(text(material, "created_at"), locale)} />{number(material, "duration_minutes", "duration") !== null ? <ValueRow label={t("مدة التسجيل", "Recording duration")} value={`${number(material, "duration_minutes", "duration")} ${t("دقيقة", "min")}`} /> : null}<ValueRow label={t("متبقي", "Remaining")} value={`${number(material, "days_remaining") ?? 0} ${t("يوم", "days")}`} />{value(material, "ai_report") !== null ? <View style={[styles.materialReport, { backgroundColor: colors.navySoft, borderColor: colors.primary }]}><Text style={[styles.materialReportLabel, { color: colors.primary }]}>{t("تقرير الجلسة", "Session report")}</Text><SessionReport value={value(material, "ai_report")} /></View> : null}{text(material, "recording_url") ? <Pressable onPress={() => void openRecording(text(material, "recording_url"), materialTitle(material))} style={({ pressed }) => [styles.actionButton, { backgroundColor: colors.tealSoft }, pressed && styles.pressed]}><Text style={[styles.actionText, { color: colors.teal }]}>{t("فتح تسجيل الجلسة", "Open session recording")}</Text><Icon name="play-circle" size={15} color={colors.teal} /></Pressable> : <View style={[styles.pendingMaterial, { backgroundColor: colors.muted }]}><Icon name="clock" size={15} color={colors.mutedForeground} /><Text style={[styles.pendingMaterialText, { color: colors.mutedForeground }]}>{t("جاري تجهيز تسجيل الجلسة", "Session recording is being prepared")}</Text></View>}</View>)}<RecordingPlayerModal visible={recordingLoading || Boolean(recordingUrl) || Boolean(recordingError)} url={recordingUrl} title={recordingTitle} onClose={closeRecording} /></Screen>;
+
+  return (
+    <Screen>
+      <SectionHeader
+        eyebrow={teacher ? t("مصادر طلابك التعليمية", "Your students’ learning resources") : t("مصادر التعلم الخاصة بك", "Your learning resources")}
+        title={teacher ? t("مواد طلابي", "My students’ materials") : t("المواد التعليمية", "Learning materials")}
+        avatarText={user?.email?.slice(0, 1)}
+      />
+      <View style={[styles.hero, { backgroundColor: colors.primary }]}>
+        <View style={[styles.heroIcon, { backgroundColor: colors.tealSoft }]}>
+          <Icon name="book-open" size={22} color={colors.teal} />
+        </View>
+        <View style={styles.heroCopy}>
+          <Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>
+            {t("جلساتك المرتبطة", "Your linked sessions")}
+          </Text>
+          <Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>
+            {teacher ? t("مواد شاركتها مع الطلاب", "Materials shared with students") : t("ملفات ومراجعات جلساتك", "Your session files and reviews")}
+          </Text>
+          <Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>
+            {t("تسجيلات الجلسات المكتملة تبقى متاحة خلال مدة الإتاحة المحددة.", "Completed session recordings stay available during their configured access period.")}
+          </Text>
+        </View>
+      </View>
+      <SectionHeading title={t("المواد المتاحة", "Available materials")} />
+      <StateBlock loading={query.loading} error={query.error} empty={!query.data?.length} onRetry={query.reload} />
+      {query.data?.map((material) => (
+        <View key={String(material.id)} style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.cardTop}>
+            <View style={[styles.iconBox, { backgroundColor: colors.tealSoft }]}>
+              <Icon name="file-text" size={18} color={colors.teal} />
+            </View>
+            <View style={{ flex: 1, marginRight: 10, alignItems: "flex-end" }}>
+              <Text style={[styles.cardTitle, { color: colors.foreground, width: "100%", writingDirection: direction }]}>
+                {text(material, "title", "name") ?? text(material, "subject_name") ?? t("جلسة تعليمية", "Learning session")}
+              </Text>
+              <Text style={[styles.cardMeta, { color: colors.mutedForeground, writingDirection: direction }]}>
+                {text(material, "subject_name") ?? text(material, "student_name") ?? t("جلسة مرتبطة بحسابك", "Session linked to your account")}
+              </Text>
+            </View>
+          </View>
+          <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>
+            {text(material, "description") ?? t("تسجيل ومواد مرتبطة بجلسة تعليمية مكتملة.", "Recording and materials linked to a completed learning session.")}
+          </Text>
+          <ValueRow label={t("تاريخ الإضافة", "Added")} value={dateLabel(text(material, "created_at"), locale)} />
+          {number(material, "duration_minutes", "duration") !== null ? (
+            <ValueRow label={t("مدة التسجيل", "Recording duration")} value={`${number(material, "duration_minutes", "duration")} ${t("دقيقة", "min")}`} />
+          ) : null}
+          <ValueRow label={t("متبقي", "Remaining")} value={`${number(material, "days_remaining") ?? 0} ${t("يوم", "days")}`} />
+          {value(material, "ai_report") !== null ? (
+            <View style={[styles.materialReport, { backgroundColor: colors.navySoft, borderColor: colors.primary }]}>
+              <Text style={[styles.materialReportLabel, { color: colors.primary }]}>{t("تقرير الجلسة", "Session report")}</Text>
+              <SessionReport value={value(material, "ai_report")} />
+            </View>
+          ) : null}
+          {text(material, "recording_url") ? (
+            <Pressable
+              onPress={() => void openRecording(text(material, "recording_url"), materialTitle(material))}
+              style={({ pressed }) => [styles.actionButton, { backgroundColor: colors.tealSoft }, pressed && styles.pressed]}
+            >
+              <Text style={[styles.actionText, { color: colors.teal }]}>{t("فتح تسجيل الجلسة", "Open session recording")}</Text>
+              <Icon name="play-circle" size={15} color={colors.teal} />
+            </Pressable>
+          ) : (
+            <View style={[styles.pendingMaterial, { backgroundColor: colors.muted }]}>
+              <Icon name="clock" size={15} color={colors.mutedForeground} />
+              <Text style={[styles.pendingMaterialText, { color: colors.mutedForeground }]}>
+                {t("جاري تجهيز تسجيل الجلسة", "Session recording is being prepared")}
+              </Text>
+            </View>
+          )}
+        </View>
+      ))}
+      <RecordingPlayerModal
+        visible={recordingLoading || Boolean(recordingUrl) || Boolean(recordingError)}
+        url={recordingUrl}
+        title={recordingTitle}
+        error={recordingError}
+        onClose={closeRecording}
+        onRetry={retryRecording}
+      />
+    </Screen>
+  );
 }
 
 export function ConnectedSectionScreen({ section }: { section: ConnectedSection }) {
@@ -1224,6 +1424,8 @@ const styles = StyleSheet.create({
   videoState: { paddingHorizontal: 20, alignItems: "center" },
   videoStateTitle: { fontSize: 13, fontFamily: "Inter_700Bold", textAlign: "center", writingDirection: "rtl" },
   videoStateBody: { fontSize: 10, lineHeight: 17, fontFamily: "Inter_400Regular", textAlign: "center", writingDirection: "rtl", marginTop: 8 },
+  videoRetry: { minHeight: 36, paddingHorizontal: 15, borderRadius: 11, backgroundColor: "#1C9A7C", alignItems: "center", justifyContent: "center", marginTop: 12 },
+  videoRetryText: { fontSize: 11, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
   videoModalDone: { minHeight: 42, borderRadius: 12, marginTop: 12, alignItems: "center", justifyContent: "center" },
   videoModalDoneText: { fontSize: 11, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
   badge: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 9, fontSize: 10, fontFamily: "Inter_600SemiBold", overflow: "hidden" },

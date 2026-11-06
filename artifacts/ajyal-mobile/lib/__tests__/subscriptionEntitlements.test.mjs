@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hasAiTutorEntitlement } from "../subscriptionEntitlements.ts";
+import { hasAiTutorEntitlement, isSubscriptionActive } from "../subscriptionEntitlements.ts";
 
 const activeSubscription = (overrides = {}) => ({
   plan_id: "ai-plan",
@@ -31,10 +31,20 @@ test("does not allow a plan without the AI tutor feature", () => {
   );
 });
 
-test("does not allow expired or depleted subscriptions", () => {
+test("keeps active subscriptions usable after their historical end date", () => {
+  const subscription = activeSubscription({ ends_at: "2020-01-01T00:00:00.000Z" });
+  const plan = [{ id: "ai-plan", has_ai_tutor: true }];
+  assert.equal(isSubscriptionActive(subscription, Date.parse("2026-09-07T00:00:00.000Z")), true);
+  assert.equal(
+    hasAiTutorEntitlement([subscription], plan, Date.parse("2026-09-07T00:00:00.000Z")),
+    true,
+  );
+});
+
+test("does not allow inactive or depleted subscriptions", () => {
   const plan = [{ id: "ai-plan", has_ai_tutor: true }];
   assert.equal(
-    hasAiTutorEntitlement([activeSubscription({ ends_at: "2020-01-01T00:00:00.000Z" })], plan, Date.parse("2026-09-07T00:00:00.000Z")),
+    hasAiTutorEntitlement([activeSubscription({ is_active: false })], plan),
     false,
   );
   assert.equal(

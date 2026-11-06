@@ -13,7 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import * as Haptics from 'expo-haptics';
-import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { BRAND_ICON } from '@/components/AjyalUI';
 import { useColors } from '@/hooks/useColors';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
@@ -39,8 +39,6 @@ export default function SwipeDecisionControl({ disabled = false, onDecision }: P
   const colors = useColors();
   const { t, direction } = useAppPreferences();
   const reducedMotion = useReducedMotion();
-  const declineTint = withOpacity(colors.destructive, 0.13);
-  const acceptTint = withOpacity(colors.teal, 0.13);
   const translateX = useSharedValue(0);
   const width = useSharedValue(0);
   const threshold = useSharedValue(72);
@@ -76,17 +74,30 @@ export default function SwipeDecisionControl({ disabled = false, onDecision }: P
     }), [disabled, onDecision, reducedMotion]);
 
   const trackStyle = useAnimatedStyle(() => ({
-    backgroundColor: interpolateColor(
-      translateX.get(),
-      [-threshold.get(), 0, threshold.get()],
-      [declineTint, colors.muted, acceptTint],
-    ),
     borderColor: interpolateColor(
       translateX.get(),
       [-threshold.get(), 0, threshold.get()],
       [colors.destructive, colors.border, colors.teal],
     ),
-  }), [acceptTint, colors.border, colors.destructive, colors.muted, declineTint, colors.teal]);
+  }), [colors.border, colors.destructive, colors.teal]);
+  const tintStyle = useAnimatedStyle(() => ({
+    backgroundColor: translateX.get() < 0 ? colors.destructive : colors.teal,
+    opacity: Math.min(1, Math.abs(translateX.get()) / Math.max(1, threshold.get())),
+  }), [colors.destructive, colors.teal]);
+  const declineTextColorStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(
+      translateX.get(),
+      [-threshold.get(), 0, threshold.get()],
+      [colors.destructiveForeground, colors.destructive, colors.secondaryForeground],
+    ),
+  }), [colors.destructive, colors.destructiveForeground, colors.secondaryForeground]);
+  const acceptTextColorStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(
+      translateX.get(),
+      [-threshold.get(), 0, threshold.get()],
+      [colors.destructiveForeground, colors.teal, colors.secondaryForeground],
+    ),
+  }), [colors.destructiveForeground, colors.secondaryForeground, colors.teal]);
   const declineLabelStyle = useAnimatedStyle(() => ({
     opacity: interpolate(translateX.get(), [-threshold.get(), 0, threshold.get()], [1, 0.82, 0.52], Extrapolation.CLAMP),
   }));
@@ -121,25 +132,31 @@ export default function SwipeDecisionControl({ disabled = false, onDecision }: P
         ]}
         onAccessibilityAction={handleAccessibilityAction}
         onLayout={updateWidth}
-        style={[styles.track, { opacity: disabled ? 0.62 : 1 }, trackStyle]}
+        testID="booking-swipe-decision-control"
+        style={[styles.track, { opacity: disabled ? 0.62 : 1, backgroundColor: colors.muted }, trackStyle]}
       >
+        <LinearGradient
+          pointerEvents="none"
+          colors={[withOpacity(colors.teal, 0.16), withOpacity(colors.primary, 0.11), withOpacity(colors.teal, 0.23)]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={StyleSheet.absoluteFill}
+        />
+        <Animated.View pointerEvents="none" style={[styles.tintOverlay, tintStyle]} />
         <View pointerEvents="none" style={styles.trackLabels}>
           <Animated.View style={[styles.labelGroup, declineLabelStyle]}>
-            <Feather name="arrow-left" size={16} color={colors.destructive} />
-            <Text style={[styles.declineLabel, { color: colors.destructive, writingDirection: direction }]}>{t('اسحب للرفض', 'Swipe to decline')}</Text>
+            <Animated.Text style={[styles.declineLabel, declineTextColorStyle, { writingDirection: direction }]}>
+              {t('← اسحب للرفض', '← Swipe to decline')}
+            </Animated.Text>
           </Animated.View>
           <Animated.View style={[styles.labelGroup, acceptLabelStyle]}>
-            <Text style={[styles.acceptLabel, { color: colors.teal, writingDirection: direction }]}>{t('اسحب للقبول', 'Swipe to accept')}</Text>
-            <Feather name="arrow-right" size={16} color={colors.teal} />
+            <Animated.Text style={[styles.acceptLabel, acceptTextColorStyle, { writingDirection: direction }]}>
+              {t('اسحب للقبول →', 'Swipe to accept →')}
+            </Animated.Text>
           </Animated.View>
         </View>
-        <Animated.View style={[styles.handle, { borderColor: colors.border, backgroundColor: colors.card }, handleStyle]}>
+        <Animated.View testID="booking-swipe-handle" style={[styles.handle, { borderColor: colors.border, backgroundColor: colors.card }, handleStyle]}>
           <Image source={BRAND_ICON} resizeMode="contain" style={styles.logo} />
-          <View style={styles.brandDots}>
-            <View style={[styles.dot, { backgroundColor: colors.teal }]} />
-            <View style={[styles.dot, { backgroundColor: colors.primary }]} />
-            <View style={[styles.dot, { backgroundColor: colors.accent }]} />
-          </View>
         </Animated.View>
       </Animated.View>
     </GestureDetector>
@@ -148,40 +165,41 @@ export default function SwipeDecisionControl({ disabled = false, onDecision }: P
 
 const styles = StyleSheet.create({
   track: {
-    height: 72,
-    borderWidth: 1.5,
-    borderRadius: 21,
+    height: 58,
+    borderWidth: 1,
+    borderRadius: 29,
     justifyContent: 'center',
     overflow: 'hidden',
-    marginTop: 8,
+    marginTop: 4,
+  },
+  tintOverlay: {
+    ...StyleSheet.absoluteFill,
   },
   trackLabels: {
     ...StyleSheet.absoluteFill,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 14,
+    paddingHorizontal: 11,
   },
   labelGroup: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 44 },
-  declineLabel: { fontSize: 13, lineHeight: 18, fontFamily: 'Inter_700Bold', fontWeight: '700' },
-  acceptLabel: { fontSize: 13, lineHeight: 18, fontFamily: 'Inter_700Bold', fontWeight: '700' },
+  declineLabel: { fontSize: 11, lineHeight: 14, fontFamily: 'Inter_700Bold', fontWeight: '700' },
+  acceptLabel: { fontSize: 11, lineHeight: 14, fontFamily: 'Inter_700Bold', fontWeight: '700' },
   handle: {
     position: 'absolute',
     left: '50%',
-    marginLeft: -27,
-    width: 54,
-    height: 54,
+    marginLeft: -24,
+    width: 48,
+    height: 48,
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 4,
+    elevation: 3,
     shadowColor: '#10243E',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.16,
     shadowRadius: 5,
   },
-  logo: { width: 29, height: 29, borderRadius: 8, marginTop: -5 },
-  brandDots: { position: 'absolute', bottom: 6, flexDirection: 'row', gap: 3 },
-  dot: { width: 3.5, height: 3.5, borderRadius: 2 },
+  logo: { width: 30, height: 30, borderRadius: 9 },
 });

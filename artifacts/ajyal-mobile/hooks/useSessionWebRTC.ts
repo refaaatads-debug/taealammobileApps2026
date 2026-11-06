@@ -169,7 +169,6 @@ export function useSessionWebRTC({
   const pendingDataMessagesRef = useRef<SessionDataMessage[]>([]);
   const startedRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const joinRetryIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectingRef = useRef(false);
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -572,10 +571,6 @@ export function useSessionWebRTC({
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
-    if (joinRetryIntervalRef.current) {
-      clearInterval(joinRetryIntervalRef.current);
-      joinRetryIntervalRef.current = null;
-    }
     if (channelRef.current) {
       if (transportProviderRef.current === 'agora') {
         sendDataMessage({ type: 'leave', userId });
@@ -928,19 +923,9 @@ export function useSessionWebRTC({
       });
       await createPeer();
       await sendSignal('join', { userId });
-      if (joinRetryIntervalRef.current) clearInterval(joinRetryIntervalRef.current);
-      let retryCount = 0;
-      joinRetryIntervalRef.current = setInterval(() => {
-        if (!startedRef.current || peerRef.current?.connectionState === 'connected' || retryCount >= 15) {
-          if (joinRetryIntervalRef.current) {
-            clearInterval(joinRetryIntervalRef.current);
-            joinRetryIntervalRef.current = null;
-          }
-          return;
-        }
-        retryCount += 1;
-        void sendSignal('join', { userId, retry: retryCount });
-      }, 3000);
+      // The desktop platform rebuilds its peer connection when it receives
+      // "join". Repeating this signal on a timer can reset negotiation before
+      // ICE connects; the desktop peer already retries its own join signal.
     } catch (reason) {
       startedRef.current = false;
       await stop().catch(() => undefined);

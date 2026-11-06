@@ -495,7 +495,7 @@ function DashboardToolsMosaic({
   const { t, direction, formatNumber } = useAppPreferences();
   const isRTL = direction === 'rtl';
   const featureActionId = role === 'student' ? 'smart-teacher' : 'students';
-  const wideActionId = role === 'student' ? 'assignments' : 'review';
+  const wideActionId = role === 'student' ? null : 'review';
   const visualOrder = role === 'student'
     ? ['smart-teacher', 'subscriptions', 'find-teacher', 'in-person', 'bookings', 'materials', 'assignments']
     : ['students', 'teacher-schedule', 'wallet', 'teacher-sessions', 'teacher-materials', 'review'];
@@ -611,6 +611,11 @@ function DashboardToolsMosaic({
                   <View style={[styles.studentToolCardCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
                     <Text numberOfLines={2} style={[styles.studentToolTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{title}</Text>
                     <Text numberOfLines={1} style={[styles.studentToolSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{subtitle}</Text>
+                    {role === 'student' && action.id === 'assignments' && nextAssignment ? (
+                      <Text numberOfLines={1} style={[styles.studentToolDetail, { color: colors.accentForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>
+                        {nextAssignment.title} · {nextAssignment.due}
+                      </Text>
+                    ) : null}
                     {role === 'student' && action.id === 'subscriptions' && studentBalance ? (
                       <Text numberOfLines={1} style={[styles.studentToolDetail, { color: iconColor, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>
                         {formatNumber(studentBalance.remainingMinutes)} {t('دقيقة', 'min')} · {formatNumber(studentBalance.sessionsRemaining)} {t('جلسات', 'sessions')}

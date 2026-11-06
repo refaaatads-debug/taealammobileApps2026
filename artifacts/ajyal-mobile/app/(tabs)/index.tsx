@@ -391,7 +391,7 @@ export default function HomeScreen() {
       return;
     }
     const routes: Record<string, string> = {
-      'find-teacher': '/find-teacher',
+      'find-teacher': '/booking',
       'in-person': '/in-person',
       subscriptions: '/subscriptions',
       'smart-teacher': '/smart-teacher',

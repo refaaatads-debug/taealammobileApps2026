@@ -6,7 +6,7 @@
 - [EAS runtime environments](eas-runtime-environments.md) — Replit Secrets are not proof that EAS Preview/Production has the mobile runtime key.
 - [Supabase Replit egress fallback](supabase-replit-egress-fallback.md) — API auth must use the Replit Supabase PostgREST proxy when the custom VPS domain is unreachable from Replit.
 - [Supabase bearer precedence](supabase-bearer-precedence.md) — legacy session cookies must not mask authenticated Supabase Bearer requests.
-- [OpenAPI integer generation](openapi-zod-compatibility.md) — the current Orval/Zod combination emits unsupported `zod.int()` for integer schemas.
+- [OpenAPI code generation compatibility](openapi-zod-compatibility.md) — check Zod output and generated contract drift whenever Orval or OpenAPI schemas change.
 - [Production PostgREST timeout](production-postgrest-timeout.md) — the public Supabase domain can return 57014/500 on REST introspection while Auth and table probes remain available.
 - [Teacher directory parity](teacher-directory-parity.md) — original teacher search joins approved profiles with subjects; empty availability means no schedule, not unrestricted availability.
 - [Booking lifecycle parity](booking-lifecycle-parity.md) — booking decisions are group-aware RPC flows with source-specific conflict, session, notification, and cancellation rules.

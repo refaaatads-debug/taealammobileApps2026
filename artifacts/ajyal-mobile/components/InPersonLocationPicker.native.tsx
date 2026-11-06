@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import Constants from "expo-constants";
 import * as Crypto from "expo-crypto";
+import { Icon } from "@/components/AjyalUI";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import {
   getPlacesErrorMessage,
@@ -43,6 +44,7 @@ export default function InPersonLocationPicker({ latitude, longitude, locationGr
   const [searching, setSearching] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const [mapOpen, setMapOpen] = useState(false);
   const platformKey = (Constants.expoConfig?.extra as { googleMapsApiKeys?: Record<string, string> } | undefined)?.googleMapsApiKeys?.[Platform.OS];
   const lat = Number(latitude), lng = Number(longitude);
   const hasCoordinate = Number.isFinite(lat) && Number.isFinite(lng) && Boolean(latitude.trim()) && Boolean(longitude.trim());
@@ -172,25 +174,68 @@ export default function InPersonLocationPicker({ latitude, longitude, locationGr
           </View>
         ) : null}
       </View>
-      <View style={[styles.frame, { borderColor: colors.border }]}>
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          style={styles.map}
-          initialRegion={{ ...coordinate, latitudeDelta: mapDelta, longitudeDelta: mapDelta }}
-          showsUserLocation={locationGranted}
-          onPress={(event) => onChange(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
-        >
-          {hasCoordinate ? (
-            <Marker
-              coordinate={{ latitude: lat, longitude: lng }}
-              draggable
-              onDragEnd={(event) => onChange(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
-              pinColor={colors.teal}
-            />
-          ) : null}
-        </MapView>
-      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t("فتح الخريطة لتحديد الموقع", "Open the map to choose a location")}
+        onPress={() => setMapOpen(true)}
+        style={({ pressed }) => [styles.mapLauncher, { borderColor: colors.border, backgroundColor: colors.card, opacity: pressed ? 0.78 : 1 }]}
+      >
+        <Icon name="map-pin" size={17} color={colors.teal} />
+        <Text style={[styles.mapLauncherText, { color: colors.foreground }]}>
+          {hasCoordinate
+            ? t("تعديل الموقع على الخريطة", "Adjust location on the map")
+            : t("فتح الخريطة لتحديد الموقع", "Open the map to choose a location")}
+        </Text>
+        <Icon name="chevron-left" size={17} color={colors.mutedForeground} />
+      </Pressable>
+      <Modal
+        visible={mapOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setMapOpen(false)}
+      >
+        <View style={[styles.mapModal, { backgroundColor: colors.card }]}>
+          <View style={styles.mapModalHeader}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("إغلاق الخريطة", "Close map")}
+              onPress={() => setMapOpen(false)}
+              style={[styles.mapModalClose, { borderColor: colors.border }]}
+            >
+              <Icon name="x" size={18} color={colors.foreground} />
+            </Pressable>
+            <Text style={[styles.mapModalTitle, { color: colors.foreground }]}>
+              {t("حدد الموقع على الخريطة", "Choose a location on the map")}
+            </Text>
+          </View>
+          <View style={[styles.frame, { borderColor: colors.border }]}>
+            <MapView
+              ref={mapRef}
+              provider={PROVIDER_GOOGLE}
+              style={styles.map}
+              initialRegion={{ ...coordinate, latitudeDelta: mapDelta, longitudeDelta: mapDelta }}
+              showsUserLocation={locationGranted}
+              onPress={(event) => onChange(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
+            >
+              {hasCoordinate ? (
+                <Marker
+                  coordinate={{ latitude: lat, longitude: lng }}
+                  draggable
+                  onDragEnd={(event) => onChange(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
+                  pinColor={colors.teal}
+                />
+              ) : null}
+            </MapView>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setMapOpen(false)}
+            style={({ pressed }) => [styles.mapConfirm, { backgroundColor: colors.teal, opacity: pressed ? 0.8 : 1 }]}
+          >
+            <Text style={styles.mapConfirmText}>{t("تم تحديد الموقع", "Done")}</Text>
+          </Pressable>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -204,6 +249,14 @@ const styles = StyleSheet.create({
   suggestionText: { fontSize: 12, lineHeight: 17, fontFamily: "Inter_500Medium" },
   empty: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular", paddingHorizontal: 6, paddingVertical: 4 },
   error: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_500Medium", paddingHorizontal: 6, paddingVertical: 4 },
-  frame: { borderWidth: 1, borderRadius: 14, overflow: "hidden", marginTop: 2 },
-  map: { height: 156, width: "100%" },
+  frame: { flex: 1, minHeight: 220, borderWidth: 1, borderRadius: 14, overflow: "hidden", marginTop: 2 },
+  map: { flex: 1, minHeight: 220, width: "100%" },
+  mapLauncher: { minHeight: 48, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 9 },
+  mapLauncherText: { flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", textAlign: "right" },
+  mapModal: { flex: 1, paddingHorizontal: 14, paddingTop: 36, paddingBottom: 20, gap: 12 },
+  mapModalHeader: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 10 },
+  mapModalClose: { width: 40, height: 40, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  mapModalTitle: { flex: 1, fontSize: 15, fontFamily: "Inter_700Bold", textAlign: "right" },
+  mapConfirm: { minHeight: 48, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  mapConfirmText: { color: "#fff", fontSize: 13, fontFamily: "Inter_700Bold" },
 });

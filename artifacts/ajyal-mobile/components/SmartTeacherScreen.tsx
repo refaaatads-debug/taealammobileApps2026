@@ -33,6 +33,7 @@ import { audioUploadDescriptor, createWebAudioUpload } from "@/lib/voiceAudioUpl
 import { leaveTutorAfterVoiceCleanup } from "@/lib/tutorBackNavigation";
 import { shouldUseAiSpeechFallback } from "@/lib/aiAnswerAudio";
 import { speakAiAnswer } from "@/lib/speakAiAnswer";
+import { buildHomeworkQuestionPrompt } from "@/lib/homeworkPrompt";
 
 type Tab = "text" | "voice";
 type Message = { role: "user" | "assistant"; content: string; audio?: string | null };
