@@ -1,0 +1,7 @@
+<resources>
+  <style name="Theme.App.IncomingCall" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <item name="android:windowFullscreen">true</item>
+    <item name="android:turnScreenOn">true</item>
+    <item name="android:colorAccent">@color/colorPrimary</item>
+  </style>
+</resources>

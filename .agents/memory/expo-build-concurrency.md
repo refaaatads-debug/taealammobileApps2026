@@ -20,3 +20,9 @@ Running API codegen with `clean: true` while Expo Metro is already serving can b
 **Why:** Orval cleans and recreates the generated client directory, while Metro may resolve imports during that short window.
 
 **How to apply:** Run codegen before restarting Expo, or restart the Expo workflow after codegen completes before judging its browser logs.
+
+The workspace-wide recursive build runs the Expo artifact build alongside other workspace builds, so an API-only change can time out while the API build itself succeeds.
+
+**Why:** The mobile production export takes several minutes and may still be generating platform bundles when the root build timeout expires.
+
+**How to apply:** For API-only changes, verify the workspace typecheck and the API package build; report the full workspace build as incomplete if the Expo export times out.

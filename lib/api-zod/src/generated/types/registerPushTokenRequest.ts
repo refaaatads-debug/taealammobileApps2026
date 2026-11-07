@@ -5,6 +5,7 @@
  * Ajyal Al-Maarifa platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { RegisterPushTokenRequestApnsVoipEnvironment } from './registerPushTokenRequestApnsVoipEnvironment';
 import type { RegisterPushTokenRequestPlatform } from './registerPushTokenRequestPlatform';
 
 export interface RegisterPushTokenRequest {
@@ -14,4 +15,13 @@ export interface RegisterPushTokenRequest {
      */
   token: string;
   platform: RegisterPushTokenRequestPlatform;
+  /**
+     * Optional iOS PushKit VoIP device token.
+     * @minLength 64
+     * @maxLength 64
+     * @pattern ^[0-9a-fA-F]{64}$
+     */
+  apnsVoipToken?: string;
+  /** APNs environment for the PushKit token; required with apnsVoipToken. */
+  apnsVoipEnvironment?: RegisterPushTokenRequestApnsVoipEnvironment;
 }

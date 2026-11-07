@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   Alert,
   FlatList,
-  Image,
   Linking,
   Modal,
   Platform,
@@ -12,8 +12,11 @@ import {
   Text,
   TextInput,
   View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { BlurHashImage } from "@/components/BlurHashImage";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import {
@@ -31,12 +34,20 @@ import { supabase } from "@/lib/supabase";
 import { EmptyState, Header, Icon, Screen } from "@/components/AjyalUI";
 import { customFetch } from "@workspace/api-client-react";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
+import { MaskedPhoneCallModal } from "@/components/MaskedPhoneCallModal";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useInternalCall } from "@/contexts/InternalCallContext";
 import { getReadChatMessageIds, markChatMessagesRead, subscribeToChatReadState } from "@/lib/localChatReadState";
+import {
+  bookingMessageRealtimeFilters,
+  loadParticipantChatHistory,
+  mergeChatMessageRows,
+} from "@/lib/chatMessageHistory";
+import { setActiveChatBookingIds } from "@/lib/activeChatNotifications";
 
 type Row = Record<string, any>;
 const POSTGREST_IN_BATCH_SIZE = 40;
+const MESSAGE_END_THRESHOLD = 96;
 
 type Participant = {
   id: string;
@@ -152,21 +163,23 @@ async function createInstantSession({
     title: "طلب جلسة فورية",
     body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
     type: "instant_session",
+    link: `/bookings?bookingId=${encodeURIComponent(booking.id as string)}`,
   });
-  await customFetch<{ delivered: boolean }>("/api/push/notifications", {
-    method: "POST",
-    body: JSON.stringify({
-      recipientId: teacherId,
-      title: "طلب جلسة فورية",
-      body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
-      type: "instant_session",
-      route: "/bookings",
-      bookingId: booking.id,
-    }),
-  }).catch(() => undefined);
+  if (notificationError) {
+    await customFetch<{ delivered: boolean }>("/api/push/notifications", {
+      method: "POST",
+      body: JSON.stringify({
+        recipientId: teacherId,
+        title: "طلب جلسة فورية",
+        body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
+        type: "instant_session",
+        route: "/bookings",
+        bookingId: booking.id,
+      }),
+    }).catch(() => undefined);
+  }
   // The booking is authoritative. A notification delivery failure must not
   // make the user retry and accidentally create a second instant booking.
-  void notificationError;
   return booking.id as string;
 }
 
@@ -306,6 +319,10 @@ function isActiveParticipant(item: Participant) {
   return !closedStatuses.has(item.bookingStatus) && !closedStatuses.has(item.sessionStatus);
 }
 
+function participantHistoryKey(participant: Pick<Participant, "participantId" | "bookingIds">) {
+  return `${participant.participantId}:${[...participant.bookingIds].sort().join(",")}`;
+}
+
 function toUploadAsset(asset: { uri: string; name?: string | null; mimeType?: string | null; size?: number; file?: File }): UploadAsset {
   return {
     uri: asset.uri,
@@ -341,47 +358,83 @@ async function uploadToChat(asset: UploadAsset, bookingId: string) {
 }
 
 function useResolvedChatFileUrl(url: string) {
-  const [resolvedUrl, setResolvedUrl] = useState<string | null>(() => (
-    chatStoragePath(url) ? null : url || null
+  const [retryCount, setRetryCount] = useState(0);
+  const [resolved, setResolved] = useState<{
+    status: "loading" | "ready" | "error";
+    url: string | null;
+  }>(() => (
+    chatStoragePath(url)
+      ? { status: "loading", url: null }
+      : { status: url ? "ready" : "error", url: url || null }
   ));
   useEffect(() => {
     let active = true;
-    setResolvedUrl(chatStoragePath(url) ? null : url || null);
+    if (!url || !chatStoragePath(url)) {
+      setResolved({ status: url ? "ready" : "error", url: url || null });
+      return () => {
+        active = false;
+      };
+    }
+    setResolved({ status: "loading", url: null });
     void resolveChatFileUrl(url).then((nextUrl) => {
-      if (active) setResolvedUrl(nextUrl);
+      if (active) setResolved({ status: "ready", url: nextUrl });
     }).catch(() => {
-      if (active) setResolvedUrl(null);
+      if (active) setResolved({ status: "error", url: null });
     });
     return () => {
       active = false;
     };
-  }, [url]);
-  return resolvedUrl;
+  }, [url, retryCount]);
+  return {
+    ...resolved,
+    retry: () => setRetryCount((count) => count + 1),
+  };
 }
 
-function VoiceMessage({ url, outgoing }: { url: string; outgoing: boolean }) {
+function VoiceMessage({
+  url,
+  fileState,
+  retry,
+  outgoing,
+}: {
+  url: string | null;
+  fileState: "loading" | "ready" | "error";
+  retry: () => void;
+  outgoing: boolean;
+}) {
   const colors = useColors();
-  const resolvedUrl = useResolvedChatFileUrl(url);
-  const player = useAudioPlayer(resolvedUrl, { updateInterval: 250 });
-  const status = useAudioPlayerStatus(player);
-  if (!resolvedUrl) {
+  const player = useAudioPlayer(fileState === "ready" ? url : null, { updateInterval: 250 });
+  const audioStatus = useAudioPlayerStatus(player);
+  if (fileState !== "ready" || !url) {
+    if (fileState === "loading") {
+      return (
+        <View style={styles.voiceMessage} accessibilityRole="progressbar">
+          <ActivityIndicator size="small" color={colors.teal} />
+          <Text style={[styles.fileSubtitle, { color: outgoing ? colors.tint : colors.mutedForeground }]}>
+            جارٍ تحميل الرسالة الصوتية…
+          </Text>
+        </View>
+      );
+    }
     return (
-      <Text style={[styles.fileSubtitle, { color: outgoing ? colors.tint : colors.mutedForeground }]}>
-        تعذر تحميل الرسالة الصوتية
-      </Text>
+      <Pressable onPress={retry} accessibilityRole="button" style={styles.voiceMessage}>
+        <Text style={[styles.fileSubtitle, { color: outgoing ? colors.tint : colors.destructive }]}>
+          تعذر تحميل الرسالة الصوتية — اضغط للمحاولة
+        </Text>
+      </Pressable>
     );
   }
-  const progress = status.duration > 0 ? Math.min(1, status.currentTime / status.duration) : 0;
-  const duration = status.duration > 0 ? status.duration : 0;
+  const progress = audioStatus.duration > 0 ? Math.min(1, audioStatus.currentTime / audioStatus.duration) : 0;
+  const duration = audioStatus.duration > 0 ? audioStatus.duration : 0;
   const bars = [0.4, 0.72, 0.52, 0.9, 0.62, 0.35, 0.78, 0.5, 0.95, 0.64, 0.42, 0.7, 0.54, 0.84, 0.48, 0.68];
   return (
     <View style={styles.voiceMessage}>
       <Pressable
-        onPress={() => (status.playing ? player.pause() : player.play())}
+        onPress={() => (audioStatus.playing ? player.pause() : player.play())}
         style={[styles.voicePlay, { backgroundColor: outgoing ? colors.tint : colors.tealSoft }]}
-        accessibilityLabel={status.playing ? "إيقاف الرسالة الصوتية" : "تشغيل الرسالة الصوتية"}
+        accessibilityLabel={audioStatus.playing ? "إيقاف الرسالة الصوتية" : "تشغيل الرسالة الصوتية"}
       >
-        <Icon name={status.playing ? "pause" : "play"} size={15} color={outgoing ? colors.primary : colors.teal} />
+        <Icon name={audioStatus.playing ? "pause" : "play"} size={15} color={outgoing ? colors.primary : colors.teal} />
       </Pressable>
       <View style={styles.voiceTrack}>
         <View style={styles.voiceBars}>
@@ -399,7 +452,7 @@ function VoiceMessage({ url, outgoing }: { url: string; outgoing: boolean }) {
           ))}
         </View>
         <Text style={[styles.voiceTime, { color: outgoing ? colors.tint : colors.mutedForeground }]}>
-          {Math.floor(status.currentTime / 60).toString().padStart(2, "0")}:{Math.floor(status.currentTime % 60).toString().padStart(2, "0")}
+          {Math.floor(audioStatus.currentTime / 60).toString().padStart(2, "0")}:{Math.floor(audioStatus.currentTime % 60).toString().padStart(2, "0")}
           {duration ? ` / ${Math.floor(duration / 60).toString().padStart(2, "0")}:${Math.floor(duration % 60).toString().padStart(2, "0")}` : ""}
         </Text>
       </View>
@@ -412,10 +465,29 @@ function MessageAttachment({ message, outgoing }: { message: Row; outgoing: bool
   const url = text(message, "file_url");
   const fileType = text(message, "file_type");
   const fileName = text(message, "file_name") || "المرفق";
-  const resolvedUrl = useResolvedChatFileUrl(url);
+  const resolved = useResolvedChatFileUrl(url);
   if (!url) return null;
-  if (fileType.startsWith("audio/")) return <VoiceMessage url={url} outgoing={outgoing} />;
-  if (!resolvedUrl) {
+  if (fileType.startsWith("audio/")) {
+    return (
+      <VoiceMessage
+        url={resolved.url}
+        fileState={resolved.status}
+        retry={resolved.retry}
+        outgoing={outgoing}
+      />
+    );
+  }
+  if (resolved.status === "loading") {
+    return (
+      <View style={[styles.fileAttachment, { backgroundColor: outgoing ? colors.primaryForeground : colors.navySoft }]}>
+        <ActivityIndicator size="small" color={colors.teal} />
+        <Text style={[styles.fileSubtitle, { color: outgoing ? colors.primary : colors.mutedForeground }]}>
+          جارٍ تحميل المرفق…
+        </Text>
+      </View>
+    );
+  }
+  if (resolved.status === "error" || !resolved.url) {
     return (
       <Pressable onPress={() => void openChatFile(url, fileName)} style={[styles.fileAttachment, { backgroundColor: outgoing ? colors.primaryForeground : colors.navySoft }]}>
         <Icon name="alert-circle" size={17} color={colors.destructive} />
@@ -426,7 +498,7 @@ function MessageAttachment({ message, outgoing }: { message: Row; outgoing: bool
   if (fileType.startsWith("image/")) {
     return (
       <Pressable onPress={() => void openChatFile(url, fileName)} style={styles.imageAttachment}>
-        <Image source={{ uri: resolvedUrl }} style={styles.attachmentImage} resizeMode="cover" />
+        <BlurHashImage uri={resolved.url} style={styles.attachmentImage} />
         <Text style={[styles.attachmentName, { color: outgoing ? colors.tint : colors.mutedForeground }]} numberOfLines={1}>{fileName}</Text>
       </Pressable>
     );
@@ -587,143 +659,15 @@ function Composer({
   );
 }
 
-function PhoneCallModal({
-  visible,
-  participant,
-  teacherId,
-  bookingId,
-  onClose,
-}: {
-  visible: boolean;
-  participant: Participant;
-  teacherId: string;
-  bookingId: string | null;
-  onClose: () => void;
-}) {
-  const colors = useColors();
-  const { t, direction } = useAppPreferences();
-  const [phone, setPhone] = useState("");
-  const [balance, setBalance] = useState(0);
-  const [pricePerMinute, setPricePerMinute] = useState(0.3);
-  const [minutes, setMinutes] = useState(5);
-  const [loading, setLoading] = useState(false);
-  const [calling, setCalling] = useState(false);
-  const [status, setStatus] = useState<"idle" | "initiated" | "failed">("idle");
-
-  useEffect(() => {
-    if (!visible || !supabase) return;
-    setLoading(true);
-    setCalling(false);
-    setStatus("idle");
-    setMinutes(5);
-    void Promise.all([
-      supabase.from("profiles").select("phone").eq("user_id", participant.participantId).maybeSingle(),
-      supabase.from("wallets").select("balance").eq("user_id", teacherId).maybeSingle(),
-      supabase.from("site_settings").select("value").eq("key", "call_price_per_minute").maybeSingle(),
-    ]).then(([profileResult, walletResult, priceResult]) => {
-      setPhone(typeof profileResult.data?.phone === "string" ? profileResult.data.phone : "");
-      setBalance(Number(walletResult.data?.balance || 0));
-      const configuredPrice = Number.parseFloat(String(priceResult.data?.value ?? ""));
-      if (Number.isFinite(configuredPrice) && configuredPrice >= 0) setPricePerMinute(configuredPrice);
-    }).finally(() => setLoading(false));
-  }, [participant.id, teacherId, visible]);
-
-  const requiredCost = Math.ceil(minutes) * pricePerMinute;
-  const insufficient = balance < requiredCost;
-
-  const handleCall = async () => {
-    if (!supabase || !phone.trim() || !bookingId || insufficient || calling) return;
-    setCalling(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("make-phone-call", {
-        body: {
-          studentPhone: phone.trim(),
-          estimatedMinutes: minutes,
-          bookingId,
-          studentId: participant.participantId,
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || t("تعذر بدء المكالمة الهاتفية.", "Could not start the phone call."));
-      setBalance(Number(data.newBalance ?? balance - requiredCost));
-      setStatus("initiated");
-      Alert.alert(t("تم بدء المكالمة", "Call started"), t("تم إرسال الاتصال إلى رقم الطالب.", "The call was sent to the student's phone."));
-    } catch (error) {
-      setStatus("failed");
-      Alert.alert(t("تعذر بدء المكالمة", "Could not start the call"), error instanceof Error ? error.message : t("تحقق من الرصيد ورقم الطالب.", "Check the balance and student phone number."));
-    } finally {
-      setCalling(false);
-    }
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={[styles.phoneModalBackdrop, { backgroundColor: `${colors.tint}E8` }]}>
-        <View style={[styles.phoneModalCard, { backgroundColor: colors.card }]}>
-          <View style={styles.phoneModalHeader}>
-            <View style={[styles.phoneModalIcon, { backgroundColor: colors.navySoft }]}><Icon name="phone-call" size={22} color={colors.primary} /></View>
-            <View style={styles.phoneModalCopy}>
-              <Text style={[styles.phoneModalTitle, { color: colors.foreground, writingDirection: direction }]}>{t("مكالمة هاتفية مدفوعة", "Paid phone call")}</Text>
-              <Text style={[styles.phoneModalSubtitle, { color: colors.mutedForeground, writingDirection: direction }]}>{participant.name}</Text>
-            </View>
-            <Pressable onPress={onClose} disabled={calling} style={styles.phoneModalClose}><Icon name="x" size={19} color={colors.mutedForeground} /></Pressable>
-          </View>
-
-          {loading ? (
-            <View style={styles.phoneModalLoading}><ActivityIndicator color={colors.teal} /><Text style={[styles.phoneModalBody, { color: colors.mutedForeground }]}>{t("جارٍ تحميل الرصيد ورقم الطالب…", "Loading balance and student phone…")}</Text></View>
-          ) : status === "initiated" ? (
-            <View style={styles.phoneModalResult}>
-              <Icon name="check-circle" size={34} color={colors.teal} />
-              <Text style={[styles.phoneModalTitle, { color: colors.foreground, writingDirection: direction }]}>{t("تم إرسال الاتصال", "Call request sent")}</Text>
-              <Text style={[styles.phoneModalBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("المكالمة الآن في حالة انتظار الاتصال بالطالب.", "The call is now waiting to connect to the student.")}</Text>
-              <Pressable onPress={onClose} style={[styles.phoneModalPrimary, { backgroundColor: colors.primary }]}><Text style={[styles.phoneModalPrimaryText, { color: colors.primaryForeground }]}>{t("إغلاق", "Close")}</Text></Pressable>
-            </View>
-          ) : (
-            <>
-              <View style={[styles.phoneBalanceRow, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}>
-                <Text style={[styles.phoneModalBody, { color: colors.foreground, writingDirection: direction }]}>{t("رصيدك", "Your balance")}</Text>
-                <Text style={[styles.phoneBalanceValue, { color: insufficient ? colors.destructive : colors.teal }]}>{balance.toFixed(2)} ريال</Text>
-              </View>
-              <View style={[styles.phoneInfoBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Icon name="shield" size={16} color={colors.teal} />
-                <Text style={[styles.phoneModalBody, { color: colors.mutedForeground, writingDirection: direction }]}>{phone ? t("رقم الطالب محفوظ وسيتم الاتصال به تلقائيًا.", "The student's phone is saved and will be called automatically.") : t("لا يوجد رقم هاتف محفوظ لهذا الطالب.", "No phone number is saved for this student.")}</Text>
-              </View>
-              <View style={styles.phoneFieldRow}>
-                <Text style={[styles.phoneLabel, { color: colors.foreground, writingDirection: direction }]}>{t("المدة المقدرة بالدقائق", "Estimated minutes")}</Text>
-                <TextInput
-                  value={String(minutes)}
-                  onChangeText={(value) => setMinutes(Math.min(60, Math.max(1, Number(value.replace(/[^0-9]/g, "")) || 1)))}
-                  keyboardType="number-pad"
-                  style={[styles.phoneMinutesInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]}
-                />
-              </View>
-              <View style={[styles.phoneCostRow, { borderColor: colors.border }]}>
-                <Text style={[styles.phoneModalBody, { color: colors.mutedForeground }]}>{t("التكلفة المحجوزة", "Reserved cost")}</Text>
-                <Text style={[styles.phoneBalanceValue, { color: insufficient ? colors.destructive : colors.foreground }]}>{requiredCost.toFixed(2)} ريال</Text>
-              </View>
-              {insufficient ? <Text style={[styles.phoneError, { color: colors.destructive, writingDirection: direction }]}>{t("الرصيد غير كافٍ لهذه المدة.", "Your balance is not enough for this duration.")}</Text> : null}
-              <View style={styles.phoneModalActions}>
-                <Pressable onPress={onClose} disabled={calling} style={[styles.phoneModalSecondary, { borderColor: colors.border }]}><Text style={[styles.phoneModalSecondaryText, { color: colors.foreground }]}>{t("إلغاء", "Cancel")}</Text></Pressable>
-                <Pressable onPress={() => void handleCall()} disabled={calling || !phone.trim() || insufficient} style={[styles.phoneModalPrimary, { backgroundColor: calling || !phone.trim() || insufficient ? colors.muted : colors.primary }]}>
-                  {calling ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Icon name="phone" size={16} color={colors.primaryForeground} />}
-                  <Text style={[styles.phoneModalPrimaryText, { color: colors.primaryForeground }]}>{t("تأكيد الاتصال", "Confirm call")}</Text>
-                </Pressable>
-              </View>
-            </>
-          )}
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 function ConversationView({
   participant,
   messages,
+  historyStatus,
   bookingId,
   userId,
   onBack,
   onReload,
+  onRetryHistory,
   onInstantSession,
   instantSessionBusy,
   canStartInstantSession,
@@ -733,10 +677,12 @@ function ConversationView({
 }: {
   participant: Participant;
   messages: Row[];
+  historyStatus: "loading" | "ready" | "error";
   bookingId: string | null;
   userId: string;
   onBack: () => void;
   onReload: () => Promise<void>;
+  onRetryHistory: () => void;
   onInstantSession: () => void;
   instantSessionBusy: boolean;
   canStartInstantSession: boolean;
@@ -748,20 +694,43 @@ function ConversationView({
   const { t, direction, locale } = useAppPreferences();
   const isRTL = direction === "rtl";
   const listRef = useRef<FlatList<Row>>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const initialScrollParticipantRef = useRef<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [phoneModalOpen, setPhoneModalOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [phoneModalOpen, setPhoneModalOpen] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const webRecorderRef = useRef<MediaRecorder | null>(null);
   const webStreamRef = useRef<MediaStream | null>(null);
   const webChunksRef = useRef<Blob[]>([]);
 
+  const handleMessageListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromEnd = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    shouldStickToBottomRef.current = distanceFromEnd <= MESSAGE_END_THRESHOLD;
+  }, []);
+
+  const handleMessageContentSizeChange = useCallback(() => {
+    if (shouldStickToBottomRef.current) {
+      listRef.current?.scrollToEnd({ animated: false });
+    }
+  }, []);
+
   useEffect(() => {
+    if (
+      historyStatus !== "ready"
+      || !messages.length
+      || initialScrollParticipantRef.current === participant.id
+    ) {
+      return undefined;
+    }
+    initialScrollParticipantRef.current = participant.id;
+    shouldStickToBottomRef.current = true;
     const timer = setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 40);
     return () => clearTimeout(timer);
-  }, [messages.length]);
+  }, [historyStatus, messages.length, participant.id]);
 
   useEffect(() => {
     if (!supabase || !participant.bookingIds.length) return;
@@ -775,6 +744,7 @@ function ConversationView({
 
   const insertMessage = async (payload: { content: string; kind?: "text" | "file" | "voice"; asset?: { url: string; name: string; type: string; path?: string } }) => {
     if (!supabase || !bookingId) return;
+    shouldStickToBottomRef.current = true;
     const result = await supabase.from("chat_messages").insert({
       booking_id: bookingId,
       sender_id: userId,
@@ -978,14 +948,10 @@ function ConversationView({
               {callBusy === "internal" ? <ActivityIndicator size="small" color={colors.teal} /> : <Icon name="phone" size={16} color={colors.teal} />}
               <Text style={[styles.callActionText, { color: colors.teal }]}>{callBusy === "internal" ? t("جارٍ الاتصال…", "Calling…") : t("اتصال داخلي", "Internal call")}</Text>
             </Pressable>
-            <Pressable
-              testID="conversation-phone-call"
-              disabled={Boolean(callBusy)}
-              onPress={() => setPhoneModalOpen(true)}
-              style={({ pressed }) => [styles.callAction, { backgroundColor: colors.navySoft, borderColor: colors.primary }, pressed && styles.pressed]}
-            >
-              {callBusy === "phone" ? <ActivityIndicator size="small" color={colors.primary} /> : <Icon name="phone-call" size={16} color={colors.primary} />}
-              <Text style={[styles.callActionText, { color: colors.primary }]}>{callBusy === "phone" ? t("جارٍ الطلب…", "Requesting…") : t("اتصال هاتفي", "Phone call")}</Text>
+            <Pressable testID="conversation-phone-call" disabled={Boolean(callBusy)} onPress={() => setPhoneModalOpen(true)}
+              style={[styles.callAction, { backgroundColor: colors.navySoft, borderColor: colors.primary }]}>
+              <Icon name="phone-call" size={16} color={colors.primary} />
+              <Text style={[styles.callActionText, { color: colors.primary }]}>{t("اتصال برقم مخفي", "Masked phone call")}</Text>
             </Pressable>
           </View>
         ) : null}
@@ -1020,19 +986,51 @@ function ConversationView({
               </View>
             );
           }}
-          ListEmptyComponent={
+          ListEmptyComponent={historyStatus === "loading" ? (
+            <View style={styles.emptyConversation} accessibilityRole="progressbar">
+              <ActivityIndicator size="small" color={colors.teal} />
+              <Text style={[styles.emptyConversationBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+                {t("جارٍ تحميل المحادثة السابقة…", "Loading conversation history…")}
+              </Text>
+            </View>
+          ) : historyStatus === "error" ? (
+            <View style={styles.emptyConversation} accessibilityRole="alert">
+              <View style={[styles.emptyConversationIcon, { backgroundColor: colors.goldSoft }]}><Icon name="alert-circle" size={24} color={colors.accent} /></View>
+              <Text style={[styles.emptyConversationTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+                {t("تعذر تحميل الرسائل السابقة", "Could not load previous messages")}
+              </Text>
+              <Text style={[styles.emptyConversationBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>
+                {t("لم تُحذف المحادثة. تحقق من الاتصال ثم أعد المحاولة.", "Your conversation is still saved. Check your connection and try again.")}
+              </Text>
+              <Pressable
+                testID="retry-thread-history"
+                accessibilityRole="button"
+                onPress={onRetryHistory}
+                style={({ pressed }) => [styles.historyRetryButton, { backgroundColor: colors.primary }, pressed && styles.pressed]}
+              >
+                <Icon name="refresh-cw" size={15} color={colors.primaryForeground} />
+                <Text style={[styles.historyRetryText, { color: colors.primaryForeground }]}>
+                  {t("إعادة المحاولة", "Retry")}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
             <View style={styles.emptyConversation}>
               <View style={[styles.emptyConversationIcon, { backgroundColor: colors.tealSoft }]}><Icon name="message-circle" size={24} color={colors.teal} /></View>
               <Text style={[styles.emptyConversationTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("ابدأ المحادثة مع", "Start a conversation with")} {participant.name}</Text>
               <Text style={[styles.emptyConversationBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("يمكنك إرسال نص أو صورة أو PDF أو رسالة صوتية.", "You can send text, images, PDFs, or voice messages.")}</Text>
             </View>
-          }
+          )}
           contentContainerStyle={[styles.messageList, messages.length === 0 && styles.messageListEmpty]}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+          onScroll={handleMessageListScroll}
+          scrollEventThrottle={16}
+          onContentSizeChange={handleMessageContentSizeChange}
         />
+        <MaskedPhoneCallModal visible={phoneModalOpen} studentId={participant.participantId} studentName={participant.name}
+          bookingId={bookingId} onClose={() => setPhoneModalOpen(false)} />
         <Composer
           draft={draft}
           onChange={setDraft}
@@ -1044,13 +1042,6 @@ function ConversationView({
           recording={recording}
           busy={busy}
           disabled={!bookingId}
-        />
-        <PhoneCallModal
-          visible={phoneModalOpen}
-          participant={participant}
-          teacherId={userId}
-          bookingId={bookingId}
-          onClose={() => setPhoneModalOpen(false)}
         />
       </KeyboardAvoidingView>
     </Screen>
@@ -1067,6 +1058,13 @@ export default function MessagesScreen() {
   const params = useLocalSearchParams<{ booking?: string; student?: string; participant?: string }>();
   const [bookings, setBookings] = useState<Row[]>([]);
   const [messages, setMessages] = useState<Row[]>([]);
+  const [threadHistory, setThreadHistory] = useState<{
+    key: string | null;
+    status: "idle" | "loading" | "ready" | "error";
+    messages: Row[];
+  }>({ key: null, status: "idle", messages: [] });
+  const threadHistoryRef = useRef(threadHistory);
+  threadHistoryRef.current = threadHistory;
   const [profiles, setProfiles] = useState<Row[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1077,6 +1075,49 @@ export default function MessagesScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [messageFilter, setMessageFilter] = useState<"all" | "unread" | "active">("all");
   const loadRequestRef = useRef(0);
+  const threadHistoryRequestRef = useRef(0);
+  const selectedHistoryParticipantRef = useRef<Pick<Participant, "participantId" | "bookingIds"> | null>(null);
+
+  const loadSelectedHistory = useCallback(async (
+    participant: Pick<Participant, "participantId" | "bookingIds">,
+  ) => {
+    const requestId = ++threadHistoryRequestRef.current;
+    const key = participantHistoryKey(participant);
+    setThreadHistory((current) => current.key === key
+      ? { ...current, status: "loading" }
+      : { key, status: "loading", messages: [] });
+
+    try {
+      const client = supabase;
+      if (!client) throw new Error("Chat history is unavailable.");
+      const history = await loadParticipantChatHistory(participant.bookingIds, async (bookingIdBatch) => {
+        const result = await client
+          .from("chat_messages")
+          .select("id,booking_id,sender_id,content,file_url,file_name,file_type,created_at")
+          .in("booking_id", bookingIdBatch)
+          .order("created_at", { ascending: true });
+        return { data: result.data as Row[] | null, error: result.error };
+      });
+      if (requestId !== threadHistoryRequestRef.current) return;
+      setThreadHistory((current) => ({
+        key,
+        status: "ready",
+        messages: mergeChatMessageRows(
+          history,
+          current.key === key ? current.messages : [],
+        ),
+      }));
+    } catch (historyError) {
+      if (requestId !== threadHistoryRequestRef.current) return;
+      console.warn(
+        "[messages] selected thread history failed:",
+        historyError instanceof Error ? historyError.message : historyError,
+      );
+      setThreadHistory((current) => current.key === key
+        ? { ...current, status: "error" }
+        : { key, status: "error", messages: [] });
+    }
+  }, []);
 
   const load = useCallback(async (options: { showLoading?: boolean } = {}) => {
     const requestId = ++loadRequestRef.current;
@@ -1134,7 +1175,7 @@ export default function MessagesScreen() {
         ),
         Promise.all(
           batches(participantIds).map((participantIdBatch) =>
-            client.from("profiles").select("*").in("user_id", participantIdBatch),
+            client.from("public_profiles").select("user_id,full_name,avatar_url").in("user_id", participantIdBatch),
           ),
         ),
       ]);
@@ -1201,21 +1242,50 @@ export default function MessagesScreen() {
     if (!client || !user || !bookings.length) return;
     const bookingIds = new Set(bookings.map((booking) => String(booking.id)));
     const bookingIdList = [...bookingIds];
-    const channel = client
-      .channel(`mobile-chat-${user.id}-${bookingIdList.join(",")}-${Date.now()}`)
-      .on("postgres_changes", {
+    const channel = client.channel(`mobile-chat-${user.id}-${Date.now()}`);
+    const handleMessageChange = (payload: { eventType: string; new: unknown }) => {
+      if (payload.eventType === "INSERT") {
+        const incoming = payload.new as Row;
+        const bookingId = String(incoming.booking_id ?? "");
+        if (!bookingId || !bookingIds.has(bookingId)) return;
+
+        setMessages((current) => mergeChatMessageRows(current, [incoming]));
+        const selectedParticipant = selectedHistoryParticipantRef.current;
+        if (selectedParticipant?.bookingIds.includes(bookingId)) {
+          const historyKey = participantHistoryKey(selectedParticipant);
+          setThreadHistory((current) => current.key === historyKey
+            ? {
+                ...current,
+                status: current.status === "loading" ? "loading" : "ready",
+                messages: mergeChatMessageRows(current.messages, [incoming]),
+              }
+            : current);
+        }
+        return;
+      }
+
+      void load({ showLoading: false });
+      const selectedParticipant = selectedHistoryParticipantRef.current;
+      if (selectedParticipant) void loadSelectedHistory(selectedParticipant);
+    };
+
+    for (const filter of bookingMessageRealtimeFilters(bookingIdList)) {
+      channel.on("postgres_changes", {
         event: "*",
         schema: "public",
         table: "chat_messages",
-        filter: `booking_id=in.(${bookingIdList.join(",")})`,
-      }, () => {
-        void load({ showLoading: false });
-      })
-      .subscribe();
+        filter,
+      }, handleMessageChange);
+    }
+    channel.subscribe((status) => {
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn(`[messages] Realtime unavailable: ${status}`);
+      }
+    });
     return () => {
       void client.removeChannel(channel);
     };
-  }, [user?.id, bookings.map((booking) => String(booking.id)).join(","), load]);
+  }, [user?.id, bookings.map((booking) => String(booking.id)).join(","), load, loadSelectedHistory]);
 
   useEffect(() => {
     const requestedParticipant = typeof params.participant === "string" ? params.participant : typeof params.student === "string" ? params.student : null;
@@ -1284,12 +1354,94 @@ export default function MessagesScreen() {
   }, [bookings, messages, profiles, readMessageIds, user]);
 
   const selected = participants.find((item) => item.id === selectedId) || null;
-  const selectedMessages = selected
-    ? messages
-      .filter((message) => selected.bookingIds.includes(String(message.booking_id)))
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-    : [];
+  const selectedHistoryKey = selected ? participantHistoryKey(selected) : null;
+  selectedHistoryParticipantRef.current = selected
+    ? { participantId: selected.participantId, bookingIds: selected.bookingIds }
+    : null;
+  const hasSelectedHistory = Boolean(selectedHistoryKey && threadHistory.key === selectedHistoryKey);
+  const selectedMessages = hasSelectedHistory ? threadHistory.messages : [];
+  const selectedHistoryStatus = hasSelectedHistory && threadHistory.status !== "idle"
+    ? threadHistory.status
+    : "loading";
+  useEffect(() => {
+    if (!selected) {
+      threadHistoryRequestRef.current += 1;
+      setThreadHistory({ key: null, status: "idle", messages: [] });
+      return undefined;
+    }
+    void loadSelectedHistory(selected);
+    return () => {
+      threadHistoryRequestRef.current += 1;
+    };
+  }, [selected?.id, selected?.bookingIds.join(","), loadSelectedHistory]);
   const selectedBookingId = selected?.bookingId || null;
+  const selectedBookingIdsKey = selected?.bookingIds.join(",") ?? "";
+  useFocusEffect(useCallback(() => {
+    setActiveChatBookingIds(selectedBookingIdsKey ? selectedBookingIdsKey.split(",") : []);
+    return () => setActiveChatBookingIds([]);
+  }, [selectedBookingIdsKey]));
+  useFocusEffect(useCallback(() => {
+    if (!selectedHistoryKey || !selectedBookingIdsKey || !supabase) return undefined;
+
+    const client = supabase;
+    const bookingIds = selectedBookingIdsKey.split(",").filter(Boolean);
+    let cancelled = false;
+    let requestInFlight = false;
+
+    const refreshRecentMessages = async () => {
+      if (cancelled || requestInFlight || AppState.currentState !== "active") return;
+      const snapshot = threadHistoryRef.current;
+      if (snapshot.key !== selectedHistoryKey || snapshot.status === "loading") return;
+      requestInFlight = true;
+      const latestCreatedAt = snapshot.messages.at(-1)?.created_at;
+
+      try {
+        const recentMessages = await loadParticipantChatHistory(bookingIds, async (bookingIdBatch) => {
+          let query = client
+            .from("chat_messages")
+            .select("id,booking_id,sender_id,content,file_url,file_name,file_type,created_at")
+            .in("booking_id", bookingIdBatch)
+            .order("created_at", { ascending: true });
+          if (typeof latestCreatedAt === "string" && latestCreatedAt) {
+            query = query.gte("created_at", latestCreatedAt);
+          }
+          const result = await query;
+          return { data: result.data as Row[] | null, error: result.error };
+        });
+        if (cancelled || recentMessages.length === 0) return;
+
+        setMessages((current) => mergeChatMessageRows(current, recentMessages));
+        setThreadHistory((current) => current.key === selectedHistoryKey
+          ? {
+              ...current,
+              status: "ready",
+              messages: mergeChatMessageRows(current.messages, recentMessages),
+            }
+          : current);
+      } catch (refreshError) {
+        if (!cancelled) {
+          console.warn(
+            "[messages] recent message refresh failed:",
+            refreshError instanceof Error ? refreshError.message : refreshError,
+          );
+        }
+      } finally {
+        requestInFlight = false;
+      }
+    };
+
+    const timer = setInterval(() => void refreshRecentMessages(), 5_000);
+    const appStateListener = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refreshRecentMessages();
+    });
+    void refreshRecentMessages();
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      appStateListener.remove();
+    };
+  }, [selectedHistoryKey, selectedBookingIdsKey]));
   const visibleParticipants = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
     return participants.filter((item) => {
@@ -1345,10 +1497,17 @@ export default function MessagesScreen() {
           key={selected.id}
         participant={selected}
         messages={selectedMessages}
+        historyStatus={selectedHistoryStatus}
         bookingId={selectedBookingId}
         userId={user.id}
         onBack={() => setSelectedId(null)}
-        onReload={() => load({ showLoading: false })}
+        onReload={async () => {
+          await Promise.all([
+            load({ showLoading: false }),
+            loadSelectedHistory(selected),
+          ]);
+        }}
+        onRetryHistory={() => void loadSelectedHistory(selected)}
         onInstantSession={() => void startSelectedInstantSession()}
         instantSessionBusy={instantSessionBusy}
         canStartInstantSession={role === "student"}
@@ -1557,6 +1716,8 @@ const styles = StyleSheet.create({
   emptyConversationIcon: { width: 56, height: 56, borderRadius: 19, alignItems: "center", justifyContent: "center" },
   emptyConversationTitle: { textAlign: "center", writingDirection: "rtl", fontSize: 14, fontFamily: "Inter_700Bold", marginTop: 12 },
   emptyConversationBody: { textAlign: "center", writingDirection: "rtl", fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 6 },
+  historyRetryButton: { minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 18, borderRadius: 13, marginTop: 14 },
+  historyRetryText: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
   composerWrap: { paddingTop: 8, paddingBottom: 4 },
   composer: { minHeight: 57, borderWidth: 1, borderRadius: 18, padding: 7, flexDirection: "row", alignItems: "flex-end", gap: 4, width: "100%" },
   composerInput: { flex: 1, minHeight: 39, maxHeight: 90, paddingHorizontal: 8, paddingVertical: 8, fontSize: 12, fontFamily: "Inter_400Regular", writingDirection: "rtl" },

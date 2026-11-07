@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "476828261346",
+    "project_id": "ajyal-al-maerifa-4355a",
+    "storage_bucket": "ajyal-al-maerifa-4355a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:476828261346:android:6d7e6daf25bdfae021f7bb",
+        "android_client_info": {
+          "package_name": "com.ajyalalmaerifa.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBGmu-H2ENOwvRJM4VkGkOA68Oh_4PNGW8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

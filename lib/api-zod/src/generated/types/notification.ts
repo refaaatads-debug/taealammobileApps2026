@@ -19,4 +19,6 @@ export interface Notification {
   route?: string;
   /** Related booking identifier when available */
   bookingId?: string;
+  /** Optional HTTPS image URL attached to the notification */
+  imageUrl?: string;
 }
