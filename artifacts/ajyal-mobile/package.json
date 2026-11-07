@@ -21,7 +21,7 @@
     "test:availability": "node --experimental-strip-types --test lib/__tests__/teacherAvailability.test.mjs",
     "test:plugins": "node --test plugins/__tests__/*.test.cjs",
     "test:profile": "node --experimental-strip-types --test lib/__tests__/profilePersistence.test.mjs lib/__tests__/studentUnreadMessages.test.mjs lib/__tests__/profileScrollSafety.test.mjs",
-    "test:in-person": "node --experimental-strip-types --test lib/__tests__/inPersonRoutePresentation.test.mjs lib/__tests__/inPersonScheduling.test.mjs lib/__tests__/inPersonAddressSelection.test.mjs lib/__tests__/inPersonBookingSnapshot.test.mjs lib/__tests__/inPersonBookingDetails.test.mjs",
+    "test:in-person": "node --experimental-strip-types --test lib/__tests__/inPersonRoutePresentation.test.mjs lib/__tests__/inPersonTeacherSearch.test.mjs lib/__tests__/inPersonScheduling.test.mjs lib/__tests__/inPersonAddressSelection.test.mjs lib/__tests__/inPersonBookingSnapshot.test.mjs lib/__tests__/inPersonBookingDetails.test.mjs",
     "test:voice": "node --experimental-strip-types --test lib/__tests__/voiceAudioUpload.test.mjs lib/__tests__/recorderUnmount.test.mjs lib/__tests__/tutorBackNavigation.test.mjs lib/__tests__/aiAnswerAudio.test.mjs",
     "test:calls": "node --experimental-strip-types --test lib/__tests__/internalCallDirection.test.mjs",
     "test:auth-storage": "node --experimental-strip-types --test lib/__tests__/chunkedSecureStorage.test.mjs",

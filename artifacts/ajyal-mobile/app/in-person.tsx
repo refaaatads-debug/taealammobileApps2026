@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabase";
 import { firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "@/lib/inPersonScheduling";
 import { getInPersonBookingSnapshot } from "@/lib/inPersonBookingSnapshot";
 import { selectSavedAddress } from "@/lib/inPersonAddressSelection";
+import { isCurrentInPersonTeacherSearch } from "@/lib/inPersonTeacherSearch";
 import { TEACHING_STAGES } from "@/constants/education";
 import { OptionDropdown } from "@/components/OptionDropdown";
 
@@ -78,6 +79,7 @@ export default function InPersonScreen() {
   const [attendanceCodes, setAttendanceCodes] = useState<Record<string, string>>({});
   const addressIdRef = useRef(addressId);
   const searchRequestIdRef = useRef(0);
+  const searchInFlightRef = useRef(false);
   addressIdRef.current = addressId;
 
   const isTeacher = role === "teacher";
@@ -92,6 +94,19 @@ export default function InPersonScreen() {
   }), [locale]);
   const timeOptions = useMemo(() => getInPersonAppointmentTimes(scheduleDate), [scheduleDate]);
 
+  const invalidateTeacherSearch = () => {
+    searchRequestIdRef.current += 1;
+    if (searchInFlightRef.current) {
+      searchInFlightRef.current = false;
+      setSaving(false);
+    }
+    setError("");
+    setRequestSent(false);
+    setTeachers([]);
+    setSelectedTeachers([]);
+    setSearchPerformed(false);
+  };
+
   useEffect(() => {
     if (!teachingStage && profile?.teachingStage) setTeachingStage(profile.teachingStage);
   }, [profile?.teachingStage, teachingStage]);
@@ -102,6 +117,7 @@ export default function InPersonScreen() {
   }, [requestSent]);
   const load = useCallback(async () => {
     searchRequestIdRef.current += 1;
+    searchInFlightRef.current = false;
     setSaving(false);
     if (!supabase || !user?.id || (role !== "student" && role !== "teacher")) {
       setLoading(false);
@@ -217,20 +233,29 @@ export default function InPersonScreen() {
       return;
     }
     const searchRequestId = ++searchRequestIdRef.current;
+    searchInFlightRef.current = true;
     setSaving(true); setError(""); setRequestSent(false); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
-    const result = await supabase.rpc("search_in_person_teachers", {
-      p_city_id: cityId, p_subject_id: subjectId, p_address_id: addressId, p_scheduled_at: date.toISOString(), p_teaching_stage: teachingStage,
-    });
-    if (searchRequestId !== searchRequestIdRef.current) return;
-    setSaving(false);
-    if (result.error) {
-      setError(errorText(result.error, t("تعذر البحث عن المعلمين.", "Teacher search failed.")));
-      return;
+    try {
+      const result = await supabase.rpc("search_in_person_teachers", {
+        p_city_id: cityId, p_subject_id: subjectId, p_address_id: addressId, p_scheduled_at: date.toISOString(), p_teaching_stage: teachingStage,
+      });
+      if (!isCurrentInPersonTeacherSearch(searchRequestId, searchRequestIdRef.current)) return;
+      searchInFlightRef.current = false;
+      setSaving(false);
+      if (result.error) {
+        setError(errorText(result.error, t("تعذر البحث عن المعلمين.", "Teacher search failed.")));
+        return;
+      }
+      // The platform search applies the selected subject and stage to every eligible teacher;
+      // do not filter its results again through the smaller general-directory response.
+      setTeachers(records(result.data) as Teacher[]);
+      setSearchPerformed(true);
+    } catch (cause) {
+      if (!isCurrentInPersonTeacherSearch(searchRequestId, searchRequestIdRef.current)) return;
+      searchInFlightRef.current = false;
+      setSaving(false);
+      setError(errorText(cause, t("تعذر البحث عن المعلمين.", "Teacher search failed.")));
     }
-    // The platform search applies the selected subject and stage to every eligible teacher;
-    // do not filter its results again through the smaller general-directory response.
-    setTeachers(records(result.data) as Teacher[]);
-    setSearchPerformed(true);
   };
 
   const createRequest = async () => {
@@ -307,13 +332,10 @@ export default function InPersonScreen() {
                   accessibilityState={{ selected, disabled: !city.in_person_enabled }}
                   disabled={!city.in_person_enabled}
                   onPress={() => {
+                    invalidateTeacherSearch();
                     setCityId(city.id);
-                     setRequestSent(false);
-                    searchRequestIdRef.current += 1;
-                    setSaving(false);
                     const cityAddress = selectSavedAddress(addresses.filter((address) => address.city_id === city.id), "");
                     setAddressId(cityAddress?.id ?? "");
-                    setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
                   }}
                   style={({ pressed }) => [styles.cityOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: !city.in_person_enabled ? 0.55 : pressed ? 0.78 : 1 }]}
                 >
@@ -347,10 +369,8 @@ export default function InPersonScreen() {
                 onChange={(id) => {
                   const address = addresses.find((item) => item.id === id);
                   if (!address) return;
-                  searchRequestIdRef.current += 1;
-                  setSaving(false);
-                  setAddressId(address.id); setCityId(address.city_id); setRequestSent(false);
-                  setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
+                  invalidateTeacherSearch();
+                  setAddressId(address.id); setCityId(address.city_id);
                 }}
                 testID="in-person-address-dropdown"
               />
@@ -378,7 +398,7 @@ export default function InPersonScreen() {
               value={teachingStage}
               placeholder={t("اختر المرحلة الدراسية", "Choose an education stage")}
               options={[...TEACHING_STAGES]}
-              onChange={(stage) => { setTeachingStage(stage); setSubjectId(""); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false); setRequestSent(false); }}
+              onChange={(stage) => { invalidateTeacherSearch(); setTeachingStage(stage); setSubjectId(""); }}
               testID="in-person-stage-dropdown"
             />
             <OptionDropdown
@@ -388,11 +408,8 @@ export default function InPersonScreen() {
               options={subjects.map((subject) => subject.name)}
               onChange={(name) => {
                 const subject = subjects.find((item) => normalizeSubjectName(item.name) === normalizeSubjectName(name));
+                invalidateTeacherSearch();
                 setSubjectId(subject?.id ?? "");
-                setTeachers([]);
-                setSelectedTeachers([]);
-                setSearchPerformed(false);
-                setRequestSent(false);
               }}
               testID="in-person-subject-dropdown"
               loading={loading}
@@ -407,8 +424,8 @@ export default function InPersonScreen() {
               const selected = scheduleDate === option.key;
               return <Pressable key={option.key} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => {
                 const time = timeOptions.includes(scheduleTime) ? scheduleTime : timeOptions[0] ?? "08:00";
+                invalidateTeacherSearch();
                 setScheduledAt(`${option.key}T${time}`);
-                 setRequestSent(false);
               }} style={[styles.dateOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card }]}>
                 <Text style={[styles.dateDay, { color: selected ? colors.teal : colors.mutedForeground }]}>{option.day}</Text>
                 <Text style={[styles.dateValue, { color: selected ? colors.teal : colors.foreground }]}>{option.label}</Text>
@@ -417,7 +434,7 @@ export default function InPersonScreen() {
             <Text style={[styles.scheduleLabel, { color: colors.mutedForeground }]}>{t("اختر الوقت", "Choose a time")}</Text>
             <View style={styles.subjectGrid}>{timeOptions.map((time) => {
               const selected = scheduleTime === time;
-              return <Pressable key={time} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { setScheduledAt(`${scheduleDate}T${time}`); setRequestSent(false); }} style={[styles.timeOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card }]}>
+              return <Pressable key={time} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => { invalidateTeacherSearch(); setScheduledAt(`${scheduleDate}T${time}`); }} style={[styles.timeOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card }]}>
                 <Icon name="clock" size={13} color={selected ? colors.teal : colors.mutedForeground} />
                 <Text style={{ color: selected ? colors.teal : colors.foreground, fontSize: 11, fontFamily: "Inter_600SemiBold" }}>{time}</Text>
               </Pressable>;
