@@ -9,6 +9,7 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "test:auth-redirects": "node --import tsx --test src/lib/__tests__/safeReturnTo.test.mjs",
     "test:zod-contracts": "node --import tsx --test src/lib/__tests__/zodContracts.test.mjs",
+    "test:student-subscription-balance": "node --import tsx --test src/lib/__tests__/studentSubscriptionBalance.test.mjs",
     "test:push-delivery": "node --import tsx --test src/lib/__tests__/notificationImage.test.mjs src/lib/__tests__/platformNotifications.test.mjs src/lib/__tests__/pushDelivery.test.mjs src/lib/__tests__/pushIdentity.test.mjs src/lib/__tests__/pushOutbox.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

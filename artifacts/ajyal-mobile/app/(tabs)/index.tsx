@@ -128,12 +128,12 @@ export default function HomeScreen() {
   });
   const studentDashboardQuery = useGetStudentDashboard({
     query: {
-      queryKey: ['student-dashboard'],
+      queryKey: ['student-dashboard', user?.id],
       enabled: canLoadRoleData && !isTeacher,
       staleTime: 60_000,
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
     },
   });
   const assignmentsQuery = useListMyAssignments({
@@ -181,7 +181,10 @@ export default function HomeScreen() {
     if (canLoadRoleData && !isTeacher && profile?.id && supabase) {
       void unreadChatQuery.refetch();
     }
-  }, [canLoadRoleData, isTeacher, profile?.id, unreadChatQuery.refetch]));
+    if (canLoadRoleData && !isTeacher) {
+      void studentDashboardQuery.refetch();
+    }
+  }, [canLoadRoleData, isTeacher, profile?.id, studentDashboardQuery.refetch, unreadChatQuery.refetch]));
   useFocusEffect(useCallback(() => {
     const client = supabase;
     if (!client || !canLoadRoleData || !isTeacher || !profile?.id) return undefined;
