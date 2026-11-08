@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ActivityIndicator, Alert, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Crypto from "expo-crypto";
 import * as Location from "expo-location";
 import { router, useFocusEffect } from "expo-router";
 import { Header, Icon, Screen } from "@/components/AjyalUI";
+import InPersonTeacherResultsSheet, { type InPersonTeacherResult } from "@/components/InPersonTeacherResultsSheet";
 import LocationPicker from "@/components/InPersonLocationPicker";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { useAjyal } from "@/hooks/useAjyal";
@@ -21,7 +22,7 @@ import { OptionDropdown } from "@/components/OptionDropdown";
 type Row = Record<string, any>;
 type City = { id: string; name_ar: string; name_en: string | null; in_person_enabled: boolean };
 type Address = { id: string; city_id: string; street_address: string; district: string | null; additional_details: string | null; latitude: number; longitude: number; is_primary: boolean; created_at?: string | null };
-type Teacher = { teacher_id: string; full_name: string; avg_rating: number; distance_km: number; service_radius_km: number };
+type Teacher = InPersonTeacherResult;
 
 function errorText(error: unknown, fallback: string) {
   if (error && typeof error === "object") {
@@ -71,6 +72,7 @@ export default function InPersonScreen() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [searchPerformed, setSearchPerformed] = useState(false);
   const [selectedTeachers, setSelectedTeachers] = useState<string[]>([]);
+  const [teacherResultsVisible, setTeacherResultsVisible] = useState(false);
   const [locationGranted, setLocationGranted] = useState(false);
   const [teacherStreet, setTeacherStreet] = useState("");
   const [teacherLatitude, setTeacherLatitude] = useState("");
@@ -93,6 +95,14 @@ export default function InPersonScreen() {
     return { key: formatLocalDateTimeInput(date).slice(0, 10), day: date.toLocaleDateString(locale, { weekday: "short" }), label: date.toLocaleDateString(locale, { day: "numeric", month: "short" }) };
   }), [locale]);
   const timeOptions = useMemo(() => getInPersonAppointmentTimes(scheduleDate), [scheduleDate]);
+  const selectedSubject = subjects.find((subject) => subject.id === subjectId);
+  const selectedScheduleLabel = new Date(`${scheduleDate}T${scheduleTime}`).toLocaleString(locale, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 
   const invalidateTeacherSearch = () => {
     searchRequestIdRef.current += 1;
@@ -105,6 +115,7 @@ export default function InPersonScreen() {
     setTeachers([]);
     setSelectedTeachers([]);
     setSearchPerformed(false);
+    setTeacherResultsVisible(false);
   };
 
   useEffect(() => {
@@ -134,6 +145,7 @@ export default function InPersonScreen() {
     setTeachers([]);
     setSelectedTeachers([]);
     setSearchPerformed(false);
+    setTeacherResultsVisible(false);
     try {
       const [cityResult, addressResult, subjectResult] = await Promise.all([
         supabase.from("cities").select("id,name_ar,name_en,in_person_enabled").eq("country_iso2", "SA").eq("is_active", true).order("name_ar"),
@@ -234,6 +246,7 @@ export default function InPersonScreen() {
     }
     const searchRequestId = ++searchRequestIdRef.current;
     searchInFlightRef.current = true;
+    setTeacherResultsVisible(true);
     setSaving(true); setError(""); setRequestSent(false); setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
     try {
       const result = await supabase.rpc("search_in_person_teachers", {
@@ -243,6 +256,7 @@ export default function InPersonScreen() {
       searchInFlightRef.current = false;
       setSaving(false);
       if (result.error) {
+        setTeacherResultsVisible(false);
         setError(errorText(result.error, t("تعذر البحث عن المعلمين.", "Teacher search failed.")));
         return;
       }
@@ -254,6 +268,7 @@ export default function InPersonScreen() {
       if (!isCurrentInPersonTeacherSearch(searchRequestId, searchRequestIdRef.current)) return;
       searchInFlightRef.current = false;
       setSaving(false);
+      setTeacherResultsVisible(false);
       setError(errorText(cause, t("تعذر البحث عن المعلمين.", "Teacher search failed.")));
     }
   };
@@ -271,10 +286,12 @@ export default function InPersonScreen() {
     });
     setSaving(false);
     if (result.error) {
+      setTeacherResultsVisible(false);
       setError(errorText(result.error, t("تعذر إنشاء طلب الحضوري.", "Could not create the in-person request.")));
       return;
     }
     await queryClient.invalidateQueries({ queryKey: ["in-person-request-groups"] });
+    setTeacherResultsVisible(false);
     setRequestSent(true);
     setTeachers([]); setSelectedTeachers([]); setSearchPerformed(false);
   };
@@ -440,24 +457,20 @@ export default function InPersonScreen() {
               </Pressable>;
             })}</View>
             <Text style={mutedStyle}>{t("بالتوقيت المحلي. اختر موعداً بعد ساعتين على الأقل من الآن.", "Local time. Choose a time at least two hours from now.")}</Text>
-            <Pressable testID="in-person-search-teachers" disabled={saving || loading || !selectedAddress || !selectedCity?.in_person_enabled || !teachingStage || !subjects.some((subject) => subject.id === subjectId)} onPress={() => void searchTeachers()} style={({ pressed }) => [styles.primary, actionStyle, (saving || loading || !selectedAddress || !selectedCity?.in_person_enabled || !teachingStage || !subjects.some((subject) => subject.id === subjectId)) && styles.disabled, pressed && !saving && !loading && styles.pressed]}>
-              {saving ? <ActivityIndicator color="#fff" /> : <><Icon name="search" size={16} color="#fff" /><Text style={styles.primaryText}>{t("ابحث عن المعلمين", "Find available teachers")}</Text></>}
+            <Pressable testID="in-person-search-teachers" disabled={saving || loading || !selectedAddress || !selectedCity?.in_person_enabled || !teachingStage || !subjects.some((subject) => subject.id === subjectId)} onPress={() => searchPerformed ? setTeacherResultsVisible(true) : void searchTeachers()} style={({ pressed }) => [styles.primary, actionStyle, (saving || loading || !selectedAddress || !selectedCity?.in_person_enabled || !teachingStage || !subjects.some((subject) => subject.id === subjectId)) && styles.disabled, pressed && !saving && !loading && styles.pressed]}>
+              {saving && searchInFlightRef.current ? <ActivityIndicator color="#fff" /> : <><Icon name={searchPerformed ? "users" : "search"} size={16} color="#fff" /><Text style={styles.primaryText}>{searchPerformed ? t("عرض المعلمين المتاحين", "View available teachers") : t("ابحث عن المعلمين", "Find available teachers")}</Text></>}
             </Pressable>
-            {searchPerformed && !teachers.length && selectedCity?.in_person_enabled && !saving ? <Text style={mutedStyle}>{t("لا توجد نتائج مطابقة لهذا الموعد والعنوان والمادة.", "No teachers match this time, address, and subject.")}</Text> : null}
-            {teachers.map((teacher) => {
-              const selected = selectedTeachers.includes(teacher.teacher_id);
-              return <Pressable key={teacher.teacher_id} accessibilityRole="button" accessibilityState={{ selected }} onPress={() => setSelectedTeachers((current) => selected ? current.filter((id) => id !== teacher.teacher_id) : [...current, teacher.teacher_id])} style={({ pressed }) => [styles.teacherOption, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card, opacity: pressed ? 0.8 : 1 }]}>
-                <View style={[styles.teacherAvatar, { backgroundColor: colors.tealSoft }]}><Icon name="user" size={17} color={colors.teal} /></View>
-                <View style={styles.stepCopy}>
-                  <Text style={[styles.teacherName, textStyle]}>{teacher.full_name}</Text>
-                  <Text style={mutedStyle}>{teacher.distance_km} {t("كم", "km")} · {t("نطاق", "radius")} {teacher.service_radius_km} {t("كم", "km")}</Text>
-                </View>
-                <Text style={[styles.teacherRating, { color: colors.foreground }]}>★ {teacher.avg_rating}</Text>
-                {selected ? <Icon name="check-circle" size={18} color={colors.teal} /> : null}
-              </Pressable>;
-            })}
-            {teachers.length ? <Text style={[styles.selectionHint, { color: colors.mutedForeground }]}>{t("اضغط على بطاقة المعلم لتحديده قبل الإرسال", "Tap a teacher card to select them before sending")}</Text> : null}
-            {teachers.length ? <Pressable accessibilityRole="button" disabled={saving || !selectedTeachers.length} onPress={() => void createRequest()} style={[styles.primary, actionStyle, (!selectedTeachers.length || saving) && styles.disabled]}>{saving ? <ActivityIndicator color="#fff" /> : <Icon name="send" size={15} color="#fff" />}<Text style={styles.primaryText}>{saving ? t("جارٍ إرسال الطلب...", "Sending request...") : selectedTeachers.length ? `${t("إرسال الطلب إلى", "Send request to")} ${selectedTeachers.length} ${t("معلم", "teachers")}` : t("حدد معلماً أولاً", "Select a teacher first")}</Text></Pressable> : null}
+            {searchPerformed ? (
+              <Pressable accessibilityRole="button" onPress={() => setTeacherResultsVisible(true)} style={[styles.resultsSummary, { borderColor: colors.border, backgroundColor: colors.tealSoft }]}>
+                <Icon name="users" size={17} color={colors.teal} />
+                <Text style={[styles.resultsSummaryText, textStyle]}>
+                  {teachers.length
+                    ? `${teachers.length} ${t("معلمين متاحين", "teachers available")}${selectedTeachers.length ? ` · ${selectedTeachers.length} ${t("محدد", "selected")}` : ""}`
+                    : t("لا توجد نتائج لهذا الموعد", "No teachers match this time")}
+                </Text>
+                <Icon name={direction === "rtl" ? "chevron-left" : "chevron-right"} size={16} color={colors.teal} />
+              </Pressable>
+            ) : null}
           </View>
         </>
       ) : role === "teacher" ? (
@@ -511,6 +524,20 @@ export default function InPersonScreen() {
           </View>
         </View>
       </Modal>
+      <InPersonTeacherResultsSheet
+        visible={teacherResultsVisible}
+        teachers={teachers}
+        selectedTeacherIds={selectedTeachers}
+        subjectLabel={selectedSubject?.name ?? ""}
+        cityLabel={selectedCity ? cityLabel(selectedCity) : ""}
+        scheduledAtLabel={selectedScheduleLabel}
+        searching={saving && searchInFlightRef.current}
+        sending={saving && !searchInFlightRef.current}
+        onClose={() => setTeacherResultsVisible(false)}
+        onToggleTeacher={(teacherId) => setSelectedTeachers((current) => current.includes(teacherId) ? current.filter((id) => id !== teacherId) : [...current, teacherId])}
+        onSubmit={() => void createRequest()}
+        onSearchAgain={() => void searchTeachers()}
+      />
     </Screen>
   );
 }
@@ -565,13 +592,10 @@ const styles = StyleSheet.create({
   dateDay: { fontSize: 9, fontFamily: "Inter_500Medium" },
   dateValue: { fontSize: 11, fontFamily: "Inter_700Bold" },
   timeOption: { minHeight: 42, flexGrow: 1, flexBasis: "21%", borderWidth: 1, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
-  selectionHint: { fontSize: 10, lineHeight: 14, fontFamily: "Inter_500Medium", textAlign: "right", writingDirection: "rtl" },
+  resultsSummary: { minHeight: 44, borderWidth: 1, borderRadius: 13, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", gap: 8 },
+  resultsSummaryText: { flex: 1, fontSize: 10, fontFamily: "Inter_600SemiBold", textAlign: "right" },
   successText: { flex: 1, fontSize: 11, lineHeight: 16, fontFamily: "Inter_600SemiBold", textAlign: "right", writingDirection: "rtl" },
   successOverlay: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(10, 25, 45, 0.42)", padding: 24 },
   successModal: { width: "100%", maxWidth: 340, alignItems: "center", gap: 10, borderWidth: 1, borderRadius: 22, padding: 24 },
   successIcon: { width: 56, height: 56, borderRadius: 18, alignItems: "center", justifyContent: "center" },
-  teacherOption: { minHeight: 64, borderWidth: 1, borderRadius: 16, padding: 11, flexDirection: "row", alignItems: "center", gap: 10 },
-  teacherAvatar: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  teacherName: { fontSize: 12, fontFamily: "Inter_700Bold" },
-  teacherRating: { fontSize: 10, fontFamily: "Inter_700Bold" },
 });

@@ -1,0 +1,19 @@
+:root {
+  --ajyal-primary: #173e8c;
+  --ajyal-teal: #2e9e79;
+  --ajyal-foreground: #151c28;
+  --ajyal-muted: #657487;
+  --ajyal-border: #e4e9ef;
+  --ajyal-surface: #ffffff;
+  --ajyal-soft: #f4f6f8;
+  --ajyal-teal-soft: #ecf8f3;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, Arial, sans-serif;
+}

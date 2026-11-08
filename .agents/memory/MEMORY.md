@@ -86,3 +86,4 @@
 - [Mobile card touch targets](mobile-card-touch-targets.md) — interactive actions inside React Native cards must not be nested under a parent `Pressable`.
 - [In-person session lifecycle parity](in-person-session-lifecycle.md) — attendance starts in-person teaching; the saved admin duration controls completion, separate from saved package debit.
 - [In-person credit history access](in-person-credit-history-access.md) — read reservation/refund ledgers through an ownership-checked RPC; the student client lacks table-level SELECT.
+- [Development Supabase target](supabase-development-target.md) — Replit development currently points at the production Supabase domain; do not run live student searches there.
