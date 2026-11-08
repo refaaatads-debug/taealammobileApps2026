@@ -30,6 +30,7 @@ import { and, asc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { findNotificationImageUrl } from "../lib/notificationImage";
 import { persistPlatformNotifications } from "../lib/platformNotifications";
+import { activeStudentSubscriptionFilters } from "../lib/studentSubscriptionBalance";
 import { getSupabaseProfile, hasSupabaseRole, readBearerToken, supabaseRpc, supabaseTable } from "../lib/supabaseAuth";
 import { normalizeStage, normalizeStageList } from "../lib/teachingStages";
 import { resolveSessionPresentationStatus, sessionTeachingDurationMinutes } from "../lib/sessionPresentation";
@@ -337,9 +338,7 @@ async function getBookingSubscription(
   const [subscriptions, bookings, requests] = await Promise.all([
     supabaseTable<RemoteRow>(accessToken, "user_subscriptions", {
       user_id: `eq.${userId}`,
-      is_active: "eq.true",
-      remaining_minutes: "gt.0",
-      or: `(ends_at.is.null,ends_at.gte.${nowIso})`,
+      ...activeStudentSubscriptionFilters,
       select: "*",
       order: "ends_at.asc",
     }),
@@ -1540,9 +1539,7 @@ router.get("/student/dashboard", async (req, res): Promise<void> => {
     })),
     optionalDashboardOperation(req, "subscriptions", [], degradedSections, () => supabaseTable<RemoteRow>(supabaseToken, "user_subscriptions", {
       user_id: `eq.${userId}`,
-      is_active: "eq.true",
-      remaining_minutes: "gt.0",
-      or: `(ends_at.is.null,ends_at.gte.${nowIso})`,
+      ...activeStudentSubscriptionFilters,
       select: "plan_id,remaining_minutes,sessions_remaining,ends_at",
       order: "ends_at.asc",
     })),
