@@ -259,7 +259,6 @@ export default function BookingScreen() {
           .eq('user_id', user.id)
           .eq('is_active', true)
           .gt('remaining_minutes', 0)
-          .or(`ends_at.is.null,ends_at.gte.${nowIso}`)
           .order('ends_at', { ascending: true }),
         supabase
           .from('bookings')

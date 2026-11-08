@@ -27,6 +27,7 @@
     "test:auth-storage": "node --experimental-strip-types --test lib/__tests__/chunkedSecureStorage.test.mjs",
     "test:profile:ui": "node scripts/test-profile-ui.mjs",
     "test:profile:production": "node scripts/test-profile-ui.mjs --production-only",
+    "test:balance": "node --experimental-strip-types --test lib/__tests__/studentBalance.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

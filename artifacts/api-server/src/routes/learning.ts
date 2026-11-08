@@ -338,9 +338,7 @@ async function getBookingSubscription(
   const [subscriptions, bookings, requests] = await Promise.all([
     supabaseTable<RemoteRow>(accessToken, "user_subscriptions", {
       user_id: `eq.${userId}`,
-      is_active: "eq.true",
-      remaining_minutes: "gt.0",
-      or: `(ends_at.is.null,ends_at.gte.${nowIso})`,
+      ...activeStudentSubscriptionFilters,
       select: "*",
       order: "ends_at.asc",
     }),

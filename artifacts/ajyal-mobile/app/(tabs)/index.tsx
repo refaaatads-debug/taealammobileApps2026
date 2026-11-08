@@ -22,6 +22,7 @@ import { summarizePendingTeacherSubmissions } from '@/lib/teacherAssignmentTasks
 import { DashboardActions, EmptyState, Header, Icon, IconName, LoadingBlock, Screen, SectionHeading, SessionCard, WelcomeBanner } from '@/components/AjyalUI';
 import TeacherInPersonCode from '@/components/TeacherInPersonCode';
 import { getListBookingRequestsQueryKey, getListMyAssignmentsQueryKey, useGetStudentDashboard, useGetTeacherDashboard, useListBookingRequests, useListMyAssignments } from '@workspace/api-client-react';
+import { aggregateStudentBalance } from '@/lib/studentBalance';
 
 type TodayTask = {
   id: string;
@@ -136,6 +137,25 @@ export default function HomeScreen() {
       refetchOnReconnect: true,
     },
   });
+  const studentBalanceQuery = useQuery({
+    queryKey: ['student-active-balance', user?.id],
+    enabled: canLoadRoleData && !isTeacher && Boolean(user?.id) && Boolean(supabase),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    queryFn: async () => {
+      if (!supabase || !user?.id) throw new Error('Student balance is unavailable.');
+      const { data, error } = await supabase
+        .from('user_subscriptions')
+        .select('is_active,remaining_minutes,sessions_remaining,subscription_plans(name_ar)')
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .gt('remaining_minutes', 0)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return aggregateStudentBalance((data ?? []) as Array<Record<string, unknown>>);
+    },
+  });
   const assignmentsQuery = useListMyAssignments({
     query: {
       queryKey: getListMyAssignmentsQueryKey(),
@@ -183,8 +203,9 @@ export default function HomeScreen() {
     }
     if (canLoadRoleData && !isTeacher) {
       void studentDashboardQuery.refetch();
+      void studentBalanceQuery.refetch();
     }
-  }, [canLoadRoleData, isTeacher, profile?.id, studentDashboardQuery.refetch, unreadChatQuery.refetch]));
+  }, [canLoadRoleData, isTeacher, profile?.id, studentBalanceQuery.refetch, studentDashboardQuery.refetch, unreadChatQuery.refetch]));
   useFocusEffect(useCallback(() => {
     const client = supabase;
     if (!client || !canLoadRoleData || !isTeacher || !profile?.id) return undefined;
@@ -258,6 +279,11 @@ export default function HomeScreen() {
   );
   const teacherDashboard = teacherDashboardQuery.data;
   const studentDashboard = studentDashboardQuery.data;
+  const studentBalance = studentBalanceQuery.isSuccess
+    ? studentBalanceQuery.data
+    : studentDashboard?.balance ?? null;
+  const studentBalanceChecking = studentBalanceQuery.isLoading && !studentDashboard?.balance;
+  const studentBalanceError = studentBalanceQuery.isError && !studentDashboard?.balance;
   const incomingOpenRequests = incomingRequestsQuery.data
     ? countOpenBookingRequestGroups(incomingRequestsQuery.data)
     : 0;
@@ -423,7 +449,7 @@ export default function HomeScreen() {
       <DashboardActions
         role={role}
         onAction={openDashboardAction}
-        studentBalance={studentDashboard?.balance}
+        studentBalance={studentBalance}
         nextAssignment={pendingAssignments[0] ? { title: pendingAssignments[0].title, due: pendingAssignments[0].due } : null}
       />
 
@@ -497,11 +523,11 @@ export default function HomeScreen() {
                 <Text style={[styles.balanceLabel, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('رصيدك التعليمي', 'Learning balance')}</Text>
                 <View style={[styles.balanceBadge, { backgroundColor: colors.primaryForeground }]}>
                   <View style={[styles.balanceBadgeDot, { backgroundColor: colors.teal }]} />
-                  <Text style={[styles.balanceBadgeText, { color: colors.primary }]}>{studentDashboard.balance ? t('نشط', 'Active') : t('غير نشط', 'Inactive')}</Text>
+                  <Text style={[styles.balanceBadgeText, { color: colors.primary }]}>{studentBalanceChecking ? t('جارٍ التحقق', 'Checking') : studentBalanceError ? t('تعذر التحقق', 'Unavailable') : studentBalance ? t('نشط', 'Active') : t('غير نشط', 'Inactive')}</Text>
                 </View>
               </View>
-              <Text style={[styles.balanceValue, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{studentDashboard.balance ? `${formatNumber(studentDashboard.balance.remainingMinutes)} ${t('دقيقة متاحة', 'minutes available')}` : t('لا يوجد اشتراك نشط', 'No active plan')}</Text>
-              <Text style={[styles.balanceMeta, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{studentDashboard.balance ? `${formatNumber(studentDashboard.balance.sessionsRemaining)} ${t('جلسة متبقية', 'sessions left')}${studentDashboard.balance.planName ? ` · ${studentDashboard.balance.planName}` : ''}` : t('استعرض الباقات المتاحة', 'View available plans')}</Text>
+              <Text style={[styles.balanceValue, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{studentBalanceChecking ? t('جارٍ التحقق من رصيدك…', 'Checking your balance…') : studentBalanceError ? t('تعذر تحميل الرصيد', 'Could not load balance') : studentBalance ? `${formatNumber(studentBalance.remainingMinutes)} ${t('دقيقة متاحة', 'minutes available')}` : t('لا يوجد اشتراك نشط', 'No active plan')}</Text>
+              <Text style={[styles.balanceMeta, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{studentBalanceChecking ? t('نحدّث بيانات باقتك', 'Refreshing your plan') : studentBalanceError ? t('اسحب للتحديث أو أعد المحاولة', 'Refresh to try again') : studentBalance ? `${formatNumber(studentBalance.sessionsRemaining)} ${t('جلسة متبقية', 'sessions left')}${studentBalance.planName ? ` · ${studentBalance.planName}` : ''}` : t('استعرض الباقات المتاحة', 'View available plans')}</Text>
            </View>
            <View style={styles.balanceArrow}><Icon name={isRTL ? 'arrow-left' : 'arrow-right'} size={17} color={colors.tint} /></View>
         </Pressable>
