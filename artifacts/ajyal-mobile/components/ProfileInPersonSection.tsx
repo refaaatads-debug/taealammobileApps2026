@@ -6,6 +6,7 @@ import LocationPicker from "@/components/InPersonLocationPicker";
 import type { GooglePlaceDetails } from "@/lib/googlePlaces";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { useColors } from "@/hooks/useColors";
+import { getAddressDeleteFailureMessage } from "@/lib/profileAddressErrors";
 import { supabase } from "@/lib/supabase";
 
 type City = { id: string; name_ar: string };
@@ -152,9 +153,17 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
     setDeletingAddressId(address.id);
     setDeleteError("");
     try {
-      const result = await supabase.from("user_addresses" as any).delete().eq("id", address.id).eq("owner_id", userId);
+      const result = await supabase.from("user_addresses" as any)
+        .delete()
+        .eq("id", address.id)
+        .eq("owner_id", userId)
+        .select("id");
       if (result.error) {
-        setDeleteError(t("تعذر حذف العنوان. حاول مرة أخرى.", "Could not delete the address. Please retry."));
+        setDeleteError(getAddressDeleteFailureMessage(result.error.code, direction === "rtl" ? "ar" : "en"));
+        return;
+      }
+      if (!Array.isArray(result.data) || !result.data.some((row: { id?: unknown }) => String(row.id) === address.id)) {
+        setDeleteError(getAddressDeleteFailureMessage("NO_ROW", direction === "rtl" ? "ar" : "en"));
         return;
       }
       const remaining = addresses.filter((item) => item.id !== address.id);
@@ -169,7 +178,7 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
       }
       setAddressToDelete(null);
     } catch {
-      setDeleteError(t("تعذر حذف العنوان. تحقق من الاتصال ثم حاول مرة أخرى.", "Could not delete the address. Check your connection and retry."));
+      setDeleteError(getAddressDeleteFailureMessage(null, direction === "rtl" ? "ar" : "en"));
     } finally {
       setDeletingAddressId(null);
     }

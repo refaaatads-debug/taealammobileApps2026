@@ -35,5 +35,17 @@ test("the native profile map is opened separately instead of mounting inside the
   );
   assert.match(pickerSource, /const \[mapOpen, setMapOpen\] = useState\(false\);/);
   assert.match(pickerSource, /visible=\{mapOpen\}/);
-  assert.match(pickerSource, /onPress=\{\(\) => setMapOpen\(true\)\}/);
+  assert.match(pickerSource, /if \(!platformKey\) \{\s*setSearchError\(mapKeyMissingMessage\);/);
+  assert.match(pickerSource, /onPress=\{\(\) => \{\s*if \(!platformKey\)/);
+  assert.match(pickerSource, /\{platformKey \? \(\s*<MapView/);
+});
+
+test("saved addresses are removed locally only after Supabase confirms deletion", () => {
+  const inPersonSource = readFileSync(
+    path.join(projectRoot, "components/ProfileInPersonSection.tsx"),
+    "utf8",
+  );
+  assert.match(inPersonSource, /\.delete\(\)[\s\S]*?\.select\("id"\)/);
+  assert.match(inPersonSource, /result\.data\.some\(\(row:[\s\S]*?String\(row\.id\) === address\.id\)/);
+  assert.match(inPersonSource, /getAddressDeleteFailureMessage\(result\.error\.code/);
 });

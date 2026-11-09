@@ -46,6 +46,10 @@ export default function InPersonLocationPicker({ latitude, longitude, locationGr
   const [searchError, setSearchError] = useState("");
   const [mapOpen, setMapOpen] = useState(false);
   const platformKey = (Constants.expoConfig?.extra as { googleMapsApiKeys?: Record<string, string> } | undefined)?.googleMapsApiKeys?.[Platform.OS];
+  const mapKeyMissingMessage = t(
+    "مفتاح خرائط Google غير مضمّن في نسخة التطبيق. أضفه إلى بيئة preview في EAS ثم أعد إنشاء APK.",
+    "The Google Maps key is missing from this app build. Add it to the EAS preview environment and rebuild the app.",
+  );
   const lat = Number(latitude), lng = Number(longitude);
   const hasCoordinate = Number.isFinite(lat) && Number.isFinite(lng) && Boolean(latitude.trim()) && Boolean(longitude.trim());
   const coordinate = hasCoordinate ? { latitude: lat, longitude: lng } : { latitude: 23.8859, longitude: 45.0792 };
@@ -64,7 +68,7 @@ export default function InPersonLocationPicker({ latitude, longitude, locationGr
       return;
     }
     if (!platformKey) {
-      setSearchError(t("إعداد البحث في خرائط Google غير متاح لهذا الجهاز.", "Google Maps place search is not configured for this device."));
+      setSearchError(mapKeyMissingMessage);
       return;
     }
 
@@ -101,7 +105,7 @@ export default function InPersonLocationPicker({ latitude, longitude, locationGr
       clearTimeout(timer);
       controller.abort();
     };
-  }, [search, committedSearch, platformKey, locale, isArabic, sessionToken, t]);
+  }, [search, committedSearch, platformKey, locale, isArabic, sessionToken, t, mapKeyMissingMessage]);
 
   useEffect(() => () => detailsController.current?.abort(), []);
 
@@ -177,7 +181,14 @@ export default function InPersonLocationPicker({ latitude, longitude, locationGr
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t("فتح الخريطة لتحديد الموقع", "Open the map to choose a location")}
-        onPress={() => setMapOpen(true)}
+        onPress={() => {
+          if (!platformKey) {
+            setSearchError(mapKeyMissingMessage);
+            return;
+          }
+          setSearchError("");
+          setMapOpen(true);
+        }}
         style={({ pressed }) => [styles.mapLauncher, { borderColor: colors.border, backgroundColor: colors.card, opacity: pressed ? 0.78 : 1 }]}
       >
         <Icon name="map-pin" size={17} color={colors.teal} />
@@ -209,23 +220,29 @@ export default function InPersonLocationPicker({ latitude, longitude, locationGr
             </Text>
           </View>
           <View style={[styles.frame, { borderColor: colors.border }]}>
-            <MapView
-              ref={mapRef}
-              provider={PROVIDER_GOOGLE}
-              style={styles.map}
-              initialRegion={{ ...coordinate, latitudeDelta: mapDelta, longitudeDelta: mapDelta }}
-              showsUserLocation={locationGranted}
-              onPress={(event) => onChange(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
-            >
-              {hasCoordinate ? (
-                <Marker
-                  coordinate={{ latitude: lat, longitude: lng }}
-                  draggable
-                  onDragEnd={(event) => onChange(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
-                  pinColor={colors.teal}
-                />
-              ) : null}
-            </MapView>
+            {platformKey ? (
+              <MapView
+                ref={mapRef}
+                provider={PROVIDER_GOOGLE}
+                style={styles.map}
+                initialRegion={{ ...coordinate, latitudeDelta: mapDelta, longitudeDelta: mapDelta }}
+                showsUserLocation={locationGranted}
+                onPress={(event) => onChange(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
+              >
+                {hasCoordinate ? (
+                  <Marker
+                    coordinate={{ latitude: lat, longitude: lng }}
+                    draggable
+                    onDragEnd={(event) => onChange(event.nativeEvent.coordinate.latitude, event.nativeEvent.coordinate.longitude)}
+                    pinColor={colors.teal}
+                  />
+                ) : null}
+              </MapView>
+            ) : (
+              <View style={styles.mapUnavailable}>
+                <Text style={[styles.empty, { color: colors.mutedForeground, textAlign: "center" }]}>{mapKeyMissingMessage}</Text>
+              </View>
+            )}
           </View>
           <Pressable
             accessibilityRole="button"
@@ -251,6 +268,7 @@ const styles = StyleSheet.create({
   error: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_500Medium", paddingHorizontal: 6, paddingVertical: 4 },
   frame: { flex: 1, minHeight: 220, borderWidth: 1, borderRadius: 14, overflow: "hidden", marginTop: 2 },
   map: { flex: 1, minHeight: 220, width: "100%" },
+  mapUnavailable: { flex: 1, minHeight: 220, alignItems: "center", justifyContent: "center", padding: 18 },
   mapLauncher: { minHeight: 48, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 9 },
   mapLauncherText: { flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", textAlign: "right" },
   mapModal: { flex: 1, paddingHorizontal: 14, paddingTop: 36, paddingBottom: 20, gap: 12 },
