@@ -6,10 +6,11 @@ import type { GooglePlaceDetails } from "@/lib/googlePlaces";
 type Props = {
   latitude: string;
   longitude: string;
-  locationGranted: boolean;
+  locationGranted?: boolean;
   colors: { card: string; border: string; teal: string; tealSoft: string; foreground: string; mutedForeground: string; destructive: string };
-  onChange: (latitude: number, longitude: number) => void;
+  onChange?: (latitude: number, longitude: number) => void;
   onPlaceSelect?: (place: GooglePlaceDetails) => void;
+  onConfirmLocation?: (latitude: number, longitude: number, address: string, place?: GooglePlaceDetails) => void;
   searchPlaceholder?: string;
   webMessage: string;
 };

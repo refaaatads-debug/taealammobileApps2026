@@ -5,9 +5,8 @@ import { Icon } from "@/components/AjyalUI";
 type Props = {
   latitude: string;
   longitude: string;
-  locationGranted: boolean;
   colors: { card: string; border: string; teal: string; tealSoft: string; mutedForeground: string };
-  onChange: (latitude: number, longitude: number) => void;
+  onConfirmLocation: (latitude: number, longitude: number, address: string) => void;
   webMessage: string;
 };
 

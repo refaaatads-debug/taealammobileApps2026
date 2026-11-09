@@ -61,6 +61,12 @@
       "./plugins/withIncomingCallNative",
       "./plugins/withAjyalNativeCalls",
       "./plugins/withGoogleMapsKeys",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "يستخدم تطبيق أجيال المعرفة موقعك عند طلبك لتحديد موقعك الحالي على الخريطة."
+        }
+      ],
       "@config-plugins/react-native-blob-util",
       "@config-plugins/react-native-pdf",
       [

@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import * as Location from "expo-location";
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Icon } from "@/components/AjyalUI";
 import LocationPicker from "@/components/InPersonLocationPicker";
 import type { GooglePlaceDetails } from "@/lib/googlePlaces";
@@ -35,7 +34,6 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
   const [approval, setApproval] = useState("not_requested");
   const [approvalReason, setApprovalReason] = useState("");
   const [selectedPlace, setSelectedPlace] = useState<GooglePlaceDetails | null>(null);
-  const [locationGranted, setLocationGranted] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -121,30 +119,17 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
     }
   }, [expanded, enabled, eligibilityChecked, sectionDataLoaded, loading, loadAttempted, load]);
 
-  const getCurrentLocation = async () => {
-    const permission = await Location.requestForegroundPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert(t("إذن الموقع مطلوب", "Location permission required"), t("اسمح بالوصول للموقع أو حرّك العلامة على الخريطة.", "Allow location access or move the map marker."));
-      return;
+  const handleLocationConfirm = (lat: number, lng: number, address: string, place?: GooglePlaceDetails) => {
+    setSelectedPlace(place ?? null);
+    setStreet(address || place?.formattedAddress || "");
+    setLatitude(String(lat));
+    setLongitude(String(lng));
+    if (place) {
+      const normalizedCity = place.city.trim().toLocaleLowerCase();
+      const city = cities.find((item) => item.name_ar.trim().toLocaleLowerCase() === normalizedCity);
+      setCityId(city?.id ?? "");
     }
-    setLocationGranted(true);
-    try {
-      const point = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setLatitude(String(point.coords.latitude));
-      setLongitude(String(point.coords.longitude));
-    } catch {
-      setError(t("تعذر تحديد الموقع الحالي.", "Could not determine the current location."));
-    }
-  };
-
-  const handlePlaceSelect = (place: GooglePlaceDetails) => {
-    setSelectedPlace(place);
-    setStreet(place.formattedAddress);
-    setLatitude(String(place.latitude));
-    setLongitude(String(place.longitude));
-    const normalizedCity = place.city.trim().toLocaleLowerCase();
-    const city = cities.find((item) => item.name_ar.trim().toLocaleLowerCase() === normalizedCity);
-    setCityId(city?.id ?? "");
+    setError("");
   };
 
   const deleteAddress = async () => {
@@ -350,18 +335,12 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
         <LocationPicker
           latitude={latitude}
           longitude={longitude}
-          locationGranted={locationGranted}
           colors={{ card: colors.card, border: colors.border, teal: colors.teal, tealSoft: colors.tealSoft, foreground: colors.foreground, mutedForeground: colors.mutedForeground, destructive: colors.destructive }}
-          onChange={(lat, lng) => { setSelectedPlace(null); setLatitude(String(lat)); setLongitude(String(lng)); }}
-          onPlaceSelect={handlePlaceSelect}
+          onConfirmLocation={handleLocationConfirm}
           searchPlaceholder={t("ابحث عن مدينة أو عنوان", "Search for a city or address")}
           webMessage={t("افتح التطبيق على جهازك لاختيار الموقع من الخريطة.", "Open the app on your device to select a map location.")}
         />
         </View>
-        <Pressable accessibilityRole="button" onPress={() => void getCurrentLocation()} style={({ pressed }) => [styles.secondary, { borderColor: colors.border, backgroundColor: colors.card, opacity: pressed ? 0.8 : 1 }]}>
-          <Icon name="crosshair" size={15} color={colors.teal} />
-          <Text style={[styles.secondaryText, { color: colors.teal }]}>{t("استخدم موقعي الحالي", "Use my current location")}</Text>
-        </Pressable>
         {role === "teacher" && <View style={styles.radiusField}>
           <Text style={[styles.label, styles.sectionLabel, { color: colors.foreground }]}>{t("نطاق الخدمة", "Service radius")}</Text>
           <View style={[styles.radiusInputWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
