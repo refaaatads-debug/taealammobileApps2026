@@ -568,6 +568,7 @@ function RootLayoutNav() {
         <Stack.Screen name="smart-teacher" options={{ headerShown: false }} />
         <Stack.Screen name="homework-solver" options={{ headerShown: false }} />
         <Stack.Screen name="materials" options={{ headerShown: false }} />
+        <Stack.Screen name="teacher-learning-materials" options={{ headerShown: false }} />
         <Stack.Screen name="teacher-materials" options={{ headerShown: false }} />
         <Stack.Screen name="students" options={{ headerShown: false }} />
         <Stack.Screen name="wallet" options={{ headerShown: false }} />
