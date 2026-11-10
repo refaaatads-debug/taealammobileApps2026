@@ -16,7 +16,8 @@ import {
   readPlatformWhiteboardVisibility,
   resolveWhiteboardStateVisibility,
 } from '@/lib/sessionWhiteboardProtocol';
-import { useGetStudentDashboard, useListMySessions } from '@workspace/api-client-react';
+import { filterClearedWhiteboardActions, whiteboardActionSignature } from '@/lib/sessionWhiteboardState';
+import { getListMySessionsQueryKey, useGetStudentDashboard, useListMySessions } from '@workspace/api-client-react';
 import { Header, Icon, Screen } from '@/components/AjyalUI';
 import { supabase } from '@/lib/supabase';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -50,16 +51,23 @@ export default function LiveSessionScreen() {
   const { profile, role } = useAjyal();
   const params = useLocalSearchParams<{ booking?: string }>();
   const { call, endCall, clearCall } = useInternalCall();
-  const sessionsQuery = useListMySessions({ view: 'upcoming' });
-  const studentDashboardQuery = useGetStudentDashboard({
-    query: { queryKey: ['student-dashboard'], enabled: role === 'student' },
-  });
+  const isStudent = role === 'student';
+  const sessionsQuery = useListMySessions(
+    { view: 'upcoming' },
+    {
+      query: {
+        queryKey: getListMySessionsQueryKey({ view: 'upcoming' }),
+        staleTime: 60_000,
+        refetchOnReconnect: false,
+        refetchOnWindowFocus: false,
+      },
+    },
+  );
   const bookingId = typeof params.booking === 'string' ? params.booking : undefined;
   const session = sessionsQuery.data?.find((item) => item.id === bookingId);
   const isActive = call?.status === 'active';
   const isCurrentCall = Boolean(bookingId && call?.roomId === bookingId);
   const isSessionCallActive = isActive && isCurrentCall;
-  const isStudent = role === 'student';
   const isActiveRef = useRef(isSessionCallActive);
   const isCurrentCallRef = useRef(isCurrentCall);
   const sessionJoinNotificationBookingRef = useRef<string | null>(null);
@@ -76,6 +84,9 @@ export default function LiveSessionScreen() {
   const [lifecycleLoadedFor, setLifecycleLoadedFor] = useState<string | null>(null);
   const [joinRequested, setJoinRequested] = useState(false);
   const [whiteboardActions, setWhiteboardActions] = useState<WhiteboardAction[]>([]);
+  const whiteboardActionsRef = useRef<WhiteboardAction[]>([]);
+  const knownWhiteboardActionsRef = useRef<Map<string, WhiteboardAction>>(new Map());
+  const clearedWhiteboardSignaturesRef = useRef<Set<string>>(new Set());
   const [whiteboardVisible, setWhiteboardVisible] = useState(false);
   const [whiteboardCanDraw, setWhiteboardCanDraw] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -92,9 +103,18 @@ export default function LiveSessionScreen() {
   );
   const latestTimerSyncRef = useRef<SessionTimerSync | null>(null);
   const timerPeerReadyRef = useRef(false);
+  const lifecycleRefreshInFlightRef = useRef(false);
   useEffect(() => {
     setFullscreenControlsVisible(isFullscreen && whiteboardVisible);
-  }, [displayScale, isFullscreen, whiteboardVisible]);
+  }, [isFullscreen, whiteboardVisible]);
+  useEffect(() => {
+    whiteboardActionsRef.current = [];
+    knownWhiteboardActionsRef.current.clear();
+    clearedWhiteboardSignaturesRef.current.clear();
+    setWhiteboardActions([]);
+    setWhiteboardVisible(false);
+    setWhiteboardCanDraw(false);
+  }, [bookingId]);
   useEffect(() => {
     if (Platform.OS === 'web') return undefined;
     const applyOrientation = async () => {
@@ -111,25 +131,31 @@ export default function LiveSessionScreen() {
   }, [isFullscreen]);
   const refreshLifecycle = useCallback(async (): Promise<SessionLifecycleSnapshot | null> => {
     if (!supabase || !bookingId) return null;
-    const [{ data: sessionRow, error: sessionError }, { data: bookingRow, error: bookingError }] = await Promise.all([
-      supabase.from('sessions').select('started_at, ended_at, duration_seconds').eq('booking_id', bookingId).maybeSingle(),
-      supabase.from('bookings').select('status, session_status, delivery_mode, student_id, teacher_id').eq('id', bookingId).maybeSingle(),
-    ]);
-    if (sessionError) throw sessionError;
-    if (bookingError) throw bookingError;
-    const snapshot = {
-      startedAt: typeof sessionRow?.started_at === 'string' ? sessionRow.started_at : null,
-      endedAt: typeof sessionRow?.ended_at === 'string' ? sessionRow.ended_at : null,
-      durationSeconds: typeof sessionRow?.duration_seconds === 'number' ? sessionRow.duration_seconds : null,
-      sessionStatus: typeof bookingRow?.session_status === 'string' ? bookingRow.session_status : null,
-      bookingStatus: typeof bookingRow?.status === 'string' ? bookingRow.status : null,
-      deliveryMode: typeof bookingRow?.delivery_mode === 'string' ? bookingRow.delivery_mode : null,
-      studentId: typeof bookingRow?.student_id === 'string' ? bookingRow.student_id : null,
-      teacherId: typeof bookingRow?.teacher_id === 'string' ? bookingRow.teacher_id : null,
-    };
-    setLifecycle(snapshot);
-    setLifecycleLoadedFor(bookingId);
-    return snapshot;
+    if (lifecycleRefreshInFlightRef.current) return null;
+    lifecycleRefreshInFlightRef.current = true;
+    try {
+      const [{ data: sessionRow, error: sessionError }, { data: bookingRow, error: bookingError }] = await Promise.all([
+        supabase.from('sessions').select('started_at, ended_at, duration_seconds').eq('booking_id', bookingId).maybeSingle(),
+        supabase.from('bookings').select('status, session_status, delivery_mode, student_id, teacher_id').eq('id', bookingId).maybeSingle(),
+      ]);
+      if (sessionError) throw sessionError;
+      if (bookingError) throw bookingError;
+      const snapshot = {
+        startedAt: typeof sessionRow?.started_at === 'string' ? sessionRow.started_at : null,
+        endedAt: typeof sessionRow?.ended_at === 'string' ? sessionRow.ended_at : null,
+        durationSeconds: typeof sessionRow?.duration_seconds === 'number' ? sessionRow.duration_seconds : null,
+        sessionStatus: typeof bookingRow?.session_status === 'string' ? bookingRow.session_status : null,
+        bookingStatus: typeof bookingRow?.status === 'string' ? bookingRow.status : null,
+        deliveryMode: typeof bookingRow?.delivery_mode === 'string' ? bookingRow.delivery_mode : null,
+        studentId: typeof bookingRow?.student_id === 'string' ? bookingRow.student_id : null,
+        teacherId: typeof bookingRow?.teacher_id === 'string' ? bookingRow.teacher_id : null,
+      };
+      setLifecycle(snapshot);
+      setLifecycleLoadedFor(bookingId);
+      return snapshot;
+    } finally {
+      lifecycleRefreshInFlightRef.current = false;
+    }
   }, [bookingId]);
   useEffect(() => {
     if (!shouldRedirectFromLiveSession(
@@ -150,6 +176,25 @@ export default function LiveSessionScreen() {
   // Internal calls are a separate notification/audio system. They must never
   // authorize the session media path; the student explicitly joins the room.
   const shouldJoin = Boolean(canStudentJoin && bookingId && profile?.id && joinRequested);
+  const studentDashboardQuery = useGetStudentDashboard({
+    query: {
+      queryKey: ['student-dashboard'],
+      enabled: Boolean(isStudent && shouldJoin),
+      staleTime: 60_000,
+      refetchOnReconnect: false,
+      refetchOnWindowFocus: false,
+    },
+  });
+  const replaceWhiteboardActions = useCallback((actions: WhiteboardAction[]) => {
+    whiteboardActionsRef.current = actions;
+    setWhiteboardActions(actions);
+  }, []);
+  const appendWhiteboardAction = useCallback((action: WhiteboardAction) => {
+    const signature = whiteboardActionSignature(action);
+    knownWhiteboardActionsRef.current.set(signature, action);
+    clearedWhiteboardSignaturesRef.current.delete(signature);
+    replaceWhiteboardActions([...whiteboardActionsRef.current, action].slice(-160));
+  }, [replaceWhiteboardActions]);
   const handleDataMessage = useCallback((message: SessionDataMessage) => {
     const messageTypeCandidates = [message.type, message.event, message.kind, message.messageType]
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
@@ -290,7 +335,7 @@ export default function LiveSessionScreen() {
       boardAction
       && (messageType.includes('whiteboard') || messageType === 'path' || messageType === 'draw')
     ) {
-      setWhiteboardActions((current) => [...current, boardAction].slice(-160));
+      appendWhiteboardAction(boardAction);
       setWhiteboardVisible(true);
     } else if (
       (messageType === 'whiteboard-state'
@@ -302,13 +347,18 @@ export default function LiveSessionScreen() {
       const actions = boardActions
         .map(normalizeWhiteboardAction)
         .filter((action): action is WhiteboardAction => Boolean(action));
-      setWhiteboardActions(actions);
+      actions.forEach((action) => knownWhiteboardActionsRef.current.set(whiteboardActionSignature(action), action));
+      replaceWhiteboardActions(filterClearedWhiteboardActions(actions, clearedWhiteboardSignaturesRef.current));
       setWhiteboardVisible(resolveWhiteboardStateVisibility(boardVisibility));
     } else if (messageType === 'whiteboard-clear' || messageType === 'whiteboard-reset') {
-      setWhiteboardActions([]);
+      knownWhiteboardActionsRef.current.forEach((_action, signature) => clearedWhiteboardSignaturesRef.current.add(signature));
+      replaceWhiteboardActions([]);
       setWhiteboardVisible(true);
     } else if (messageType === 'whiteboard-undo') {
-      setWhiteboardActions((current) => current.slice(0, -1));
+      const current = whiteboardActionsRef.current;
+      const removed = current[current.length - 1];
+      if (removed) clearedWhiteboardSignaturesRef.current.add(whiteboardActionSignature(removed));
+      replaceWhiteboardActions(current.slice(0, -1));
       setWhiteboardVisible(true);
     } else if (
       messageType === 'whiteboard-open'
@@ -327,7 +377,7 @@ export default function LiveSessionScreen() {
     ) {
       setWhiteboardVisible(false);
     }
-  }, []);
+  }, [appendWhiteboardAction, replaceWhiteboardActions]);
   const rtc = useSessionWebRTC({
     bookingId,
     userId: profile?.id,
@@ -407,7 +457,7 @@ export default function LiveSessionScreen() {
   }, [bookingId, lifecycle.teacherId, rtc.connectionState, shouldJoin]);
   const handleWhiteboardAction = useCallback((action: WhiteboardAction) => {
     if (!whiteboardCanDraw) return;
-    setWhiteboardActions((current) => [...current, action].slice(-160));
+    appendWhiteboardAction(action);
     setWhiteboardVisible(true);
     rtc.sendDataMessage({
       type: 'whiteboard-action',
@@ -420,7 +470,7 @@ export default function LiveSessionScreen() {
       userId: profile?.id,
       timestamp: Date.now(),
     });
-  }, [profile?.id, rtc.sendDataMessage, whiteboardCanDraw]);
+  }, [appendWhiteboardAction, profile?.id, rtc.sendDataMessage, whiteboardCanDraw]);
 
   useEffect(() => {
     if (rtc.dataChannelState !== 'open' || !shouldJoin) return;
@@ -509,7 +559,7 @@ export default function LiveSessionScreen() {
     if (!bookingId) return;
     const interval = setInterval(() => {
       void refreshLifecycle().catch(() => undefined);
-    }, 2500);
+    }, 15_000);
     return () => clearInterval(interval);
   }, [bookingId, refreshLifecycle]);
 
@@ -786,8 +836,8 @@ export default function LiveSessionScreen() {
                 style={[StyleSheet.absoluteFill, styles.fullscreenControlsTapArea]}
               />
             ) : null}
-            {renderFullscreenButton(true)}
-            <View
+            {fullscreenControlsVisible ? renderFullscreenButton(true) : null}
+            {fullscreenControlsVisible ? <View
               pointerEvents="none"
               style={[
                 styles.fullscreenTimer,
@@ -801,8 +851,8 @@ export default function LiveSessionScreen() {
             >
               <Text style={[styles.fullscreenTimerValue, { color: colors.foreground }]}>{timerSyncReceived && timerPeerReady ? formatElapsed(elapsedSeconds) : '—'}</Text>
               <Text style={[styles.fullscreenTimerLabel, { color: colors.teal }]}>الوقت المنقضي</Text>
-            </View>
-            <View
+            </View> : null}
+            {fullscreenControlsVisible ? <View
               style={[
                 styles.fullscreenZoomDock,
                 {
@@ -822,7 +872,7 @@ export default function LiveSessionScreen() {
                 <Icon name="plus" size={16} color={colors.foreground} />
               </Pressable>
               </View>
-            </View>
+            </View> : null}
             {fullscreenControlsVisible ? (
               <View
                 style={[
@@ -1045,7 +1095,7 @@ const styles = StyleSheet.create({
   fullscreenTimerValue: { fontSize: 17, lineHeight: 21, fontFamily: 'Inter_700Bold', fontVariant: ['tabular-nums'] },
   fullscreenTimerLabel: { fontSize: 10, lineHeight: 15, marginTop: 1, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
   fullscreenZoomDock: { position: 'absolute', borderRadius: 14, borderWidth: 1, padding: 5, shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 5, zIndex: 2 },
-  fullscreenControlsTapArea: { zIndex: 0 },
+  fullscreenControlsTapArea: { zIndex: 1 },
   fullscreenCallControls: { position: 'absolute', maxWidth: 960, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 15, borderWidth: 1, padding: 6, shadowColor: '#000000', shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 6, zIndex: 3 },
   fullscreenControl: { flex: 1, minHeight: 48, borderWidth: 1, borderRadius: 10, alignItems: 'center', justifyContent: 'center', gap: 3 },
   fullscreenControlText: { fontSize: 10, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
