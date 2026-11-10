@@ -38,6 +38,7 @@ import { MaskedPhoneCallModal } from "@/components/MaskedPhoneCallModal";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useInternalCall } from "@/contexts/InternalCallContext";
 import { getReadChatMessageIds, markChatMessagesRead, subscribeToChatReadState } from "@/lib/localChatReadState";
+import { aggregateStudentBalance } from "@/lib/studentBalance";
 import {
   bookingMessageRealtimeFilters,
   loadParticipantChatHistory,
@@ -80,7 +81,6 @@ async function createInstantSession({
 }) {
   if (!supabase) throw instantSessionError("تعذر الاتصال بالمنصة.");
   const now = new Date().toISOString();
-
   const { data: activeSessions, error: activeError } = await supabase
     .from("bookings")
     .select("id, session_status")
@@ -105,35 +105,34 @@ async function createInstantSession({
     .eq("student_id", userId)
     .eq("session_status", "waiting_acceptance");
 
-  const { data: liveTeacher, error: liveError } = await supabase
-    .from("bookings")
-    .select("id")
-    .eq("teacher_id", participantId)
-    .eq("session_status", "in_progress")
-    .limit(1)
-    .maybeSingle();
-  if (liveError) throw liveError;
-  if (liveTeacher) throw instantSessionError("المعلم في جلسة جارية الآن. جرّب مرة أخرى بعد انتهائها.");
-
-  const { data: waitingTeacher, error: waitingError } = await supabase
-    .from("bookings")
-    .select("id")
-    .eq("teacher_id", participantId)
-    .eq("session_status", "waiting_acceptance")
-    .neq("student_id", userId)
-    .limit(1);
-  if (waitingError) throw waitingError;
-  if (waitingTeacher?.length) throw instantSessionError("لدى المعلم طلب جلسة فورية من طالب آخر في الانتظار.");
-
-  const { data: subscriptions, error: subscriptionError } = await supabase
-    .from("user_subscriptions")
-    .select("remaining_minutes")
-    .eq("user_id", userId)
-    .eq("is_active", true)
-    .gte("remaining_minutes", 15)
-    .gt("ends_at", now);
+  const [
+    { data: teacherBookings, error: teacherBookingsError },
+    { data: subscriptions, error: subscriptionError },
+  ] = await Promise.all([
+    supabase
+      .from("bookings")
+      .select("id, session_status, student_id")
+      .eq("teacher_id", participantId)
+      .in("session_status", ["in_progress", "waiting_acceptance"]),
+    supabase
+      .from("user_subscriptions")
+      .select("is_active, remaining_minutes, sessions_remaining")
+      .eq("user_id", userId)
+      .eq("is_active", true)
+      .gt("remaining_minutes", 0),
+  ]);
+  if (teacherBookingsError) throw teacherBookingsError;
   if (subscriptionError) throw subscriptionError;
-  if (!subscriptions?.length) {
+  if (teacherBookings?.some((booking) => booking.session_status === "in_progress")) {
+    throw instantSessionError("المعلم في جلسة جارية الآن. جرّب مرة أخرى بعد انتهائها.");
+  }
+  if (teacherBookings?.some((booking) => (
+    booking.session_status === "waiting_acceptance" && String(booking.student_id) !== userId
+  ))) {
+    throw instantSessionError("لدى المعلم طلب جلسة فورية من طالب آخر في الانتظار.");
+  }
+  const balance = aggregateStudentBalance(subscriptions ?? []);
+  if (!balance || balance.remainingMinutes < 15) {
     throw instantSessionError(`لا يمكن بدء جلسة فورية مع ${participantName}: تحتاج إلى باقة نشطة بها 15 دقيقة على الأقل.`);
   }
 
@@ -145,7 +144,7 @@ async function createInstantSession({
       teacher_id: teacherId,
       student_id: studentId,
       scheduled_at: now,
-      duration_minutes: 45,
+      duration_minutes: 15,
       status: "confirmed",
       session_status: "waiting_acceptance",
     })
@@ -158,26 +157,28 @@ async function createInstantSession({
     throw bookingError ?? instantSessionError("تعذر إنشاء طلب الجلسة الفورية.");
   }
 
-  const { error: notificationError } = await supabase.from("notifications").insert({
-    user_id: teacherId,
-    title: "طلب جلسة فورية",
-    body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
-    type: "instant_session",
-    link: `/bookings?bookingId=${encodeURIComponent(booking.id as string)}`,
-  });
-  if (notificationError) {
-    await customFetch<{ delivered: boolean }>("/api/push/notifications", {
-      method: "POST",
-      body: JSON.stringify({
-        recipientId: teacherId,
-        title: "طلب جلسة فورية",
-        body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
-        type: "instant_session",
-        route: "/bookings",
-        bookingId: booking.id,
-      }),
-    }).catch(() => undefined);
-  }
+  void (async () => {
+    const { error: notificationError } = await supabase.from("notifications").insert({
+      user_id: teacherId,
+      title: "طلب جلسة فورية",
+      body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
+      type: "instant_session",
+      link: `/bookings?bookingId=${encodeURIComponent(booking.id as string)}`,
+    });
+    if (notificationError) {
+      await customFetch<{ delivered: boolean }>("/api/push/notifications", {
+        method: "POST",
+        body: JSON.stringify({
+          recipientId: teacherId,
+          title: "طلب جلسة فورية",
+          body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
+          type: "instant_session",
+          route: "/bookings",
+          bookingId: booking.id,
+        }),
+      }).catch(() => undefined);
+    }
+  })().catch(() => undefined);
   // The booking is authoritative. A notification delivery failure must not
   // make the user retry and accidentally create a second instant booking.
   return booking.id as string;
@@ -1168,7 +1169,7 @@ export default function MessagesScreen() {
           batches(ids).map((bookingIdBatch) =>
             client
               .from("chat_messages")
-              .select("id,booking_id,sender_id,content,file_url,file_name,file_type,created_at")
+              .select("id,booking_id,sender_id,content,file_name,file_type,created_at")
               .in("booking_id", bookingIdBatch)
               .order("created_at", { ascending: true }),
           ),
@@ -1307,9 +1308,11 @@ export default function MessagesScreen() {
   const participants = useMemo<Participant[]>(() => {
     if (!user) return [];
     const byId = new Map<string, Participant>();
+    const profilesByUserId = new Map(profiles.map((profile) => [String(profile.user_id), profile]));
+    const bookingsById = new Map(bookings.map((booking) => [String(booking.id), booking]));
     for (const booking of bookings) {
       const participantId = String(booking.student_id) === user.id ? String(booking.teacher_id) : String(booking.student_id);
-      const profile = profiles.find((row) => String(row.user_id) === participantId);
+      const profile = profilesByUserId.get(participantId);
       const name = text(profile, "full_name", "display_name", "name") || t("مستخدم أجيال المعرفة", "Ajyal Knowledge user");
       const bookingId = String(booking.id);
       const existing = byId.get(participantId);
@@ -1342,7 +1345,7 @@ export default function MessagesScreen() {
       }
     }
     for (const message of messages) {
-      const booking = bookings.find((row) => String(row.id) === String(message.booking_id));
+      const booking = bookingsById.get(String(message.booking_id));
       if (!booking) continue;
       const participantId = String(booking.student_id) === user.id ? String(booking.teacher_id) : String(booking.student_id);
       const item = byId.get(participantId);
@@ -1430,7 +1433,7 @@ export default function MessagesScreen() {
       }
     };
 
-    const timer = setInterval(() => void refreshRecentMessages(), 5_000);
+    const timer = setInterval(() => void refreshRecentMessages(), 60_000);
     const appStateListener = AppState.addEventListener("change", (state) => {
       if (state === "active") void refreshRecentMessages();
     });

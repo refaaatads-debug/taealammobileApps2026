@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { EmptyState, Header, Icon, Screen, SessionCard, LoadingBlock } from '@/components/AjyalUI';
@@ -45,6 +45,11 @@ function localDayKey(value: Date): string {
 
 export default function BookingsScreen() {
   const colors = useColors();
+  const [isFocused, setIsFocused] = useState(false);
+  useFocusEffect(useCallback(() => {
+    setIsFocused(true);
+    return () => setIsFocused(false);
+  }, []));
   const { t, locale, direction, formatNumber } = useAppPreferences();
   const { role, roleResolved, profile, cancelSession } = useAjyal();
   const queryClient = useQueryClient();
@@ -61,8 +66,8 @@ export default function BookingsScreen() {
   const [decisionFeedback, setDecisionFeedback] = useState<'accepted' | 'rejected' | 'error' | null>(null);
   const requestView = role === 'teacher' ? 'incoming' : 'mine';
   const sessionView = 'upcoming';
-  const sessionsQuery = useListMySessions({ view: sessionView }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: sessionView }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
-  const historyQuery = useListMySessions({ view: 'past' }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: 'past' }), staleTime: 60_000, refetchInterval: roleResolved ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
+  const sessionsQuery = useListMySessions({ view: sessionView }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: sessionView }), staleTime: 60_000, refetchInterval: roleResolved && isFocused ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
+  const historyQuery = useListMySessions({ view: 'past' }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: 'past' }), staleTime: 60_000, refetchInterval: roleResolved && isFocused ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
   const rawScheduleSessions = useMemo(
     () => [...new Map([...(sessionsQuery.data ?? []), ...(historyQuery.data ?? [])].map((session) => [session.id, session])).values()],
     [historyQuery.data, sessionsQuery.data],
@@ -87,7 +92,7 @@ export default function BookingsScreen() {
         enabled: roleResolved,
         queryKey: getListBookingRequestsQueryKey({ view: requestView }),
         staleTime: role === 'teacher' ? 10_000 : 60_000,
-        refetchInterval: roleResolved ? (role === 'teacher' ? 15_000 : 60_000) : false,
+        refetchInterval: roleResolved && isFocused ? (role === 'teacher' ? 15_000 : 60_000) : false,
         refetchOnWindowFocus: role === 'teacher',
         refetchOnReconnect: true,
       },
@@ -97,7 +102,7 @@ export default function BookingsScreen() {
     queryKey: ['in-person-request-groups', role, profile?.id],
     enabled: roleResolved && Boolean(profile?.id) && Boolean(supabase),
     staleTime: 15_000,
-    refetchInterval: roleResolved ? (role === 'teacher' ? 20_000 : 60_000) : false,
+    refetchInterval: roleResolved && isFocused ? (role === 'teacher' ? 20_000 : 60_000) : false,
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
     queryFn: async () => {
@@ -988,7 +993,7 @@ function BookingRequestCard({ request, groupCount = 1, groupItems = [request], c
     : `${remainingMinutes} ${t('دقيقة', 'min')}`;
   useEffect(() => {
     if (request.status !== 'open' || !expiryDate || remainingMs === null || remainingMs <= 0) return undefined;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(Date.now()), 5_000);
     return () => clearInterval(timer);
   }, [request.status, request.expiresAt, remainingMs]);
   useEffect(() => {
