@@ -133,7 +133,10 @@ async function createInstantSession({
   }
   const balance = aggregateStudentBalance(subscriptions ?? []);
   if (!balance || balance.remainingMinutes < 15) {
-    throw instantSessionError(`لا يمكن بدء جلسة فورية مع ${participantName}: تحتاج إلى باقة نشطة بها 15 دقيقة على الأقل.`);
+    const availableMinutes = balance?.remainingMinutes ?? 0;
+    throw instantSessionError(
+      `لا يمكن بدء جلسة فورية مع ${participantName}: الرصيد النشط الذي قرأه التطبيق ${availableMinutes} دقيقة، والحد الأدنى 15 دقيقة.`,
+    );
   }
 
   const teacherId = participantId;
@@ -152,36 +155,34 @@ async function createInstantSession({
     .single();
   if (bookingError || !booking) {
     if (bookingError?.message?.includes("INSUFFICIENT_BALANCE") || bookingError?.code === "P0001") {
-      throw instantSessionError("لا يمكن بدء الجلسة الفورية: يجب توفر 15 دقيقة على الأقل في الباقة.");
+      throw instantSessionError(
+        `ظهر للتطبيق رصيد نشط قدره ${balance.remainingMinutes} دقيقة، لكن تحقق المنصة النهائي رفض الطلب. قد تكون هناك دقائق محجوزة أو أن رصيد المنصة يحتاج إلى تحديث.`,
+      );
     }
     throw bookingError ?? instantSessionError("تعذر إنشاء طلب الجلسة الفورية.");
   }
 
-  void (async () => {
-    const { error: notificationError } = await supabase.from("notifications").insert({
-      user_id: teacherId,
-      title: "طلب جلسة فورية",
-      body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
-      type: "instant_session",
-      link: `/bookings?bookingId=${encodeURIComponent(booking.id as string)}`,
+  let notificationQueued = false;
+  try {
+    const notificationResult = await customFetch<{ delivered: boolean }>("/api/push/notifications", {
+      method: "POST",
+      body: JSON.stringify({
+        recipientId: teacherId,
+        title: "طلب جلسة فورية",
+        body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
+        type: "instant_session",
+        route: "/bookings",
+        bookingId: booking.id,
+      }),
     });
-    if (notificationError) {
-      await customFetch<{ delivered: boolean }>("/api/push/notifications", {
-        method: "POST",
-        body: JSON.stringify({
-          recipientId: teacherId,
-          title: "طلب جلسة فورية",
-          body: "يريد الطالب بدء جلسة فورية معك. افتح الحجوزات للقبول.",
-          type: "instant_session",
-          route: "/bookings",
-          bookingId: booking.id,
-        }),
-      }).catch(() => undefined);
-    }
-  })().catch(() => undefined);
-  // The booking is authoritative. A notification delivery failure must not
-  // make the user retry and accidentally create a second instant booking.
-  return booking.id as string;
+    notificationQueued = notificationResult.delivered;
+  } catch {
+    console.warn("[instant-session] Request was saved, but notification delivery was not confirmed.");
+  }
+
+  // The booking is authoritative. Never ask the student to retry a saved
+  // request just because its notification could not be confirmed.
+  return { bookingId: String(booking.id), notificationQueued };
 }
 
 type UploadAsset = {
@@ -1467,12 +1468,17 @@ export default function MessagesScreen() {
     if (!selected || !user || role !== "student" || instantSessionBusy) return;
     setInstantSessionBusy(true);
     try {
-      await createInstantSession({
+      const result = await createInstantSession({
         userId: user.id,
         participantId: selected.participantId,
         participantName: selected.name,
       });
-      Alert.alert("تم إرسال طلب الجلسة", "تم إرسال الطلب للطرف الآخر. ستظهر الجلسة بعد القبول.");
+      Alert.alert(
+        result.notificationQueued ? "تم تسجيل طلب الجلسة" : "تم تسجيل الطلب دون تأكيد الإشعار",
+        result.notificationQueued
+          ? "تم حفظ الطلب وتسجيل إشعار المعلم في المنصة. ستظهر الجلسة بعد القبول."
+          : "الطلب محفوظ وسيظهر في الحجوزات، لكن تعذر تأكيد إشعار المعلم. لا تنشئ طلباً جديداً؛ تابع الطلب من الحجوزات.",
+      );
       await load();
     } catch (error: unknown) {
       Alert.alert("تعذر بدء الجلسة الفورية", error instanceof Error ? error.message : "تحقق من الرصيد والاتصال ثم حاول مرة أخرى.");
