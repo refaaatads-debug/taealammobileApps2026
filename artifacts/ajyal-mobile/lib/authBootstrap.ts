@@ -6,6 +6,14 @@ export type AuthBootstrapUser = {
   profileImageUrl: string | null;
 };
 
+export function shouldRenderSignInForm(state: {
+  isLoading: boolean;
+  isAuthenticated: boolean;
+  isPublicRoute: boolean;
+}): boolean {
+  return !state.isLoading && !state.isAuthenticated && !state.isPublicRoute;
+}
+
 /**
  * Wait for both initial Supabase checks before confirming a signed-out state.
  * Either source can restore a non-empty session first.

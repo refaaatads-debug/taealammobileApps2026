@@ -1,6 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createInitialAuthBootstrapGate } from "../authBootstrap.ts";
+import { createInitialAuthBootstrapGate, shouldRenderSignInForm } from "../authBootstrap.ts";
+
+test("the sign-in form stays hidden while a saved session is being restored", () => {
+  assert.equal(shouldRenderSignInForm({
+    isLoading: true,
+    isAuthenticated: false,
+    isPublicRoute: false,
+  }), false);
+});
+
+test("the sign-in form appears after restoration confirms a signed-out protected route", () => {
+  assert.equal(shouldRenderSignInForm({
+    isLoading: false,
+    isAuthenticated: false,
+    isPublicRoute: false,
+  }), true);
+});
+
+test("public routes and authenticated users never show the sign-in form", () => {
+  assert.equal(shouldRenderSignInForm({
+    isLoading: false,
+    isAuthenticated: false,
+    isPublicRoute: true,
+  }), false);
+  assert.equal(shouldRenderSignInForm({
+    isLoading: false,
+    isAuthenticated: true,
+    isPublicRoute: false,
+  }), false);
+});
 
 function makeState() {
   let state = { user: null, isLoading: true };

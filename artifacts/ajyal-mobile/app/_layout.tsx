@@ -28,6 +28,7 @@ import { clearRememberedLogin } from '@/lib/rememberedLogin';
 import { shouldAutoOpenStartedSession } from '@/lib/liveSessionRoute';
 import OnboardingScreen from '@/components/OnboardingScreen';
 import TeacherReviewAccessScreen from '@/components/TeacherReviewAccessScreen';
+import { shouldRenderSignInForm } from '@/lib/authBootstrap';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -335,7 +336,14 @@ function RootLayoutNav() {
       </View>
     );
   }
-  if (!isPasswordRecovery && !isAuthenticated && !isPublicRoute) {
+  if (
+    !isPasswordRecovery &&
+    shouldRenderSignInForm({
+      isLoading: authLoading,
+      isAuthenticated,
+      isPublicRoute,
+    })
+  ) {
     const isSignup = authMode === 'signup';
     const openForgotPassword = () => {
       router.push('/forgot-password');
