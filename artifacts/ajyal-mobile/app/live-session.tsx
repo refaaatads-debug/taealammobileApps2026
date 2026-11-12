@@ -757,7 +757,7 @@ export default function LiveSessionScreen() {
               <Icon name={rtc.muted ? 'mic-off' : 'mic'} size={17} color={rtc.muted ? colors.destructive : colors.teal} />
               <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.muted ? 'إلغاء الكتم' : 'كتم الصوت'}</Text>
             </Pressable>
-            {Platform.OS === 'android' && rtc.transportProvider === 'agora' ? (
+            {role === 'teacher' && Platform.OS === 'android' && rtc.transportProvider === 'agora' ? (
               <Pressable
                 testID="toggle-session-screen-share"
                 accessibilityRole="button"
