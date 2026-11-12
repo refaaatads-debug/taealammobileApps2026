@@ -107,15 +107,22 @@ export const LogoutMobileSessionResponse = zod.object({
 
 
 /**
- * @summary Register the authenticated user's Expo push token
+ * @summary Register the authenticated user's device push tokens
  */
 export const registerPushTokenBodyTokenMax = 512;
 
+export const registerPushTokenBodyApnsVoipTokenMin = 64;
+export const registerPushTokenBodyApnsVoipTokenMax = 64;
+
+
+export const registerPushTokenBodyApnsVoipTokenRegExp = new RegExp('^[0-9a-fA-F]{64}$');
 
 
 export const RegisterPushTokenBody = zod.object({
   "token": zod.string().min(1).max(registerPushTokenBodyTokenMax),
-  "platform": zod.enum(['ios', 'android'])
+  "platform": zod.enum(['ios', 'android']),
+  "apnsVoipToken": zod.string().min(registerPushTokenBodyApnsVoipTokenMin).max(registerPushTokenBodyApnsVoipTokenMax).regex(registerPushTokenBodyApnsVoipTokenRegExp).optional().describe('Optional iOS PushKit VoIP device token.'),
+  "apnsVoipEnvironment": zod.enum(['production', 'sandbox']).optional().describe('APNs environment for the PushKit token; required with apnsVoipToken.')
 })
 
 export const RegisterPushTokenResponse = zod.object({
@@ -143,6 +150,8 @@ export const sendUserNotificationBodyTypeMax = 80;
 
 export const sendUserNotificationBodyBookingIdMax = 128;
 
+export const sendUserNotificationBodySupportTicketIdMax = 128;
+
 
 
 export const SendUserNotificationBody = zod.object({
@@ -151,7 +160,9 @@ export const SendUserNotificationBody = zod.object({
   "body": zod.string().min(1).max(sendUserNotificationBodyBodyMax),
   "type": zod.string().min(1).max(sendUserNotificationBodyTypeMax),
   "route": zod.enum(['/bookings', '/messages', '/notifications', '/assignments', '/support', '/subscription', '/invoices', '/profile']).optional(),
-  "bookingId": zod.string().min(1).max(sendUserNotificationBodyBookingIdMax).optional()
+  "bookingId": zod.string().min(1).max(sendUserNotificationBodyBookingIdMax).optional(),
+  "supportTicketId": zod.string().min(1).max(sendUserNotificationBodySupportTicketIdMax).optional(),
+  "imageUrl": zod.string().optional().describe('HTTPS image URL for rich push notifications.')
 })
 
 export const SendUserNotificationResponse = zod.object({
@@ -283,6 +294,7 @@ export const GetTeacherDashboardResponse = zod.object({
   "scheduledAt": zod.coerce.date(),
   "duration": zod.string(),
   "tone": zod.enum(['teal', 'gold', 'navy']),
+  "deliveryMode": zod.enum(['online', 'in_person']).optional(),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
 })),
@@ -309,6 +321,7 @@ export const ListMySessionsResponseItem = zod.object({
   "scheduledAt": zod.coerce.date(),
   "duration": zod.string(),
   "tone": zod.enum(['teal', 'gold', 'navy']),
+  "deliveryMode": zod.enum(['online', 'in_person']).optional(),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
 })
@@ -366,6 +379,7 @@ export const GetStudentDashboardResponse = zod.object({
   "scheduledAt": zod.coerce.date(),
   "duration": zod.string(),
   "tone": zod.enum(['teal', 'gold', 'navy']),
+  "deliveryMode": zod.enum(['online', 'in_person']).optional(),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
 })),
@@ -448,6 +462,7 @@ export const CancelSessionResponse = zod.object({
   "scheduledAt": zod.coerce.date(),
   "duration": zod.string(),
   "tone": zod.enum(['teal', 'gold', 'navy']),
+  "deliveryMode": zod.enum(['online', 'in_person']).optional(),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
 })
@@ -684,7 +699,8 @@ export const ListMyNotificationsResponseItem = zod.object({
   "unread": zod.boolean(),
   "type": zod.string().optional().describe('Notification category from the platform'),
   "route": zod.string().optional().describe('In-app route to open when the notification is pressed'),
-  "bookingId": zod.string().optional().describe('Related booking identifier when available')
+  "bookingId": zod.string().optional().describe('Related booking identifier when available'),
+  "imageUrl": zod.string().optional().describe('Optional HTTPS image URL attached to the notification')
 })
 export const ListMyNotificationsResponse = zod.array(ListMyNotificationsResponseItem)
 
@@ -708,7 +724,8 @@ export const MarkNotificationReadResponse = zod.object({
   "unread": zod.boolean(),
   "type": zod.string().optional().describe('Notification category from the platform'),
   "route": zod.string().optional().describe('In-app route to open when the notification is pressed'),
-  "bookingId": zod.string().optional().describe('Related booking identifier when available')
+  "bookingId": zod.string().optional().describe('Related booking identifier when available'),
+  "imageUrl": zod.string().optional().describe('Optional HTTPS image URL attached to the notification')
 })
 
 

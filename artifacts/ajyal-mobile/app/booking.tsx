@@ -259,7 +259,6 @@ export default function BookingScreen() {
           .eq('user_id', user.id)
           .eq('is_active', true)
           .gt('remaining_minutes', 0)
-          .or(`ends_at.is.null,ends_at.gte.${nowIso}`)
           .order('ends_at', { ascending: true }),
         supabase
           .from('bookings')
@@ -386,20 +385,13 @@ export default function BookingScreen() {
       }
       setDirectTeacherAvailabilityLoading(true);
       setDirectTeacherAvailabilityError(false);
-      const [publicResult, profileResult] = await Promise.all([
-        supabase
+      const publicResult = await supabase
           .from('public_teacher_profiles')
           .select('available_days, available_from, available_to')
           .eq('user_id', teacherId)
-          .maybeSingle(),
-        supabase
-          .from('teacher_profiles')
-          .select('available_days, available_from, available_to')
-          .eq('user_id', teacherId)
-          .maybeSingle(),
-      ]);
+          .maybeSingle();
       if (!mounted) return;
-      if (publicResult.error && profileResult.error) {
+      if (publicResult.error) {
         setDirectTeacherAvailability(null);
         setDirectTeacherAvailabilityError(true);
         setDirectTeacherAvailabilityLoading(false);
@@ -410,23 +402,13 @@ export default function BookingScreen() {
         available_from?: unknown;
         available_to?: unknown;
       } | null;
-      const profileRow = profileResult.data as {
-        available_days?: unknown;
-        available_from?: unknown;
-        available_to?: unknown;
-      } | null;
       const publicDays = normalizeDays(publicRow?.available_days);
-      const profileDays = normalizeDays(profileRow?.available_days);
       setDirectTeacherAvailability({
-        availableDays: publicDays.length ? publicDays : profileDays,
-        availableFrom: typeof profileRow?.available_from === 'string'
-          ? profileRow.available_from
-          : typeof publicRow?.available_from === 'string'
+        availableDays: publicDays,
+        availableFrom: typeof publicRow?.available_from === 'string'
             ? publicRow.available_from
             : null,
-        availableTo: typeof profileRow?.available_to === 'string'
-          ? profileRow.available_to
-          : typeof publicRow?.available_to === 'string'
+        availableTo: typeof publicRow?.available_to === 'string'
             ? publicRow.available_to
             : null,
       });
@@ -676,6 +658,34 @@ export default function BookingScreen() {
             </Pressable>
           </>
         )}
+        <Pressable
+          testID="booking-in-person"
+          accessibilityRole="button"
+          accessibilityLabel={t('حجز معلم حضوري', 'Book an in-person teacher')}
+          onPress={() => router.push('/in-person')}
+          style={({ pressed }) => [
+            styles.inPersonChoice,
+            {
+              backgroundColor: colors.tealSoft,
+              borderColor: colors.border,
+              flexDirection: direction === 'rtl' ? 'row-reverse' : 'row',
+            },
+            pressed && { opacity: 0.75 },
+          ]}
+        >
+          <View style={[styles.inPersonChoiceIcon, { backgroundColor: colors.card }]}>
+            <Icon name="map-pin" size={17} color={colors.teal} />
+          </View>
+          <View style={[styles.inPersonChoiceCopy, { alignItems: direction === 'rtl' ? 'flex-end' : 'flex-start' }]}>
+            <Text style={[styles.inPersonChoiceTitle, { color: colors.foreground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>
+              {t('حجز معلم حضوري', 'Book an in-person teacher')}
+            </Text>
+            <Text style={[styles.inPersonChoiceSubtitle, { color: colors.mutedForeground, writingDirection: direction, textAlign: direction === 'rtl' ? 'right' : 'left' }]}>
+              {t('اختر المدينة والعنوان والموعد', 'Choose a city, address, and time')}
+            </Text>
+          </View>
+          <Icon name={direction === 'rtl' ? 'chevron-left' : 'chevron-right'} size={17} color={colors.teal} />
+        </Pressable>
         {openTeachersQuery.isLoading && (!teacherId || needsTeacherDirectoryFallback) ? <Text style={[styles.availabilityEmpty, { color: colors.mutedForeground }]}>جارٍ قراءة Availability المعلمين المؤهلين…</Text> : null}
         {openTeachersQuery.isError && (!teacherId || needsTeacherDirectoryFallback) ? <Text style={[styles.availabilityEmpty, { color: colors.destructive }]}>تعذر قراءة المعلمين المؤهلين من المنصة.</Text> : null}
          {!balanceLoading && projectedRemainingMinutes !== null ? <View style={[styles.balanceCard, { backgroundColor: projectedRemainingMinutes > 0 ? colors.tealSoft : colors.accent, borderColor: projectedRemainingMinutes > 0 ? colors.teal : colors.border }]}>
@@ -835,6 +845,11 @@ const styles = StyleSheet.create({
   modeOption: { flex: 1, minHeight: 49, borderRadius: 11, borderWidth: 1, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' },
   modeText: { fontSize: 12, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   modeHint: { fontSize: 9, fontFamily: 'Inter_400Regular', marginTop: 3, writingDirection: 'rtl' },
+  inPersonChoice: { minHeight: 60, borderRadius: 14, borderWidth: 1, paddingHorizontal: 11, paddingVertical: 9, alignItems: 'center', gap: 9, marginBottom: 14 },
+  inPersonChoiceIcon: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  inPersonChoiceCopy: { flex: 1, gap: 3 },
+  inPersonChoiceTitle: { width: '100%', fontSize: 12, fontFamily: 'Inter_700Bold' },
+  inPersonChoiceSubtitle: { width: '100%', fontSize: 10, fontFamily: 'Inter_400Regular' },
   selectedTeacherCard: { minHeight: 66, borderRadius: 15, borderWidth: 1, paddingHorizontal: 13, paddingVertical: 10, flexDirection: 'row-reverse', alignItems: 'center', gap: 10 },
   selectedTeacherCopy: { flex: 1, alignItems: 'flex-end' },
   selectedTeacherLabel: { width: '100%', fontSize: 10, fontFamily: 'Inter_500Medium', textAlign: 'right', writingDirection: 'rtl' },

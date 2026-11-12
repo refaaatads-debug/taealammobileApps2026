@@ -8,7 +8,7 @@ type OptionDropdownProps = {
   label: string;
   value: string;
   placeholder: string;
-  options: string[];
+  options: Array<string | { value: string; label: string }>;
   onChange: (value: string) => void;
   testID: string;
   loading?: boolean;
@@ -28,7 +28,11 @@ export function OptionDropdown({
   const colors = useColors();
   const { direction, t } = useAppPreferences();
   const [open, setOpen] = useState(false);
+  const normalizedOptions = options.map((option) => typeof option === "string"
+    ? { value: option, label: option }
+    : option);
   const selected = value || placeholder;
+  const selectedLabel = normalizedOptions.find((option) => option.value === value)?.label ?? selected;
 
   return (
     <>
@@ -56,7 +60,7 @@ export function OptionDropdown({
               { color: value ? colors.foreground : colors.mutedForeground, writingDirection: direction },
             ]}
           >
-            {loading ? t("جارٍ تحميل الخيارات…", "Loading options…") : selected}
+            {loading ? t("جارٍ تحميل الخيارات…", "Loading options…") : selectedLabel}
           </Text>
         </Pressable>
       </View>
@@ -72,14 +76,14 @@ export function OptionDropdown({
               <Text style={[styles.sheetTitle, { color: colors.foreground, writingDirection: direction }]}>{label}</Text>
             </View>
             <ScrollView style={styles.options} contentContainerStyle={styles.optionsContent} showsVerticalScrollIndicator={false}>
-              {options.map((option) => {
-                const active = option === value;
+              {normalizedOptions.map((option) => {
+                const active = option.value === value;
                 return (
                   <Pressable
-                    key={option}
-                    testID={`${testID}-option-${option}`}
+                    key={option.value}
+                    testID={`${testID}-option-${option.value}`}
                     onPress={() => {
-                      onChange(option);
+                      onChange(option.value);
                       setOpen(false);
                     }}
                     style={({ pressed }) => [
@@ -89,7 +93,7 @@ export function OptionDropdown({
                     ]}
                   >
                     <Icon name={active ? "check" : "circle"} size={16} color={active ? colors.teal : colors.mutedForeground} />
-                    <Text style={[styles.optionText, { color: active ? colors.teal : colors.foreground, writingDirection: direction }]}>{option}</Text>
+                    <Text style={[styles.optionText, { color: active ? colors.teal : colors.foreground, writingDirection: direction }]}>{option.label}</Text>
                   </Pressable>
                 );
               })}
