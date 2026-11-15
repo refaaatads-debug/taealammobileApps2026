@@ -15,6 +15,7 @@ import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, canStude
 import { getInPersonBookingIds } from '@/lib/inPersonBookingDetails';
 import { getInPersonBookingSnapshot } from '@/lib/inPersonBookingSnapshot';
 import { getTeacherInPersonDecisionOutcome, isTeacherBookingNotification, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
+import { applyBookingRequestStatusUpdate, filterBookingRequestGroupsByStatus, filterUnbookedAcceptedRequestGroups, groupBookingRequests } from '@/lib/bookingRequestPresentation';
 import SwipeDecisionControl from '@/components/SwipeDecisionControl';
 import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
 import StudentLocationLink from '@/components/StudentLocationLink';
@@ -137,6 +138,16 @@ export default function BookingsScreen() {
   const decisionMutation = useDecideBookingRequest({
     mutation: {
       onSuccess: async (_data, variables) => {
+        if (role === 'teacher') {
+          queryClient.setQueryData<BookingRequest[]>(
+            getListBookingRequestsQueryKey({ view: 'incoming' }),
+            (currentRequests) => applyBookingRequestStatusUpdate(
+              currentRequests,
+              { id: variables.id, groupId: variables.data.groupId, status: variables.data.status },
+              'teacher',
+            ),
+          );
+        }
         setDecisionFeedback(variables.data.status);
         await Promise.all([
           requestQuery.refetch(),
@@ -254,30 +265,17 @@ export default function BookingsScreen() {
   const isHistoryView = view === 'past';
   const sessionListExpanded = !isHistoryView || historyExpanded;
   const requests = requestQuery.data ?? [];
-  const displayedRequests = useMemo(() => {
-    const groups = new Map<string, { request: BookingRequest; count: number; items: BookingRequest[] }>();
-    requests.forEach((request) => {
-      const key = request.groupId || request.id;
-      const existing = groups.get(key);
-      if (existing) {
-        existing.count += 1;
-        existing.items.push(request);
-      } else {
-        groups.set(key, { request, count: 1, items: [request] });
-      }
-    });
-    return [...groups.values()];
-  }, [requests]);
+  const displayedRequests = useMemo(() => groupBookingRequests(requests), [requests]);
   const incomingRequestRows = useMemo(
-    () => displayedRequests.filter(({ request }) => request.status === 'open'),
+    () => filterBookingRequestGroupsByStatus(displayedRequests, ['open']),
     [displayedRequests],
   );
   const inPersonRequestRows = inPersonRequestsQuery.data ?? [];
   const pendingInPersonRequestRows = inPersonRequestRows.filter((item) => String(item.status ?? 'open') === 'open');
   const acceptedInPersonRequestRows = inPersonRequestRows.filter((item) => String(item.status ?? '') === 'accepted');
   const acceptedRequestRows = useMemo(
-    () => displayedRequests.filter(({ request }) => request.status === 'accepted'),
-    [displayedRequests],
+    () => filterUnbookedAcceptedRequestGroups(displayedRequests, canonicalScheduleSessions),
+    [canonicalScheduleSessions, displayedRequests],
   );
   const completedSessions = (historyQuery.data ?? []).filter((session) => session.status === 'done');
   const [todayKey, setTodayKey] = useState(() => localDayKey(new Date()));
@@ -289,7 +287,7 @@ export default function BookingsScreen() {
     () => visibleSessions.filter((session) => localDayKey(new Date(session.scheduledAt)) === todayKey && session.status === 'upcoming'),
     [todayKey, visibleSessions],
   );
-  const pendingRequestCount = (role === 'teacher' ? incomingRequestRows.length : displayedRequests.filter(({ request }) => request.status === 'open').length) + pendingInPersonRequestRows.length;
+  const pendingRequestCount = incomingRequestRows.length + pendingInPersonRequestRows.length;
   const activeSessionCount = visibleSessions.filter((session) => session.status === 'upcoming' || session.sessionStatus === 'in_progress').length;
 
   useEffect(() => {
@@ -306,20 +304,16 @@ export default function BookingsScreen() {
           table: 'booking_requests',
           ...(role === 'student' ? { filter: `student_id=eq.${profile.id}` } : {}),
         }, (payload) => {
-          if (role === 'teacher' && payload.eventType === 'UPDATE') {
+          if (payload.eventType === 'UPDATE') {
             const updatedRequest = payload.new as Record<string, unknown>;
-            if (updatedRequest.status === 'cancelled') {
-              const cancelledId = String(updatedRequest.id ?? '');
-              const cancelledGroupId = String(updatedRequest.group_id ?? '');
-              if (cancelledId) {
-                queryClient.setQueryData<BookingRequest[]>(
-                  getListBookingRequestsQueryKey({ view: 'incoming' }),
-                  (currentRequests) => currentRequests?.filter((request) =>
-                    request.id !== cancelledId
-                    && (!cancelledGroupId || request.groupId !== cancelledGroupId)),
-                );
-              }
-            }
+            queryClient.setQueryData<BookingRequest[]>(
+              getListBookingRequestsQueryKey({ view: requestView }),
+              (currentRequests) => applyBookingRequestStatusUpdate(
+                currentRequests,
+                updatedRequest,
+                role === 'teacher' ? 'teacher' : 'student',
+              ),
+            );
           }
           void requestQuery.refetch();
           void sessionsQuery.refetch();
@@ -345,7 +339,8 @@ export default function BookingsScreen() {
           schema: 'public',
           table: 'bookings',
           filter: `${role === 'student' ? 'student_id' : 'teacher_id'}=eq.${profile.id}`,
-        }, () => {
+        }, (payload) => {
+          if (payload.eventType === 'INSERT') void requestQuery.refetch();
           void sessionsQuery.refetch();
           void historyQuery.refetch();
           void inPersonRequestsQuery.refetch();
@@ -374,7 +369,7 @@ export default function BookingsScreen() {
         console.warn('[bookings] Could not remove realtime channel:', error);
       });
     };
-  }, [historyQuery.refetch, inPersonRequestsQuery.refetch, role, profile?.id, queryClient, requestQuery.refetch, sessionsQuery.refetch]);
+  }, [historyQuery.refetch, inPersonRequestsQuery.refetch, role, profile?.id, queryClient, requestQuery.refetch, requestView, sessionsQuery.refetch]);
 
   const openSession = (id: string) => {
     const session = scheduleSessions.find((item) => item.id === id);
@@ -642,7 +637,7 @@ export default function BookingsScreen() {
   ];
   const selectedStudentRequest = studentRequestOptions.find((option) => option.key === studentRequestSection) ?? studentRequestOptions[0];
   const selectedStudentRequestRows = selectedStudentRequest.key === 'pending'
-    ? displayedRequests.filter(({ request }) => request.status === 'open')
+    ? incomingRequestRows
     : acceptedRequestRows;
   const selectedInPersonRequestRows = selectedStudentRequest.key === 'pending'
     ? pendingInPersonRequestRows
@@ -671,7 +666,7 @@ export default function BookingsScreen() {
           const count = option.key === 'completed'
             ? completedSessions.length
             : option.key === 'pending'
-              ? displayedRequests.filter(({ request }) => request.status === 'open').length + pendingInPersonRequestRows.length
+              ? incomingRequestRows.length + pendingInPersonRequestRows.length
               : acceptedRequestRows.length + acceptedInPersonRequestRows.length;
           return (
             <Pressable

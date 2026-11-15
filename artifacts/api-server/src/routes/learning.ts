@@ -32,6 +32,7 @@ import { findNotificationImageUrl } from "../lib/notificationImage";
 import { persistPlatformNotifications } from "../lib/platformNotifications";
 import { activeStudentSubscriptionFilters } from "../lib/studentSubscriptionBalance";
 import { getSupabaseProfile, hasSupabaseRole, readBearerToken, supabaseRpc, supabaseTable } from "../lib/supabaseAuth";
+import { normalizeBookingRequestStatus } from "../lib/bookingRequestStatus";
 import { normalizeStage, normalizeStageList } from "../lib/teachingStages";
 import { resolveSessionPresentationStatus, sessionTeachingDurationMinutes } from "../lib/sessionPresentation";
 
@@ -420,7 +421,7 @@ function mapRemoteSession(row: RemoteRow, userId: string, people: Map<string, Re
 function mapRemoteBookingRequest(row: RemoteRow, studentName: string | null) {
   const rawStatus = remoteString(row, "status") ?? "open";
   const expiresAt = remoteDate(row, "expires_at", "expiresAt");
-  const status = rawStatus === "open" && expiresAt.getTime() <= Date.now() ? "expired" : rawStatus;
+  const status = normalizeBookingRequestStatus(rawStatus, expiresAt.getTime() <= Date.now());
   return {
     id: String(row.id),
     studentId: remoteString(row, "student_id", "studentId") ?? "",
@@ -430,7 +431,7 @@ function mapRemoteBookingRequest(row: RemoteRow, studentName: string | null) {
     scheduledAt: remoteDate(row, "scheduled_at", "scheduledAt"),
     durationMinutes: remoteNumber(row, "duration_minutes", "durationMinutes") ?? 60,
     price: remoteNumber(row, "price"),
-    status: (["open", "accepted", "rejected", "cancelled", "expired"].includes(status) ? status : "open") as "open" | "accepted" | "rejected" | "cancelled" | "expired",
+    status,
     acceptedBy: remoteString(row, "accepted_by", "acceptedBy"),
     expiresAt,
     groupId: remoteString(row, "group_id", "groupId"),
