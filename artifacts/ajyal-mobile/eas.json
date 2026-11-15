@@ -31,5 +31,8 @@
         "EXPO_PUBLIC_APNS_ENV": "production"
       }
     }
+  },
+  "cli": {
+    "appVersionSource": "remote"
   }
 }

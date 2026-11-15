@@ -5,7 +5,7 @@ import LocationPicker from "@/components/InPersonLocationPicker";
 import type { GooglePlaceDetails } from "@/lib/googlePlaces";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { useColors } from "@/hooks/useColors";
-import { getAddressDeleteFailureMessage } from "@/lib/profileAddressErrors";
+import { getAddressDeleteFailureMessage, getLocationSaveFailureMessage } from "@/lib/profileAddressErrors";
 import { supabase } from "@/lib/supabase";
 
 type City = { id: string; name_ar: string };
@@ -240,8 +240,15 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
       }
       setSelectedPlace(null);
       await load();
-    } catch {
-      setError(t("تعذر حفظ الموقع. احتفظنا بالتعديلات؛ أعد المحاولة.", "Could not save the location. Your edits are still here; please retry."));
+    } catch (cause) {
+      const failureCode = cause && typeof cause === "object" && "code" in cause
+        ? String((cause as { code?: unknown }).code ?? "")
+        : "";
+      console.warn("تعذر حفظ موقع التدريس الحضوري.", {
+        code: failureCode || null,
+        message: cause instanceof Error ? cause.message : undefined,
+      });
+      setError(getLocationSaveFailureMessage(cause, direction === "rtl" ? "ar" : "en"));
     } finally {
       setSaving(false);
     }
