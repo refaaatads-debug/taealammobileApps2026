@@ -19,7 +19,7 @@ export async function joinAgoraWebSession(
 ) {
   const rtc = rtcOverride ?? (await import('agora-rtc-sdk-ng')).default;
   if (!rtc.checkSystemRequirements()) {
-    throw new Error('هذا المتصفح لا يدعم Agora WebRTC؛ جرّب متصفحًا حديثًا مع HTTPS.');
+    throw new Error('هذا المتصفح لا يدعم Agora Web SDK؛ جرّب متصفحًا حديثًا مع HTTPS.');
   }
   const client = rtc.createClient({ mode: 'rtc', codec: 'vp8' });
   let remoteAudioTrack: any = null;

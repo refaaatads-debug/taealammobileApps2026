@@ -1,7 +1,7 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
@@ -21,7 +21,7 @@ import { isAssignmentComplete } from '@/constants/localData';
 import { summarizePendingTeacherSubmissions } from '@/lib/teacherAssignmentTasks';
 import { DashboardActions, EmptyState, Header, Icon, IconName, LoadingBlock, Screen, SectionHeading, SessionCard, WelcomeBanner } from '@/components/AjyalUI';
 import TeacherInPersonCode from '@/components/TeacherInPersonCode';
-import { getListBookingRequestsQueryKey, getListMyAssignmentsQueryKey, useGetStudentDashboard, useGetTeacherDashboard, useListBookingRequests, useListMyAssignments } from '@workspace/api-client-react';
+import { getListBookingRequestsQueryKey, getListMyAssignmentsQueryKey, getListMyNotificationsQueryKey, getListMySessionsQueryKey, useGetStudentDashboard, useGetTeacherDashboard, useListBookingRequests, useListMyAssignments } from '@workspace/api-client-react';
 import { aggregateStudentBalance } from '@/lib/studentBalance';
 
 type TodayTask = {
@@ -39,6 +39,7 @@ export default function HomeScreen() {
   const isRTL = direction === 'rtl';
   const { role, profile, isLoading, isAuthenticated, roleResolved } = useAjyal();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const isTeacher = role === 'teacher';
   const canLoadRoleData = isAuthenticated && roleResolved;
   const earningsMonth = new Date().toISOString().slice(0, 7);
@@ -132,7 +133,7 @@ export default function HomeScreen() {
       queryKey: ['student-dashboard', user?.id],
       enabled: canLoadRoleData && !isTeacher,
       staleTime: 60_000,
-      refetchInterval: false,
+      refetchInterval: canLoadRoleData && !isTeacher ? 60_000 : false,
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
     },
@@ -141,6 +142,7 @@ export default function HomeScreen() {
     queryKey: ['student-active-balance', user?.id],
     enabled: canLoadRoleData && !isTeacher && Boolean(user?.id) && Boolean(supabase),
     staleTime: 30_000,
+    refetchInterval: canLoadRoleData && !isTeacher ? 60_000 : false,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     queryFn: async () => {
@@ -161,9 +163,9 @@ export default function HomeScreen() {
       queryKey: getListMyAssignmentsQueryKey(),
       enabled: canLoadRoleData,
       staleTime: 60_000,
-      refetchInterval: false,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
+      refetchInterval: canLoadRoleData ? 60_000 : false,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
     },
   });
   const teacherAssignmentIds = (assignmentsQuery.data ?? []).map((assignment) => assignment.id).filter(Boolean);
@@ -271,6 +273,67 @@ export default function HomeScreen() {
       });
     };
   }, [assignmentsQuery.refetch, canLoadRoleData, incomingRequestsQuery.refetch, isTeacher, profile?.id, teacherDashboardQuery.refetch, teacherInPersonRequestsQuery.refetch, teacherSubmissionsQuery.refetch, teacherNetSummaryQuery.refetch, teacherAvailableBalanceQuery.refetch]));
+  useEffect(() => {
+    const client = supabase;
+    const studentId = profile?.id;
+    if (!client || !canLoadRoleData || isTeacher || !studentId) return undefined;
+
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const pendingRefreshes = new Set<'requests' | 'sessions' | 'notifications' | 'subscriptions' | 'learning'>();
+    const scheduleStudentRefresh = (kind: 'requests' | 'sessions' | 'notifications' | 'subscriptions' | 'learning') => {
+      pendingRefreshes.add(kind);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        const refreshes = new Set(pendingRefreshes);
+        pendingRefreshes.clear();
+        const refreshDashboard = refreshes.has('requests')
+          || refreshes.has('sessions')
+          || refreshes.has('subscriptions')
+          || refreshes.has('learning');
+        if (refreshes.has('requests')) {
+          void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: 'mine' }) });
+        }
+        if (refreshes.has('sessions')) {
+          void queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: 'upcoming' }) });
+          void queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: 'past' }) });
+        }
+        if (refreshes.has('notifications')) {
+          void queryClient.invalidateQueries({ queryKey: getListMyNotificationsQueryKey() });
+        }
+        if (refreshes.has('subscriptions')) {
+          void studentBalanceQuery.refetch();
+        }
+        if (refreshes.has('learning')) {
+          void queryClient.invalidateQueries({ queryKey: getListMyAssignmentsQueryKey() });
+        }
+        if (refreshDashboard) void studentDashboardQuery.refetch();
+      }, 120);
+    };
+    const topic = `student-home-live-lists-${studentId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let channel: ReturnType<typeof client.channel> | null = null;
+    try {
+      channel = client
+        .channel(topic)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'booking_requests', filter: `student_id=eq.${studentId}` }, () => scheduleStudentRefresh('requests'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings', filter: `student_id=eq.${studentId}` }, () => scheduleStudentRefresh('sessions'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions' }, () => scheduleStudentRefresh('sessions'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${studentId}` }, () => scheduleStudentRefresh('notifications'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'user_subscriptions', filter: `user_id=eq.${studentId}` }, () => scheduleStudentRefresh('subscriptions'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'assignments' }, () => scheduleStudentRefresh('learning'))
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'assignment_submissions', filter: `student_id=eq.${studentId}` }, () => scheduleStudentRefresh('learning'))
+        .subscribe((status) => {
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn(`[student-home] Realtime channel ${status.toLowerCase()}; refresh-on-focus remains available.`);
+          }
+        });
+    } catch (error) {
+      console.warn('[student-home] Could not start realtime list updates:', error);
+    }
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (channel) void client.removeChannel(channel);
+    };
+  }, [assignmentsQuery.refetch, canLoadRoleData, isTeacher, profile?.id, queryClient, studentBalanceQuery.refetch, studentDashboardQuery.refetch, unreadChatQuery.refetch]);
   const assignments = assignmentsQuery.data ?? [];
   const pendingAssignments = assignments.filter((assignment) => !isAssignmentComplete(assignment));
   const teacherTaskSummary = summarizePendingTeacherSubmissions(

@@ -1,23 +1,30 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { getListMyStudentsQueryKey, useListMyStudents } from '@workspace/api-client-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { EmptyState, Header, Icon, LoadingBlock, ProgressBar, Screen, SectionHeading } from '@/components/AjyalUI';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { useInternalCall } from '@/contexts/InternalCallContext';
 import { useAuth } from '@/lib/auth';
 import { MaskedPhoneCallModal } from '@/components/MaskedPhoneCallModal';
+import { supabase } from '@/lib/supabase';
 
 export default function StudentsScreen() {
   const colors = useColors();
-  const { profile } = useAjyal();
+  const { profile, role } = useAjyal();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const { startOutgoingCall } = useInternalCall();
+  const studentsQueryKey = [...getListMyStudentsQueryKey(), user?.id ?? 'signed-out'];
   const query = useListMyStudents({
     query: {
-      queryKey: [...getListMyStudentsQueryKey(), user?.id ?? 'signed-out'],
+      queryKey: studentsQueryKey,
       staleTime: 30_000,
+      refetchInterval: user?.id && role === 'teacher' ? 60_000 : false,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
     },
   });
   const students = query.data ?? [];
@@ -27,6 +34,25 @@ export default function StudentsScreen() {
   useFocusEffect(useCallback(() => {
     if (user?.id) void query.refetch();
   }, [query.refetch, user?.id]));
+  useEffect(() => {
+    if (!supabase || !user?.id || role !== 'teacher') return;
+    const refreshStudents = () => {
+      void queryClient.invalidateQueries({ queryKey: studentsQueryKey });
+    };
+    const channel = supabase
+      .channel(`teacher-students-live-${user.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings', filter: `teacher_id=eq.${user.id}` }, refreshStudents)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'booking_requests' }, refreshStudents)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'assignment_submissions' }, refreshStudents)
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[students] Realtime channel ${status.toLowerCase()}; refresh-on-focus remains available.`);
+        }
+      });
+    return () => {
+      void supabase?.removeChannel(channel);
+    };
+  }, [queryClient, role, user?.id]);
 
   const startInternalCall = async (studentId: string, displayName: string) => {
     if (callingStudentId) return;

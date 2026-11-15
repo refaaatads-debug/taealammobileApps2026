@@ -13,7 +13,7 @@
       "buildNumber": "1",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية.",
-        "NSCameraUsageDescription": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
+        "NSCameraUsageDescription": "يحتاج التطبيق إلى الكاميرا عند التقاط صورة لمرفق أو حل داخل التطبيق.",
         "NSPhotoLibraryUsageDescription": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
       },
       "bitcode": false
@@ -30,10 +30,11 @@
         "android.permission.INTERNET",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.WAKE_LOCK",
-        "android.permission.BLUETOOTH"
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_CONNECT"
       ]
     },
     "web": {
@@ -69,13 +70,6 @@
       ],
       "@config-plugins/react-native-blob-util",
       "@config-plugins/react-native-pdf",
-      [
-        "@config-plugins/react-native-webrtc",
-        {
-          "cameraPermission": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
-          "microphonePermission": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية."
-        }
-      ],
       [
         "expo-notifications",
         {

@@ -17,11 +17,11 @@ export function parseSessionTimerSync(message: unknown): SessionTimerSync | null
 
 export function isSessionTimerPeerReady(input: {
   connectionState: string;
-  transportProvider: string | null;
+  transportProvider: "agora" | "unknown" | null;
   remoteUid: string | number | null;
 }): boolean {
   if (input.connectionState !== "connected") return false;
-  return input.transportProvider !== "agora" || input.remoteUid !== null;
+  return input.transportProvider === "agora" && input.remoteUid !== null;
 }
 
 export function getFinalSessionElapsed(snapshot: {

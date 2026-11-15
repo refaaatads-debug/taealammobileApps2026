@@ -1,4 +1,4 @@
-export type InternalCallProvider = 'agora' | 'webrtc';
+export type InternalCallProvider = 'agora';
 
 export type InternalCallTransportInfo = {
   transportProvider?: InternalCallProvider;
@@ -15,8 +15,10 @@ export type InternalCallAgoraTransport = {
 };
 
 export function chooseInternalCallProvider(call: InternalCallTransportInfo): InternalCallProvider {
-  if (call.transportProvider === 'agora' || call.callerAgoraCapable === true) return 'agora';
-  return 'webrtc';
+  // The mobile app no longer has a legacy peer-to-peer fallback. Request Agora for both
+  // newly created and still-ringing calls so the server can issue its token.
+  void call;
+  return 'agora';
 }
 
 export function parseInternalCallTransport(value: unknown, userId: string): InternalCallAgoraTransport {

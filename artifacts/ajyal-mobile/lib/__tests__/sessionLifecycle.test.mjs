@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isSessionEnded } from "../sessionLifecycle.ts";
+import { getMobileSessionExitCopy } from "../mobileSessionPolicy.ts";
 
 test("recognizes the teacher's authoritative ended_at update", () => {
   assert.equal(isSessionEnded({ endedAt: "2026-10-19T10:00:00.000Z" }), true);
@@ -18,4 +19,11 @@ test("recognizes cancelled sessions as terminal", () => {
 
 test("does not treat an in-progress session as ended", () => {
   assert.equal(isSessionEnded({ sessionStatus: "in_progress", bookingStatus: "confirmed" }), false);
+});
+
+test("ending a session is clearly described as ending for both participants", () => {
+  const copy = getMobileSessionExitCopy();
+  assert.equal(copy.action, "إنهاء الحصة");
+  assert.match(copy.body, /الطالب والمعلم/u);
+  assert.match(copy.body, /احتساب الرصيد/u);
 });

@@ -348,6 +348,7 @@ export default function BookingsScreen() {
         }, () => {
           void sessionsQuery.refetch();
           void historyQuery.refetch();
+          void inPersonRequestsQuery.refetch();
         })
         .on('postgres_changes', {
           event: '*',
@@ -358,6 +359,7 @@ export default function BookingsScreen() {
           // out of upcoming and into the historical schedule.
           void sessionsQuery.refetch();
           void historyQuery.refetch();
+          void inPersonRequestsQuery.refetch();
         })
         .subscribe((status) => {
           if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -372,7 +374,7 @@ export default function BookingsScreen() {
         console.warn('[bookings] Could not remove realtime channel:', error);
       });
     };
-  }, [historyQuery.refetch, role, profile?.id, queryClient, requestQuery.refetch, sessionsQuery.refetch]);
+  }, [historyQuery.refetch, inPersonRequestsQuery.refetch, role, profile?.id, queryClient, requestQuery.refetch, sessionsQuery.refetch]);
 
   const openSession = (id: string) => {
     const session = scheduleSessions.find((item) => item.id === id);

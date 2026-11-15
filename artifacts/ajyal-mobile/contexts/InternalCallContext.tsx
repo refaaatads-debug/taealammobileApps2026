@@ -10,7 +10,7 @@ import type * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/lib/auth';
-import { useInternalCallWebRTC } from '@/hooks/useInternalCallWebRTC';
+import { useInternalCallAgora } from '@/hooks/useInternalCallAgora';
 
 import { supabase } from '@/lib/supabase';
 import { useColors } from '@/hooks/useColors';
@@ -229,7 +229,7 @@ function parseCallPayload(data: Record<string, unknown>): IncomingCall | null {
     callerName,
     callerRole: asString(payload.callerRole),
     roomId: rawRoomId?.startsWith('call:') ? undefined : rawRoomId,
-    transportProvider: payload.transportProvider === 'agora' ? 'agora' : 'webrtc',
+    transportProvider: 'agora',
     callerAgoraCapable: typeof payload.callerAgoraCapable === 'boolean'
       ? payload.callerAgoraCapable
       : undefined,
@@ -248,7 +248,7 @@ function isAcceptedPayload(data: Record<string, unknown>): boolean {
 function remoteCallStatus(row: RemoteCallRow): CallStatus | null {
   const status = asString(row.status)?.toLowerCase();
   if (!status || status === 'ringing') return 'ringing';
-  // connecting means the callee accepted. Both sides must start WebRTC now;
+  // connecting means the callee accepted. Both sides can now join Agora;
   // treating it as active also prevents losing the initial offer.
   if (status === 'connecting' || status === 'connected' || status === 'active') return 'active';
   if (status === 'busy') return 'busy';
@@ -275,7 +275,7 @@ function remoteIncomingCall(row: RemoteCallRow, userId: string): { call: Incomin
       callerName,
       callerRole: asString(row.caller_role) ?? 'معلم',
       roomId: asString(row.booking_id) ?? asString(row.room_id),
-      transportProvider: row.transport_provider === 'agora' ? 'agora' : 'webrtc',
+      transportProvider: 'agora',
       callerAgoraCapable: row.caller_agora_capable === true,
       status,
     },
@@ -629,11 +629,10 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
     appNotificationPlayer.volume = 1;
     appNotificationPlayer.play();
   }, [appNotificationPlayer]);
-  const callAudio = useInternalCallWebRTC({
+  const callAudio = useInternalCallAgora({
     call,
     userId: user?.id,
     enabled: Boolean(isAuthenticated && call?.status === 'active'),
-    transportProvider: call?.transportProvider ?? 'webrtc',
   });
 
   useEffect(() => {
@@ -741,22 +740,12 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
   }, [user?.id]);
 
   const respondToCall = useCallback(async (currentCall: IncomingCall, accepted: boolean): Promise<InternalCallProvider> => {
-    let callerAgoraCapable = currentCall.callerAgoraCapable;
-    let transportProvider = currentCall.transportProvider ?? 'webrtc';
+    let transportProvider: InternalCallProvider = 'agora';
     if (supabase && !currentCall.id.startsWith('test-')) {
-      if (accepted && callerAgoraCapable === undefined) {
-        const { data: callRow, error: lookupError } = await supabase
-          .from('internal_calls')
-          .select('transport_provider,caller_agora_capable')
-          .eq('id', currentCall.id)
-          .maybeSingle();
-        if (lookupError || !callRow) throw new Error(lookupError?.message ?? 'تعذر قراءة إعدادات المكالمة.');
-        callerAgoraCapable = callRow.caller_agora_capable === true;
-        transportProvider = callRow.transport_provider === 'agora' ? 'agora' : 'webrtc';
-      }
-      const requestedProvider = accepted
-        ? chooseInternalCallProvider({ transportProvider, callerAgoraCapable })
-        : 'webrtc';
+      const requestedProvider = chooseInternalCallProvider({
+        transportProvider,
+        callerAgoraCapable: currentCall.callerAgoraCapable,
+      });
       const { data, error } = await supabase.rpc('respond_internal_call', {
         p_call_id: currentCall.id,
         p_accept: accepted,
@@ -1046,7 +1035,7 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       const { data, error } = await supabase.rpc('start_internal_call', {
         p_student_id: recipientId,
         p_booking_id: roomId?.trim() || null,
-        p_transport_provider: 'webrtc',
+        p_transport_provider: 'agora',
         p_caller_agora_capable: true,
       });
       if (error) throw new Error(error.message);
@@ -1064,11 +1053,10 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       callerName: user?.email ?? 'أجيال المعرفة',
       callerRole: 'معلم',
       roomId: deliveryRoomId,
-      // The caller must wait for the callee's acceptance before opening
-      // WebRTC; otherwise the initial offer can be sent before the callee
-      // subscribes and the call has no audio.
+      // Wait for acceptance before joining Agora so the callee is subscribed
+      // and ready to receive audio.
       status: 'ringing',
-      transportProvider: 'webrtc',
+      transportProvider: 'agora',
       callerAgoraCapable: true,
     });
     try {
@@ -1176,7 +1164,7 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       if (action === 'accept') {
         const transportProvider = current.status === 'ringing'
           ? await respondToCall(current, true)
-          : current.transportProvider ?? 'webrtc';
+          : current.transportProvider ?? 'agora';
         setCall({ ...current, status: 'active', transportProvider });
         void dismissCallNotifications(callId);
         return;

@@ -10,7 +10,7 @@
 - [Production PostgREST timeout](production-postgrest-timeout.md) — the public Supabase domain can return 57014/500 on REST introspection while Auth and table probes remain available.
 - [Teacher directory parity](teacher-directory-parity.md) — original teacher search joins approved profiles with subjects; empty availability means no schedule, not unrestricted availability.
 - [Booking lifecycle parity](booking-lifecycle-parity.md) — booking decisions are group-aware RPC flows with source-specific conflict, session, notification, and cancellation rules.
-- [In-person address sync](in-person-address-sync.md) — student bookings should reuse the saved profile address and refresh it when returning to the booking screen.
+- [Manual map selection boundary](manual-map-selection-boundary.md) — reverse-geocoded map points must not be treated as Google Places city records.
 - [In-person booking flow](in-person-booking-flow.md) — student request history belongs in Bookings; the creation flow selects stage before its related subjects.
 - [Session billing parity](session-billing-parity.md) — only ending a session through the platform session trigger can deduct minutes; cancellation has no proven automatic refund path.
 - [Teacher financial lifecycle](teacher-financial-lifecycle.md) — manual earnings and bonuses become withdrawable; requested and completed payouts must be tracked once.
@@ -21,7 +21,7 @@
 - [Expo native WebRTC](expo-native-webrtc.md) — native calls require a Development Build and Expo config plugin; Expo Go is not enough.
 - [WebRTC receive-only fallback](webrtc-receive-only-fallback.md) — missing mobile media devices must not block joining; negotiate recvonly audio/video and show a nonfatal warning.
 - [Expo Go notifications](expo-go-notifications.md) — avoid importing expo-notifications at module evaluation time on Android Expo Go; load it only in supported builds.
-- [Mobile session device policy](mobile-session-device-policy.md) — students may request global end after confirmation; the teacher platform owns the persisted billing transition.
+- [Mobile session completion policy](mobile-session-device-policy.md) — preserve the existing Agora end signal to the platform teacher; the database trigger remains the billing authority.
 - [Expo Router custom tabs](expo-router-custom-tabs.md) — current Expo Router expects the custom tab bar on Tabs itself, not inside screenOptions.
 - [Expo Router platform code separation](expo-router-platform-separation.md) — keep platform-only test modules outside app route files when native bundle exclusion must be verified.
 - [Chat attachments in production](chat-attachments-production.md) — chat-files uploads must use booking paths; production storage is private and needs signed URL resolution.
@@ -71,7 +71,7 @@
 - [Expo Preview build gating](expo-preview-build-gating.md) — reuse a fresh static bundle on workflow restarts; repeated export can restart the Workspace and look like Preview reloads.
 - [Replit Expo Go simulator routing](expo-go-simulator-routing.md) — force Expo Go when expo-dev-client is installed and proxy native requests through the artifact port.
 - [Mobile API workflow dependency](mobile-api-workflow-dependency.md) — authenticated native startup needs the API artifact workflow running alongside Expo.
-- [GitHub connector publishing](github-connector-publishing.md) — sync app/API changes to `replit-dev`; deploy VPS only for API changes, and keep remote history intact.
+- [GitHub connector publishing](github-connector-publishing.md) — before each APK, verify `replit-dev` matches the workspace and report checks plus device-only gaps.
 - [Agora development branch](agora-replit-branching.md) — keep Agora changes in Replit until the user approves specific changes for GitHub.
 - [GitHub workflow publishing](github-workflow-publishing.md) — workflow files may need GitHub web UI creation when the connector lacks workflow-write permission.
 - [EAS build quota](eas-build-quota.md) — a generic GitHub exit 1 can mean Expo cloud Android builds are exhausted after upload succeeds.
@@ -87,3 +87,5 @@
 - [In-person session lifecycle parity](in-person-session-lifecycle.md) — attendance starts in-person teaching; the saved admin duration controls completion, separate from saved package debit.
 - [In-person credit history access](in-person-credit-history-access.md) — read reservation/refund ledgers through an ownership-checked RPC; the student client lacks table-level SELECT.
 - [Development Supabase target](supabase-development-target.md) — Replit development currently points at the production Supabase domain; do not run live student searches there.
+- [Canvas preview host resolution](canvas-preview-host-resolution.md) — runtime `REPLIT_DOMAINS` may be absent from `viewEnvVars`; resolve it from the shell for mockup iframe URLs.
+- [Mobile realtime and polling](mobile-realtime-polling.md) — filter live updates to relevant records and limit fallback polling to focused screens.

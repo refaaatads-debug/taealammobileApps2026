@@ -221,9 +221,12 @@ function useRealtimeRefresh(userId: string | undefined, tables: string[]) {
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     if (!supabase || !userId) return;
-    const channel = supabase.channel(`mobile-billing-${userId}-${tables.join("-")}`);
+    const topic = `mobile-billing-${userId}-${tables.join("-")}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const channel = supabase.channel(topic);
     for (const table of tables) {
-      const userColumn = table === "invoices" ? "student_id" : "user_id";
+      const userColumn = table === "invoices" ? "student_id"
+        : ["teacher_earnings", "withdrawal_requests", "teacher_payments"].includes(table) ? "teacher_id"
+          : "user_id";
       channel.on("postgres_changes", {
         event: "*",
         schema: "public",
@@ -231,7 +234,11 @@ function useRealtimeRefresh(userId: string | undefined, tables: string[]) {
         filter: `${userColumn}=eq.${userId}`,
       }, () => setRevision((value) => value + 1));
     }
-    channel.subscribe();
+    void channel.subscribe((status) => {
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn(`[billing] Realtime channel ${status.toLowerCase()}; refresh-on-focus remains available.`);
+      }
+    });
     return () => {
       void supabase?.removeChannel(channel);
     };
@@ -820,6 +827,7 @@ function WalletScreen() {
   const { user } = useAuth();
   const { role } = useAjyal();
   const { t, direction, locale, formatNumber } = useAppPreferences();
+  const revision = useRealtimeRefresh(user?.id, ["wallets", "wallet_transactions", "teacher_earnings", "withdrawal_requests", "teacher_payments"]);
   const query = useRemoteData(["wallet", user?.id, role], async () => {
     if (role !== "teacher" || !supabase || !user) return { wallet: null, transactions: [], earnings: [], earningsSummary: null, earningsBalanceError: null };
     const [walletResult, transactionsResult, earningsResult, withdrawalSummaryResult] = await Promise.all([
@@ -844,7 +852,12 @@ function WalletScreen() {
       earningsSummary,
       earningsBalanceError: withdrawalSummaryResult.error?.message ?? null,
     };
-  });
+  }, revision);
+  useEffect(() => {
+    if (role !== "teacher") return undefined;
+    const interval = setInterval(() => { void query.reload(); }, 60_000);
+    return () => clearInterval(interval);
+  }, [query.reload, role]);
   if (role !== "teacher") {
     return <Screen><SectionHeader eyebrow={t("صلاحيات الحساب", "Account access")} title={t("المحفظة والأرباح", "Wallet and earnings")} avatarText={user?.email?.slice(0, 1)} /><EmptyState icon="lock" title={t("هذه الصفحة للمعلم فقط", "Teachers only")} body={t("لا يمكن الوصول إلى بيانات المحفظة من حساب الطالب.", "Student accounts cannot access wallet data.")} /></Screen>;
   }

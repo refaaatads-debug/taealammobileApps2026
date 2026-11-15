@@ -4,5 +4,10 @@ export const modules: ModuleMap = {
   "./components/mockups/booking-swipe/Current.tsx": () => import("../components/mockups/booking-swipe/Current.tsx"),
   "./components/mockups/booking-swipe/PillProposal.tsx": () => import("../components/mockups/booking-swipe/PillProposal.tsx"),
   "./components/mockups/in-person-teacher-picker/Current.tsx": () => import("../components/mockups/in-person-teacher-picker/Current.tsx"),
-  "./components/mockups/in-person-teacher-picker/TeacherPickerSheet.tsx": () => import("../components/mockups/in-person-teacher-picker/TeacherPickerSheet.tsx")
+  "./components/mockups/in-person-teacher-picker/TeacherPickerSheet.tsx": () => import("../components/mockups/in-person-teacher-picker/TeacherPickerSheet.tsx"),
+  "./components/mockups/inperson-booking/BookingCompass.tsx": () => import("../components/mockups/inperson-booking/BookingCompass.tsx"),
+  "./components/mockups/inperson-booking/Current.tsx": () => import("../components/mockups/inperson-booking/Current.tsx"),
+  "./components/mockups/inperson-booking/ScheduleFirst.tsx": () => import("../components/mockups/inperson-booking/ScheduleFirst.tsx"),
+  "./components/mockups/inperson-booking/StepFlow.tsx": () => import("../components/mockups/inperson-booking/StepFlow.tsx"),
+  "./components/mockups/inperson-booking/UnifiedSummary.tsx": () => import("../components/mockups/inperson-booking/UnifiedSummary.tsx")
 };

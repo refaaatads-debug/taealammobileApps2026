@@ -5,12 +5,12 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { useColors } from '@/hooks/useColors';
 import { useInternalCall } from '@/contexts/InternalCallContext';
 import { useAjyal } from '@/hooks/useAjyal';
-import { useSessionWebRTC } from '@/hooks/useSessionWebRTC';
+import { useSessionAgora } from '@/hooks/useSessionAgora';
 import { customFetch } from '@workspace/api-client-react';
 import { SessionVideo } from '@/components/SessionVideo';
 import { SessionCollaboration } from '@/components/SessionCollaboration';
 import { SessionWhiteboard, normalizeWhiteboardAction, type WhiteboardAction } from '@/components/SessionWhiteboard';
-import type { SessionDataMessage } from '@/hooks/useSessionWebRTC';
+import type { SessionDataMessage } from '@/hooks/useSessionAgora';
 import {
   readPlatformWhiteboardPermission,
   readPlatformWhiteboardVisibility,
@@ -22,7 +22,9 @@ import { Header, Icon, Screen } from '@/components/AjyalUI';
 import { supabase } from '@/lib/supabase';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { shouldRedirectFromLiveSession } from '@/lib/liveSessionRoute';
-import { isSessionEnded, shouldRetrySessionEndRequest, type SessionLifecycleSnapshot } from '@/lib/sessionLifecycle';
+import { isSessionEnded, shouldRetrySessionEndRequest, shouldUseSessionEndRealtimeFallback, type SessionLifecycleSnapshot } from '@/lib/sessionLifecycle';
+import { createSessionEndBroadcast, isSessionEndBroadcastFromPeer, waitForSessionEndConfirmation } from '@/lib/sessionEnd';
+import { getMobileSessionExitCopy } from '@/lib/mobileSessionPolicy';
 import {
   getFinalSessionElapsed,
   isSessionTimerPeerReady,
@@ -49,6 +51,7 @@ export default function LiveSessionScreen() {
   const insets = useSafeAreaInsets();
   const { width: viewportWidth } = useWindowDimensions();
   const { profile, role } = useAjyal();
+  const sessionExitCopy = getMobileSessionExitCopy();
   const params = useLocalSearchParams<{ booking?: string }>();
   const { call, endCall, clearCall } = useInternalCall();
   const isStudent = role === 'student';
@@ -104,6 +107,9 @@ export default function LiveSessionScreen() {
   const latestTimerSyncRef = useRef<SessionTimerSync | null>(null);
   const timerPeerReadyRef = useRef(false);
   const lifecycleRefreshInFlightRef = useRef(false);
+  const sessionStatusChannelRef = useRef<any>(null);
+  const sessionStatusChannelReadyRef = useRef(false);
+  const sessionEndHandlerRef = useRef<(payload: unknown) => void>(() => undefined);
   useEffect(() => {
     setFullscreenControlsVisible(isFullscreen && whiteboardVisible);
   }, [isFullscreen, whiteboardVisible]);
@@ -129,7 +135,7 @@ export default function LiveSessionScreen() {
       if (isFullscreen) void ScreenOrientation.unlockAsync().catch(() => undefined);
     };
   }, [isFullscreen]);
-  const refreshLifecycle = useCallback(async (): Promise<SessionLifecycleSnapshot | null> => {
+  const refreshLifecycle = useCallback(async (): Promise<LiveSessionLifecycle | null> => {
     if (!supabase || !bookingId) return null;
     if (lifecycleRefreshInFlightRef.current) return null;
     lifecycleRefreshInFlightRef.current = true;
@@ -378,7 +384,7 @@ export default function LiveSessionScreen() {
       setWhiteboardVisible(false);
     }
   }, [appendWhiteboardAction, replaceWhiteboardActions]);
-  const rtc = useSessionWebRTC({
+  const rtc = useSessionAgora({
     bookingId,
     userId: profile?.id,
     enabled: shouldJoin && isStudent,
@@ -494,6 +500,81 @@ export default function LiveSessionScreen() {
   }, [clearCall, endCall, isCurrentCall, isSessionCallActive, rtc.stop]);
 
   useEffect(() => {
+    sessionEndHandlerRef.current = (payload: unknown) => {
+      void (async () => {
+        const currentUserId = profile?.id;
+        const current = await refreshLifecycle().catch(() => null);
+        if (!current || !currentUserId) return;
+        const peerUserId = current.studentId === currentUserId
+          ? current.teacherId
+          : current.teacherId === currentUserId
+            ? current.studentId
+            : null;
+        if (!isSessionEndBroadcastFromPeer(payload, currentUserId, peerUserId)) return;
+
+        const confirmed = await waitForSessionEndConfirmation(
+          () => refreshLifecycle(),
+          isSessionEnded,
+          { timeoutMs: 15_000, pollIntervalMs: 500 },
+        );
+        if (!confirmed) {
+          setLifecycleError('وصل طلب إنهاء الحصة، لكن المنصة لم تؤكد انتهاءها. بقيت الجلسة مفتوحة؛ أعد المحاولة.');
+        }
+      })();
+    };
+  }, [profile?.id, refreshLifecycle]);
+
+  useEffect(() => {
+    const client = supabase;
+    if (!bookingId || !client) return undefined;
+    sessionStatusChannelReadyRef.current = false;
+    const channel = client
+      .channel(`session-status-${bookingId}`)
+      .on('broadcast', { event: 'session-end' }, ({ payload }: { payload?: unknown }) => {
+        sessionEndHandlerRef.current(payload);
+      });
+    sessionStatusChannelRef.current = channel;
+    try {
+      channel.subscribe((status: string) => {
+        sessionStatusChannelReadyRef.current = status === 'SUBSCRIBED';
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.warn('تعذر الاشتراك في قناة إنهاء الجلسة:', status);
+        }
+      });
+    } catch (error) {
+      console.warn('تعذر تهيئة قناة إنهاء الجلسة:', error);
+    }
+    return () => {
+      sessionStatusChannelReadyRef.current = false;
+      if (sessionStatusChannelRef.current === channel) sessionStatusChannelRef.current = null;
+      void client.removeChannel(channel);
+    };
+  }, [bookingId]);
+
+  const waitForSessionStatusChannel = useCallback(async () => {
+    const deadline = Date.now() + 5_000;
+    while (!sessionStatusChannelReadyRef.current && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return sessionStatusChannelReadyRef.current;
+  }, []);
+
+  const sendSessionEndBroadcast = useCallback(async (elapsed: number) => {
+    const channel = sessionStatusChannelRef.current;
+    const payload = createSessionEndBroadcast(profile?.id, elapsed);
+    if (!channel || !payload || !(await waitForSessionStatusChannel())) return false;
+    try {
+      return await channel.send({
+        type: 'broadcast',
+        event: 'session-end',
+        payload,
+      }) === 'ok';
+    } catch {
+      return false;
+    }
+  }, [profile?.id, waitForSessionStatusChannel]);
+
+  useEffect(() => {
     isActiveRef.current = isSessionCallActive;
   }, [isSessionCallActive]);
 
@@ -569,20 +650,32 @@ export default function LiveSessionScreen() {
     setLifecycleError(null);
     try {
       if (!bookingId || !supabase) throw new Error('تعذر التحقق من حالة الحصة.');
+      if (!profile?.id) throw new Error('تعذر التحقق من هوية صاحب طلب الإنهاء.');
       let current = await refreshLifecycle();
       if (!isSessionEnded(current ?? {})) {
-        if (rtc.connectionState !== 'connected' || rtc.dataChannelState !== 'open') {
-          throw new Error('تعذر إرسال طلب الإنهاء للطرف الآخر. تأكد من اتصال الحصة ثم أعد المحاولة.');
-        }
-        // The desktop teacher handles this existing protocol message and
-        // performs the authoritative database transition that runs billing.
-        const sent = await rtc.sendDataMessage({
+        const endMessage = {
           type: 'session-end',
           elapsed: elapsedSeconds,
-          userId: profile?.id,
-        });
+          userId: profile.id,
+        };
+        const sendEndRequest = async (forceRealtimeFallback: boolean) => {
+          const primarySent = rtc.sendDataMessage(endMessage);
+          const needsFallback = shouldUseSessionEndRealtimeFallback({
+            forceRealtimeFallback,
+            primarySent,
+            connectionConnected: rtc.connectionState === 'connected',
+            dataChannelOpen: rtc.dataChannelState === 'open',
+          });
+          const fallbackSent = needsFallback
+            ? await sendSessionEndBroadcast(elapsedSeconds)
+            : false;
+          return primarySent || fallbackSent;
+        };
+        // Keep the established Agora/DataChannel protocol: the platform teacher
+        // records the authoritative end timestamp and its trigger settles billing.
+        const sent = await sendEndRequest(false);
         if (!sent) {
-          throw new Error('تعذر إرسال طلب إنهاء الحصة عبر قناة المنصة. لم يتم إغلاق الاتصال؛ أعد المحاولة.');
+          throw new Error('تعذر إرسال طلب إنهاء الحصة عبر القنوات المتاحة. لم يتم إغلاق الاتصال؛ أعد المحاولة.');
         }
         const deadline = Date.now() + 15_000;
         let nextRetryAt = Date.now() + 3_000;
@@ -591,13 +684,9 @@ export default function LiveSessionScreen() {
           current = await refreshLifecycle();
           const now = Date.now();
           if (shouldRetrySessionEndRequest(current ?? {}, now, nextRetryAt, deadline)) {
-            const retrySent = await rtc.sendDataMessage({
-              type: 'session-end',
-              elapsed: elapsedSeconds,
-              userId: profile?.id,
-            });
+            const retrySent = await sendEndRequest(true);
             if (!retrySent) {
-              console.warn('لم تقبل قناة المنصة إعادة إرسال طلب إنهاء الحصة.');
+              console.warn('لم تقبل قنوات المنصة إعادة إرسال طلب إنهاء الحصة.');
             }
             nextRetryAt = now + 3_000;
           }
@@ -612,7 +701,7 @@ export default function LiveSessionScreen() {
       await refreshLifecycle();
       setConfirmEndVisible(false);
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'تعذر إنهاء الحصة للجميع.';
+      const message = error instanceof Error ? error.message : 'تعذر إنهاء الحصة للطرفين.';
       setLifecycleError(message);
     } finally {
       setEnding(false);
@@ -687,14 +776,14 @@ export default function LiveSessionScreen() {
           <Icon name={rtc.connectionState === 'connected' || isSessionCallActive ? 'phone' : 'video'} size={26} color={colors.teal} />
         </View>
         <Text style={[styles.heroTitle, { color: colors.primaryForeground }]}>{rtc.connectionState === 'connected' ? 'الجلسة جارية الآن' : role === 'teacher' ? 'الجلسة تبدأ من الكمبيوتر' : canStudentJoin ? 'المعلم بدأ الجلسة' : 'بانتظار بدء المعلم'}</Text>
-        <Text style={[styles.heroBody, { color: colors.tint }]}>{rtc.connectionState === 'connected' ? `الصوت متصل بالطرف الآخر عبر ${rtc.transportProvider === 'agora' ? 'Agora' : 'WebRTC'}.` : role === 'teacher' ? 'لا يمكن بدء جلسة المعلم من الهاتف أو الجهاز اللوحي.' : isSessionCallActive ? `أنت متصل مع ${call?.callerName ?? 'المعلم'}` : canStudentJoin ? 'اضغط على الانضمام للدخول إلى غرفة الشرح.' : session ? `${session.subject} · ${session.duration}` : 'ستظهر تفاصيل الجلسة هنا عند فتحها.'}</Text>
+          <Text style={[styles.heroBody, { color: colors.tint }]}>{rtc.connectionState === 'connected' ? 'الصوت متصل بالطرف الآخر عبر Agora.' : role === 'teacher' ? 'لا يمكن بدء جلسة المعلم من الهاتف أو الجهاز اللوحي.' : isSessionCallActive ? `أنت متصل مع ${call?.callerName ?? 'المعلم'}` : canStudentJoin ? 'اضغط على الانضمام للدخول إلى غرفة الشرح.' : session ? `${session.subject} · ${session.duration}` : 'ستظهر تفاصيل الجلسة هنا عند فتحها.'}</Text>
       </View>
 
       <View style={[styles.roomCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={[styles.statusDot, { backgroundColor: rtc.connectionState === 'connected' ? colors.teal : lifecycle.sessionStatus === 'in_progress' ? colors.accent : colors.mutedForeground }]} />
         <View style={styles.roomCopy}>
           <Text style={[styles.roomTitle, { color: colors.foreground }]}>{rtc.connectionState === 'connected' ? 'الاتصال الصوتي متصل' : session?.title ?? 'جلسة أجيال المعرفة'}</Text>
-          <Text style={[styles.roomBody, { color: colors.mutedForeground }]}>{rtc.connectionState === 'connected' ? `تم إنشاء اتصال ${rtc.transportProvider === 'agora' ? 'Agora' : 'WebRTC'} آمن.` : lifecycle.sessionStatus === 'in_progress' ? 'بدأ المعلم الجلسة من الكمبيوتر.' : session ? `${session.date} · ${session.time}` : 'تم قبول الجلسة ويمكنك العودة إليها من الحجوزات.'}</Text>
+          <Text style={[styles.roomBody, { color: colors.mutedForeground }]}>{rtc.connectionState === 'connected' ? 'تم إنشاء اتصال Agora آمن.' : lifecycle.sessionStatus === 'in_progress' ? 'بدأ المعلم الجلسة من الكمبيوتر.' : session ? `${session.date} · ${session.time}` : 'تم قبول الجلسة ويمكنك العودة إليها من الحجوزات.'}</Text>
         </View>
       </View>
 
@@ -703,8 +792,6 @@ export default function LiveSessionScreen() {
            {renderSessionStats()}
           <View style={[styles.mediaStage, { backgroundColor: colors.primary }]}>
             <SessionVideo
-              stream={rtc.remoteStream}
-              nativeView={rtc.rtcView}
               agoraRemoteUid={rtc.agoraRemoteUid}
               agoraSurfaceView={rtc.agoraSurfaceView}
               agoraWebRemoteAudioTrack={rtc.agoraWebRemoteAudioTrack}
@@ -757,18 +844,6 @@ export default function LiveSessionScreen() {
               <Icon name={rtc.muted ? 'mic-off' : 'mic'} size={17} color={rtc.muted ? colors.destructive : colors.teal} />
               <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.muted ? 'إلغاء الكتم' : 'كتم الصوت'}</Text>
             </Pressable>
-            {role === 'teacher' && Platform.OS === 'android' && rtc.transportProvider === 'agora' ? (
-              <Pressable
-                testID="toggle-session-screen-share"
-                accessibilityRole="button"
-                accessibilityLabel={rtc.screenSharing ? 'إيقاف مشاركة الشاشة' : 'مشاركة الشاشة'}
-                onPress={() => void rtc.toggleScreenShare()}
-                style={[styles.sessionControl, { backgroundColor: rtc.screenSharing ? colors.tealSoft : colors.card, borderColor: rtc.screenSharing ? colors.teal : colors.border }]}
-              >
-                <Icon name="monitor" size={17} color={rtc.screenSharing ? colors.teal : colors.foreground} />
-                <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.screenSharing ? 'إيقاف المشاركة' : 'مشاركة الشاشة'}</Text>
-              </Pressable>
-            ) : null}
             {Platform.OS !== 'web' ? (
               <Pressable
                 testID="toggle-session-speaker"
@@ -787,7 +862,7 @@ export default function LiveSessionScreen() {
             </Pressable>
             <Pressable testID="leave-live-session" disabled={ending} onPress={() => setConfirmEndVisible(true)} style={[styles.sessionControl, styles.endControl, { backgroundColor: colors.destructive, borderColor: colors.destructive, opacity: ending ? 0.65 : 1 }]}>
               <Icon name="phone-off" size={17} color={colors.destructiveForeground} />
-              <Text style={[styles.sessionControlText, { color: colors.destructiveForeground }]}>{ending ? 'جارٍ الإنهاء' : 'إنهاء الحصة'}</Text>
+              <Text style={[styles.sessionControlText, { color: colors.destructiveForeground }]}>{ending ? 'جارٍ الإنهاء' : sessionExitCopy.action}</Text>
             </Pressable>
           </View>
         </View>
@@ -797,8 +872,6 @@ export default function LiveSessionScreen() {
         <View style={[styles.fullscreenRoot, { backgroundColor: colors.primary }]}>
           <View style={styles.fullscreenStage}>
             <SessionVideo
-              stream={rtc.remoteStream}
-              nativeView={rtc.rtcView}
               agoraRemoteUid={rtc.agoraRemoteUid}
               agoraSurfaceView={rtc.agoraSurfaceView}
               agoraWebRemoteAudioTrack={rtc.agoraWebRemoteAudioTrack}
@@ -911,13 +984,13 @@ export default function LiveSessionScreen() {
                 <Pressable
                   testID="fullscreen-leave-session"
                   accessibilityRole="button"
-                  accessibilityLabel="إنهاء الحصة"
+                  accessibilityLabel={sessionExitCopy.action}
                   disabled={ending}
                   onPress={() => setConfirmEndVisible(true)}
                   style={[styles.fullscreenControl, { borderColor: colors.destructive, opacity: ending ? 0.65 : 1 }]}
                 >
                   <Icon name="phone-off" size={18} color={colors.destructive} />
-                  <Text style={[styles.fullscreenControlText, { color: colors.destructive }]}>{ending ? 'جارٍ الإنهاء' : 'إنهاء الحصة'}</Text>
+                  <Text style={[styles.fullscreenControlText, { color: colors.destructive }]}>{ending ? 'جارٍ الإنهاء' : sessionExitCopy.action}</Text>
                 </Pressable>
                 <Pressable
                   testID="close-fullscreen-session"
@@ -976,14 +1049,6 @@ export default function LiveSessionScreen() {
           <Text style={[styles.infoText, { color: colors.foreground }]}>{rtc.mediaWarning}</Text>
         </View>
       ) : null}
-      {Platform.OS === 'ios' && rtc.transportProvider === 'agora' ? (
-        <View style={[styles.infoCard, { backgroundColor: colors.muted, borderColor: colors.border }]}>
-          <Icon name="info" size={17} color={colors.teal} />
-          <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
-            مشاركة شاشة iOS تحتاج إلى ReplayKit Broadcast Extension أصلي؛ غير مفعّلة في هذا الإصدار.
-          </Text>
-        </View>
-      ) : null}
       {lifecycleError || rtc.error ? (
         <View style={[styles.errorCard, { backgroundColor: colors.destructive + '14', borderColor: colors.destructive }]}>
           <Icon name="alert-circle" size={17} color={colors.destructive} />
@@ -994,23 +1059,19 @@ export default function LiveSessionScreen() {
         visible={confirmEndVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setConfirmEndVisible(false)}
+        onRequestClose={() => { if (!ending) setConfirmEndVisible(false); }}
       >
         <View style={styles.confirmOverlay}>
           <View style={[styles.confirmCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.confirmTitle, { color: colors.foreground }]}>هل أنت متأكد من إنهاء الحصة؟</Text>
+            <Text style={[styles.confirmTitle, { color: colors.foreground }]}>{sessionExitCopy.title}</Text>
             <Text style={[styles.confirmBody, { color: colors.mutedForeground }]}>
-              سيتم إنهاء الحصة لدى الطالب والمعلم، وحفظ مدتها من المنصة.
+              {sessionExitCopy.body}
             </Text>
             {ending ? (
               <Text style={[styles.confirmBody, { color: colors.teal }]}>جارٍ انتظار تأكيد المنصة…</Text>
             ) : null}
-            {lifecycleError && !ending ? (
-              <Text
-                testID="end-session-error"
-                accessibilityRole="alert"
-                style={[styles.confirmBody, { color: colors.destructive }]}
-              >
+            {lifecycleError ? (
+              <Text testID="end-session-error" style={[styles.confirmBody, { color: colors.destructive }]}>
                 {lifecycleError}
               </Text>
             ) : null}
@@ -1026,7 +1087,7 @@ export default function LiveSessionScreen() {
               <Pressable
                 testID="confirm-end-session"
                 disabled={ending}
-                onPress={() => void finishCall()}
+                onPress={() => { void finishCall(); }}
                 style={[styles.confirmButton, { backgroundColor: colors.destructive, opacity: ending ? 0.6 : 1 }]}
               >
                 <Text style={[styles.confirmButtonText, { color: colors.destructiveForeground }]}>

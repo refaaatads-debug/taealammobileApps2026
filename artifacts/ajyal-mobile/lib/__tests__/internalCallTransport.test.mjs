@@ -2,12 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { chooseInternalCallProvider, parseInternalCallTransport } from "../internalCallTransport.ts";
 
-test("chooses Agora after acceptance only when the ringing caller advertised support", () => {
+test("uses Agora for calls even when the remote call row is legacy", () => {
   assert.equal(chooseInternalCallProvider({ transportProvider: "webrtc", callerAgoraCapable: true }), "agora");
-});
-
-test("keeps a legacy call on WebRTC when the caller did not advertise Agora", () => {
-  assert.equal(chooseInternalCallProvider({ transportProvider: "webrtc", callerAgoraCapable: false }), "webrtc");
+  assert.equal(chooseInternalCallProvider({ transportProvider: "webrtc", callerAgoraCapable: false }), "agora");
 });
 
 test("does not move an already pinned Agora call back to WebRTC", () => {

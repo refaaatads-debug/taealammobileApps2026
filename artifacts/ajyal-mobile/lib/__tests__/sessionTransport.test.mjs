@@ -23,16 +23,9 @@ test("accepts only the complete Agora transport response", () => {
   );
 });
 
-test("accepts WebRTC only when the server confirms the booking is legacy-pinned", () => {
-  assert.deepEqual(parseSessionTransport({ provider: "webrtc", legacyActive: true }), {
-    provider: "webrtc",
-    legacyActive: true,
-  });
-});
-
 test("rejects malformed or unknown provider responses rather than selecting a fallback", () => {
   assert.throws(() => parseSessionTransport({ provider: "agora", token: "incomplete" }));
-  assert.throws(() => parseSessionTransport({ provider: "webrtc", legacyActive: false }));
+  assert.throws(() => parseSessionTransport({ provider: "webrtc", legacyActive: true }));
   assert.throws(() => parseSessionTransport({ provider: "unknown" }));
   assert.throws(() => parseSessionTransport(null));
 });

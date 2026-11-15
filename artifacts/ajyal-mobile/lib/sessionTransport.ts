@@ -7,12 +7,7 @@ export type AgoraTransport = {
   expiresAt: number;
 };
 
-export type WebRtcTransport = {
-  provider: 'webrtc';
-  legacyActive: true;
-};
-
-export type SessionTransport = AgoraTransport | WebRtcTransport;
+export type SessionTransport = AgoraTransport;
 
 export function parseSessionTransport(value: unknown): SessionTransport {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -20,13 +15,6 @@ export function parseSessionTransport(value: unknown): SessionTransport {
   }
 
   const response = value as Record<string, unknown>;
-  if (
-    response.provider === 'webrtc'
-    && response.legacyActive === true
-  ) {
-    return { provider: 'webrtc', legacyActive: true };
-  }
-
   if (
     response.provider === 'agora'
     && typeof response.appId === 'string'

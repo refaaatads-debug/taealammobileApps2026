@@ -15,6 +15,7 @@ export type AuthUser = {
   firstName: string | null;
   lastName: string | null;
   profileImageUrl: string | null;
+  roleHint?: string | null;
 };
 
 type AuthContextValue = {
@@ -75,6 +76,7 @@ function mapUser(user: { id: string; email?: string | null; user_metadata?: Reco
     firstName: typeof metadata.first_name === "string" ? metadata.first_name : firstName ?? null,
     lastName: typeof metadata.last_name === "string" ? metadata.last_name : lastNameParts.join(" ") || null,
     profileImageUrl: typeof metadata.avatar_url === "string" ? metadata.avatar_url : null,
+    roleHint: typeof metadata.role === "string" ? metadata.role : null,
   };
 }
 

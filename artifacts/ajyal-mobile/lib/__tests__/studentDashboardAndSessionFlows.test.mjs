@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const dashboardSource = readFileSync(path.join(projectRoot, "app/(tabs)/index.tsx"), "utf8");
 const dashboardUiSource = readFileSync(path.join(projectRoot, "components/AjyalUI.tsx"), "utf8");
-const sessionSource = readFileSync(path.join(projectRoot, "hooks/useSessionWebRTC.ts"), "utf8");
+const sessionSource = readFileSync(path.join(projectRoot, "hooks/useSessionAgora.ts"), "utf8");
 const inPersonSource = readFileSync(path.join(projectRoot, "app/in-person.tsx"), "utf8");
 const messagesSource = readFileSync(path.join(projectRoot, "components/MessagesScreen.tsx"), "utf8");
 
@@ -20,10 +20,11 @@ test("assignments render as a compact tile after learning materials", () => {
   assert.ok(dashboardUiSource.includes("const wideActionId = role === 'student' ? null : 'review';"));
 });
 
-test("mobile does not repeatedly send join signals while the peer is negotiating", () => {
-  assert.ok(sessionSource.includes("await sendSignal('join', { userId });"));
-  assert.equal(sessionSource.includes("joinRetryIntervalRef"), false);
-  assert.ok(sessionSource.includes("retry: 'realtime-reconnect'"));
+test("mobile lesson sessions request only Agora and never create peer connections", () => {
+  assert.ok(sessionSource.includes("session-transport-token"));
+  assert.ok(sessionSource.includes("joinAgoraWebSession"));
+  assert.ok(sessionSource.includes("joinChannelWithUserAccount"));
+  assert.equal(sessionSource.includes("RTCPeerConnection"), false);
 });
 
 test("instant-session requests await the idempotent notification route and surface delivery status", () => {

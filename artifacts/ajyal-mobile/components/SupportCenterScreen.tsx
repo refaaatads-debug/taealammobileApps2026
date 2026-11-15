@@ -129,6 +129,49 @@ export default function SupportCenterScreen({ mode = "support" }: { mode?: "supp
   }, [user?.id, mode]);
 
   useEffect(() => {
+    if (mode !== "support" || !supabase || !user?.id) return;
+    let active = true;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshTickets = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        void supabase
+          ?.from("support_tickets")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("updated_at", { ascending: false })
+          .then((result) => {
+            if (!active) return;
+            if (result.error) {
+              console.warn("[support] Could not refresh ticket list:", result.error.message);
+              return;
+            }
+            const rows = (result.data ?? []) as Row[];
+            setTickets(rows);
+            setTicketId((current) => current && rows.some((row) => String(row.id) === current)
+              ? current
+              : rows[0] ? String(rows[0].id) : null);
+          });
+      }, 150);
+    };
+    const channel = supabase
+      .channel(`support-ticket-list-${user.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "support_tickets", filter: `user_id=eq.${user.id}` }, refreshTickets)
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.warn(`[support] Ticket list Realtime ${status.toLowerCase()}; refresh-on-focus remains available.`);
+        }
+      });
+    const fallbackInterval = setInterval(refreshTickets, 60_000);
+    return () => {
+      active = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      clearInterval(fallbackInterval);
+      void supabase?.removeChannel(channel);
+    };
+  }, [mode, user?.id]);
+
+  useEffect(() => {
     if (!ticketId || !supabase) {
       setMessages([]);
       return;

@@ -20,3 +20,20 @@ export function shouldRetrySessionEndRequest(
 ): boolean {
   return !isSessionEnded(snapshot) && now >= nextRetryAt && now < deadline;
 }
+
+export function shouldUseSessionEndRealtimeFallback({
+  forceRealtimeFallback,
+  primarySent,
+  connectionConnected,
+  dataChannelOpen,
+}: {
+  forceRealtimeFallback: boolean;
+  primarySent: boolean;
+  connectionConnected: boolean;
+  dataChannelOpen: boolean;
+}): boolean {
+  return forceRealtimeFallback
+    || !primarySent
+    || !connectionConnected
+    || !dataChannelOpen;
+}

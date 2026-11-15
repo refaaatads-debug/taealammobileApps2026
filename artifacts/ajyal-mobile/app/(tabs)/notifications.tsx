@@ -6,10 +6,9 @@ import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { EmptyState, Header, Icon, Screen, LoadingBlock, type IconName } from '@/components/AjyalUI';
-import { getListMyNotificationsQueryKey, useListMyNotifications, type Notification as ApiNotification } from '@workspace/api-client-react';
+import type { Notification as ApiNotification } from '@workspace/api-client-react';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { supabase } from '@/lib/supabase';
-import { useAuth } from '@/lib/auth';
 
 const notificationIconNames = new Set<IconName>([
   'bell',
@@ -137,12 +136,16 @@ export default function NotificationsScreen() {
   const colors = useColors();
   const { t, direction, formatNumber } = useAppPreferences();
   const isRTL = direction === 'rtl';
-  const { profile, roleResolved, markAllRead, markRead } = useAjyal();
-  const { user } = useAuth();
-  const notificationsQuery = useListMyNotifications({
-    query: { queryKey: getListMyNotificationsQueryKey(), enabled: Boolean(user?.id && roleResolved) },
-  });
-  const notifications = notificationsQuery.data ?? [];
+  const {
+    profile,
+    roleResolved,
+    notifications,
+    notificationsLoading,
+    notificationsError,
+    retryNotifications,
+    markAllRead,
+    markRead,
+  } = useAjyal();
   const unreadCount = useMemo(() => notifications.filter((item) => item.unread).length, [notifications]);
   const notificationGroups = useMemo(() => {
     const groups = new Map<NotificationGroupKey, ApiNotification[]>();
@@ -166,33 +169,42 @@ export default function NotificationsScreen() {
 
   useEffect(() => {
     const client = supabase;
-    if (!client || !user?.id) return;
-    const channel = client
-      .channel(`notifications:${user.id}`)
+    if (!client || !roleResolved || !profile?.id) return;
+    let channel: ReturnType<typeof client.channel> | null = null;
+    try {
+      channel = client
+      .channel(`mobile-notifications-list-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-        () => { void notificationsQuery.refetch(); },
+        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${profile.id}` },
+        () => { void retryNotifications(); },
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[notifications] Realtime ${status.toLowerCase()}; periodic refresh remains available.`);
+        }
+      });
+    } catch (error) {
+      console.warn('[notifications] Could not start Realtime updates:', error);
+    }
     const appStateSubscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void notificationsQuery.refetch();
+      if (state === 'active') void retryNotifications();
     });
     return () => {
       appStateSubscription.remove();
-      void client.removeChannel(channel);
+      if (channel) void client.removeChannel(channel);
     };
-  }, [notificationsQuery.refetch, user?.id]);
+  }, [profile?.id, retryNotifications, roleResolved]);
 
   return (
     <Screen>
       <Header avatarText={profile?.displayName?.slice(0, 1)} eyebrow={t('كل ما يهمك، في مكان واحد', 'Everything you need in one place')} title={t('الإشعارات', 'Notifications')} unread={unreadCount > 0} onBell={() => undefined} onAvatar={() => router.push('/profile')} />
-      {notificationsQuery.isLoading ? <LoadingBlock /> : null}
+      {notificationsLoading ? <LoadingBlock /> : null}
       <View style={[styles.noticeHero, { backgroundColor: colors.tealSoft }]}>
         <View style={[styles.noticeIcon, { backgroundColor: colors.teal }]}><Icon name={unreadCount ? 'bell' : 'check'} size={19} color={colors.primaryForeground} /></View>
         <View style={[styles.noticeCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}><Text style={[styles.noticeCount, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{unreadCount ? `${formatNumber(unreadCount)} ${t('تنبيهات جديدة', 'new notifications')}` : t('أنت على اطلاع', 'You’re all caught up')}</Text><Text style={[styles.noticeBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{unreadCount ? t('راجع آخر المستجدات قبل بدء يومك.', 'Review the latest updates before you start your day.') : t('لا توجد تنبيهات جديدة في الوقت الحالي.', 'There are no new notifications right now.')}</Text></View>
       </View>
-      {notificationsQuery.isError ? <EmptyState icon="alert-circle" title={t('تعذر تحميل الإشعارات', 'Could not load notifications')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => void notificationsQuery.refetch()} /> : notifications.length ? (
+      {notificationsError ? <EmptyState icon="alert-circle" title={t('تعذر تحميل الإشعارات', 'Could not load notifications')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => void retryNotifications()} /> : notifications.length ? (
         <View>
           <View style={[styles.listHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
             <View style={[styles.listHeaderCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>

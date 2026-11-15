@@ -12,7 +12,7 @@ import { useColors } from '@/hooks/useColors';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { Icon } from '@/components/AjyalUI';
-import type { SessionDataMessage } from '@/hooks/useSessionWebRTC';
+import type { SessionDataMessage } from '@/hooks/useSessionAgora';
 import { customFetch } from '@workspace/api-client-react';
 import { attemptSessionChatInsert } from '@/lib/sessionChatSend';
 

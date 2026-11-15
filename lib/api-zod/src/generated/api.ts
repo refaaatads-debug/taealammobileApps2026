@@ -294,7 +294,6 @@ export const GetTeacherDashboardResponse = zod.object({
   "scheduledAt": zod.coerce.date(),
   "duration": zod.string(),
   "tone": zod.enum(['teal', 'gold', 'navy']),
-  "deliveryMode": zod.enum(['online', 'in_person']).optional(),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
 })),
@@ -321,7 +320,6 @@ export const ListMySessionsResponseItem = zod.object({
   "scheduledAt": zod.coerce.date(),
   "duration": zod.string(),
   "tone": zod.enum(['teal', 'gold', 'navy']),
-  "deliveryMode": zod.enum(['online', 'in_person']).optional(),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
 })
@@ -379,7 +377,6 @@ export const GetStudentDashboardResponse = zod.object({
   "scheduledAt": zod.coerce.date(),
   "duration": zod.string(),
   "tone": zod.enum(['teal', 'gold', 'navy']),
-  "deliveryMode": zod.enum(['online', 'in_person']).optional(),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
 })),
@@ -462,7 +459,6 @@ export const CancelSessionResponse = zod.object({
   "scheduledAt": zod.coerce.date(),
   "duration": zod.string(),
   "tone": zod.enum(['teal', 'gold', 'navy']),
-  "deliveryMode": zod.enum(['online', 'in_person']).optional(),
   "status": zod.enum(['upcoming', 'done', 'cancelled', 'expired']),
   "sessionStatus": zod.union([zod.literal('not_started'),zod.literal('waiting_acceptance'),zod.literal('in_progress'),zod.literal('completed'),zod.literal('cancelled'),zod.literal('rejected'),zod.literal('expired'),zod.literal(null)]).nullish()
 })
