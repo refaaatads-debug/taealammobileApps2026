@@ -103,6 +103,7 @@
     "react-native-maps": "1.27.2",
     "react-native-pdf": "^7.0.5",
     "react-native-voip-push-notification": "3.3.3",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "expo-build-properties": "~57.0.0"
   }
 }
