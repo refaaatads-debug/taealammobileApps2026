@@ -17,6 +17,11 @@ test("recognizes cancelled sessions as terminal", () => {
   assert.equal(isSessionEnded({ sessionStatus: "cancelled" }), true);
 });
 
+test("recognizes the database ended state as terminal", () => {
+  assert.equal(isSessionEnded({ sessionStatus: "ended" }), true);
+  assert.equal(isSessionEnded({ sessionStatus: " ENDED " }), true);
+});
+
 test("does not treat an in-progress session as ended", () => {
   assert.equal(isSessionEnded({ sessionStatus: "in_progress", bookingStatus: "confirmed" }), false);
 });

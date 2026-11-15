@@ -5,6 +5,7 @@ import {
   filterBookingRequestGroupsByStatus,
   filterUnbookedAcceptedRequestGroups,
   groupBookingRequests,
+  isPendingBookingRequest,
 } from "../bookingRequestPresentation.ts";
 
 const slot = "2026-11-15T10:00:00.000Z";
@@ -104,4 +105,44 @@ test("realtime confirmation moves the student request out of pending and removes
 
   const teacherRequests = applyBookingRequestStatusUpdate(requests, update, "teacher");
   assert.deepEqual(teacherRequests?.map((item) => item.id), ["other"]);
+});
+
+test("resolved booking and ended session states never appear in pending requests", () => {
+  const requests = groupBookingRequests([
+    request("plain-open", "open"),
+    request("accepted-booking", "open", { booking_status: "accepted" }),
+    request("confirmed-booking", "open", { bookingStatus: "confirmed" }),
+    request("completed-booking", "open", { booking_status: "completed" }),
+    request("ended-session", "open", { session_status: "ended" }),
+  ]);
+
+  assert.deepEqual(
+    filterBookingRequestGroupsByStatus(requests, ["open"]).map((group) => group.request.id),
+    ["plain-open"],
+  );
+  assert.equal(isPendingBookingRequest({ status: "confirmed" }), false);
+  assert.equal(isPendingBookingRequest({ status: "completed" }), false);
+  assert.equal(isPendingBookingRequest({ status: "open", session_status: "ended" }), false);
+  assert.equal(isPendingBookingRequest({ status: "open", request_status: "confirmed" }), false);
+  assert.equal(isPendingBookingRequest({ status: "open", session_status: "completed" }), false);
+  assert.equal(isPendingBookingRequest({}), true);
+});
+
+test("an open request matching an existing booking is not shown as pending again", () => {
+  const groups = groupBookingRequests([
+    request("stale-open-request", "open"),
+    request("unrelated-open-request", "open", { scheduledAt: "2026-11-15T11:00:00.000Z" }),
+  ]);
+  const sessions = [{
+    id: "confirmed-booking",
+    subject: "رياضيات",
+    scheduledAt: slot,
+    duration: "60 دقيقة",
+    status: "upcoming",
+  }];
+
+  assert.deepEqual(
+    filterBookingRequestGroupsByStatus(groups, ["open"], sessions).map((group) => group.request.id),
+    ["unrelated-open-request"],
+  );
 });

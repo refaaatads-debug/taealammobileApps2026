@@ -6,10 +6,10 @@ export type SessionLifecycleSnapshot = {
 };
 
 export function isSessionEnded(snapshot: SessionLifecycleSnapshot): boolean {
-  const terminalStatuses = new Set(["completed", "cancelled"]);
+  const terminalStatuses = new Set(["completed", "cancelled", "ended"]);
   return Boolean(snapshot.endedAt)
-    || terminalStatuses.has(snapshot.sessionStatus ?? "")
-    || terminalStatuses.has(snapshot.bookingStatus ?? "");
+    || terminalStatuses.has(snapshot.sessionStatus?.trim().toLowerCase() ?? "")
+    || terminalStatuses.has(snapshot.bookingStatus?.trim().toLowerCase() ?? "");
 }
 
 export function shouldRetrySessionEndRequest(

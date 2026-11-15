@@ -15,7 +15,7 @@ import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, canStude
 import { getInPersonBookingIds } from '@/lib/inPersonBookingDetails';
 import { getInPersonBookingSnapshot } from '@/lib/inPersonBookingSnapshot';
 import { getTeacherInPersonDecisionOutcome, isTeacherBookingNotification, refreshTeacherBookingTaskCounts } from '@/lib/teacherBookingTaskSync';
-import { applyBookingRequestStatusUpdate, filterBookingRequestGroupsByStatus, filterUnbookedAcceptedRequestGroups, groupBookingRequests } from '@/lib/bookingRequestPresentation';
+import { applyBookingRequestStatusUpdate, filterBookingRequestGroupsByStatus, filterUnbookedAcceptedRequestGroups, groupBookingRequests, isPendingBookingRequest } from '@/lib/bookingRequestPresentation';
 import SwipeDecisionControl from '@/components/SwipeDecisionControl';
 import { useCanonicalSessionModes } from '@/hooks/useCanonicalSessionModes';
 import StudentLocationLink from '@/components/StudentLocationLink';
@@ -267,11 +267,11 @@ export default function BookingsScreen() {
   const requests = requestQuery.data ?? [];
   const displayedRequests = useMemo(() => groupBookingRequests(requests), [requests]);
   const incomingRequestRows = useMemo(
-    () => filterBookingRequestGroupsByStatus(displayedRequests, ['open']),
-    [displayedRequests],
+    () => filterBookingRequestGroupsByStatus(displayedRequests, ['open'], canonicalScheduleSessions),
+    [canonicalScheduleSessions, displayedRequests],
   );
   const inPersonRequestRows = inPersonRequestsQuery.data ?? [];
-  const pendingInPersonRequestRows = inPersonRequestRows.filter((item) => String(item.status ?? 'open') === 'open');
+  const pendingInPersonRequestRows = inPersonRequestRows.filter(isPendingBookingRequest);
   const acceptedInPersonRequestRows = inPersonRequestRows.filter((item) => String(item.status ?? '') === 'accepted');
   const acceptedRequestRows = useMemo(
     () => filterUnbookedAcceptedRequestGroups(displayedRequests, canonicalScheduleSessions),
@@ -315,7 +315,7 @@ export default function BookingsScreen() {
               ),
             );
           }
-          void requestQuery.refetch();
+          void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: requestView }) });
           void sessionsQuery.refetch();
           void historyQuery.refetch();
           void queryClient.invalidateQueries({ queryKey: ['teacher-dashboard'] });
@@ -340,7 +340,16 @@ export default function BookingsScreen() {
           table: 'bookings',
           filter: `${role === 'student' ? 'student_id' : 'teacher_id'}=eq.${profile.id}`,
         }, (payload) => {
-          if (payload.eventType === 'INSERT') void requestQuery.refetch();
+          const updatedBooking = payload.new as Record<string, unknown>;
+          const bookingStatus = String(updatedBooking.status ?? '').trim().toLowerCase();
+          const sessionStatus = String(updatedBooking.session_status ?? '').trim().toLowerCase();
+          const requestStateChanged = payload.eventType === 'INSERT'
+            || ['accepted', 'confirmed', 'completed'].includes(bookingStatus)
+            || sessionStatus === 'ended';
+          if (requestStateChanged) {
+            void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: requestView }) });
+            void queryClient.invalidateQueries({ queryKey: ['in-person-request-groups', role, profile.id] });
+          }
           void sessionsQuery.refetch();
           void historyQuery.refetch();
           void inPersonRequestsQuery.refetch();
@@ -349,9 +358,14 @@ export default function BookingsScreen() {
           event: '*',
           schema: 'public',
           table: 'sessions',
-        }, () => {
+        }, (payload) => {
           // sessions.ended_at is the authoritative signal that moves a lesson
           // out of upcoming and into the historical schedule.
+          const updatedSession = payload.new as Record<string, unknown>;
+          if (updatedSession.ended_at || String(updatedSession.session_status ?? '').toLowerCase() === 'ended') {
+            void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: requestView }) });
+            void queryClient.invalidateQueries({ queryKey: ['in-person-request-groups', role, profile.id] });
+          }
           void sessionsQuery.refetch();
           void historyQuery.refetch();
           void inPersonRequestsQuery.refetch();

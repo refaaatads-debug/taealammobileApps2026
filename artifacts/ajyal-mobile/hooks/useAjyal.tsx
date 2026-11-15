@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useMemo } from "react";
 import { Alert } from "react-native";
 import {
   getListMyAssignmentsQueryKey,
+  getListBookingRequestsQueryKey,
   getListMyNotificationsQueryKey,
   getListMySessionsQueryKey,
 } from "@workspace/api-client-react";
@@ -110,6 +111,9 @@ export function AjyalProvider({ children }: { children: React.ReactNode }) {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: "upcoming" }) }),
         queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: "past" }) }),
+        queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: "mine" }) }),
+        queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: "incoming" }) }),
+        queryClient.invalidateQueries({ queryKey: ["in-person-request-groups"] }),
         queryClient.invalidateQueries({ queryKey: getListMyNotificationsQueryKey() }),
         queryClient.invalidateQueries({ queryKey: ajyalNotificationsQueryKey(userId) }),
       ]);

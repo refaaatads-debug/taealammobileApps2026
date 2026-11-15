@@ -2,6 +2,12 @@ type BookingRequestLike = {
   id: string;
   groupId?: string | null;
   status: string;
+  bookingStatus?: string | null;
+  booking_status?: string | null;
+  requestStatus?: string | null;
+  request_status?: string | null;
+  sessionStatus?: string | null;
+  session_status?: string | null;
   subject: string;
   scheduledAt: string | Date;
   durationMinutes: number;
@@ -22,7 +28,36 @@ export type BookingRequestGroup<T extends BookingRequestLike> = {
 };
 
 function normalizeStatus(status: string): string {
-  return status === 'confirmed' ? 'accepted' : status;
+  const normalized = status.trim().toLowerCase();
+  return normalized === 'confirmed' ? 'accepted' : normalized;
+}
+
+function statusValue(value: unknown): string {
+  return typeof value === 'string' ? normalizeStatus(value) : '';
+}
+
+export function isPendingBookingRequest(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const rawRequestStatus = statusValue(row.requestStatus ?? row.request_status ?? row.status);
+  const requestStatus = rawRequestStatus || 'open';
+  const rowStatus = statusValue(row.status);
+  const explicitRequestStatus = statusValue(row.requestStatus ?? row.request_status);
+  const bookingStatus = statusValue(row.bookingStatus ?? row.booking_status);
+  const sessionStatus = statusValue(row.sessionStatus ?? row.session_status);
+  const resolvedStatuses = new Set(['accepted', 'completed', 'cancelled', 'rejected', 'expired', 'ended']);
+
+  if (
+    resolvedStatuses.has(rowStatus)
+    || resolvedStatuses.has(explicitRequestStatus)
+    || resolvedStatuses.has(requestStatus)
+    || resolvedStatuses.has(bookingStatus)
+    || resolvedStatuses.has(sessionStatus)
+  ) {
+    return false;
+  }
+
+  return requestStatus === 'open' || requestStatus === 'pending';
 }
 
 function durationMinutes(value: string): number | null {
@@ -69,9 +104,15 @@ export function groupBookingRequests<T extends BookingRequestLike>(requests: T[]
 export function filterBookingRequestGroupsByStatus<T extends BookingRequestLike>(
   groups: BookingRequestGroup<T>[],
   statuses: string[],
+  sessions: SessionLike[] = [],
 ): BookingRequestGroup<T>[] {
+  const normalizedStatuses = statuses.map(normalizeStatus);
   return groups.flatMap((group) => {
-    const items = group.items.filter((item) => statuses.includes(normalizeStatus(item.status)));
+    const items = group.items.filter((item) => (
+      normalizedStatuses.includes(normalizeStatus(item.status))
+      && (!normalizedStatuses.includes('open') || isPendingBookingRequest(item))
+      && (!normalizedStatuses.includes('open') || !hasMatchingSession(item, sessions))
+    ));
     return items.length ? [{ request: items[0], count: items.length, items }] : [];
   });
 }

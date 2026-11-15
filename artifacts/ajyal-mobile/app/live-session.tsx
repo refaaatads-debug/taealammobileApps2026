@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useColors } from '@/hooks/useColors';
@@ -17,13 +18,14 @@ import {
   resolveWhiteboardStateVisibility,
 } from '@/lib/sessionWhiteboardProtocol';
 import { filterClearedWhiteboardActions, whiteboardActionSignature } from '@/lib/sessionWhiteboardState';
-import { getListMySessionsQueryKey, useGetStudentDashboard, useListMySessions } from '@workspace/api-client-react';
+import { getListBookingRequestsQueryKey, getListMySessionsQueryKey, useGetStudentDashboard, useListMySessions } from '@workspace/api-client-react';
 import { Header, Icon, Screen } from '@/components/AjyalUI';
 import { supabase } from '@/lib/supabase';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { shouldRedirectFromLiveSession } from '@/lib/liveSessionRoute';
-import { isSessionEnded, shouldRetrySessionEndRequest, shouldUseSessionEndRealtimeFallback, type SessionLifecycleSnapshot } from '@/lib/sessionLifecycle';
+import { isSessionEnded, type SessionLifecycleSnapshot } from '@/lib/sessionLifecycle';
 import { createSessionEndBroadcast, isSessionEndBroadcastFromPeer, waitForSessionEndConfirmation } from '@/lib/sessionEnd';
+import { createRateLimitedQueue, type RateLimitedQueue } from '@/lib/sessionThrottle';
 import { getMobileSessionExitCopy } from '@/lib/mobileSessionPolicy';
 import {
   getFinalSessionElapsed,
@@ -48,6 +50,7 @@ function formatElapsed(seconds: number): string {
 
 export default function LiveSessionScreen() {
   const colors = useColors();
+  const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
   const { width: viewportWidth } = useWindowDimensions();
   const { profile, role } = useAjyal();
@@ -390,6 +393,54 @@ export default function LiveSessionScreen() {
     enabled: shouldJoin && isStudent,
     onDataMessage: handleDataMessage,
   });
+  const whiteboardSendContextRef = useRef({
+    userId: profile?.id,
+    sendDataMessage: rtc.sendDataMessage,
+    dataChannelOpen: rtc.dataChannelState === 'open',
+  });
+  whiteboardSendContextRef.current = {
+    userId: profile?.id,
+    sendDataMessage: rtc.sendDataMessage,
+    dataChannelOpen: rtc.dataChannelState === 'open',
+  };
+  const pendingWhiteboardActionsRef = useRef<WhiteboardAction[]>([]);
+  const whiteboardActionQueueRef = useRef<RateLimitedQueue<WhiteboardAction> | null>(null);
+  if (!whiteboardActionQueueRef.current) {
+    whiteboardActionQueueRef.current = createRateLimitedQueue((action) => {
+      const { userId, sendDataMessage, dataChannelOpen } = whiteboardSendContextRef.current;
+      if (!dataChannelOpen) {
+        pendingWhiteboardActionsRef.current = [
+          ...pendingWhiteboardActionsRef.current.slice(-159),
+          action,
+        ];
+        return;
+      }
+      sendDataMessage({
+        type: 'whiteboard-action',
+        event: 'whiteboard-action',
+        kind: 'whiteboard-action',
+        action,
+        points: action.points,
+        color: action.color,
+        lineWidth: action.lineWidth,
+        userId,
+        timestamp: Date.now(),
+      });
+    }, 120);
+  }
+  useEffect(() => {
+    whiteboardActionQueueRef.current?.clear();
+    pendingWhiteboardActionsRef.current = [];
+    return () => {
+      whiteboardActionQueueRef.current?.clear();
+      pendingWhiteboardActionsRef.current = [];
+    };
+  }, [bookingId]);
+  useEffect(() => {
+    if (rtc.dataChannelState !== 'open') return;
+    const pending = pendingWhiteboardActionsRef.current.splice(0);
+    pending.forEach((action) => whiteboardActionQueueRef.current?.enqueue(action));
+  }, [bookingId, rtc.dataChannelState]);
   const timerPeerReady = isSessionTimerPeerReady({
     connectionState: rtc.connectionState,
     transportProvider: rtc.transportProvider,
@@ -465,18 +516,8 @@ export default function LiveSessionScreen() {
     if (!whiteboardCanDraw) return;
     appendWhiteboardAction(action);
     setWhiteboardVisible(true);
-    rtc.sendDataMessage({
-      type: 'whiteboard-action',
-      event: 'whiteboard-action',
-      kind: 'whiteboard-action',
-      action,
-      points: action.points,
-      color: action.color,
-      lineWidth: action.lineWidth,
-      userId: profile?.id,
-      timestamp: Date.now(),
-    });
-  }, [appendWhiteboardAction, profile?.id, rtc.sendDataMessage, whiteboardCanDraw]);
+    whiteboardActionQueueRef.current?.enqueue(action);
+  }, [appendWhiteboardAction, whiteboardCanDraw]);
 
   useEffect(() => {
     if (rtc.dataChannelState !== 'open' || !shouldJoin) return;
@@ -493,7 +534,7 @@ export default function LiveSessionScreen() {
     void rtc.stop();
     if (isSessionCallActive) {
       isActiveRef.current = false;
-      await endCall().catch(() => undefined);
+      void endCall().catch(() => undefined);
     }
     if (isCurrentCall) clearCall();
     router.replace('/(tabs)/bookings');
@@ -515,14 +556,16 @@ export default function LiveSessionScreen() {
         const confirmed = await waitForSessionEndConfirmation(
           () => refreshLifecycle(),
           isSessionEnded,
-          { timeoutMs: 15_000, pollIntervalMs: 500 },
+          { timeoutMs: 3_000, pollIntervalMs: 250 },
         );
         if (!confirmed) {
           setLifecycleError('وصل طلب إنهاء الحصة، لكن المنصة لم تؤكد انتهاءها. بقيت الجلسة مفتوحة؛ أعد المحاولة.');
+          return;
         }
+        await closeRoom();
       })();
     };
-  }, [profile?.id, refreshLifecycle]);
+  }, [closeRoom, profile?.id, refreshLifecycle]);
 
   useEffect(() => {
     const client = supabase;
@@ -552,7 +595,7 @@ export default function LiveSessionScreen() {
   }, [bookingId]);
 
   const waitForSessionStatusChannel = useCallback(async () => {
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 1_500;
     while (!sessionStatusChannelReadyRef.current && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -651,55 +694,39 @@ export default function LiveSessionScreen() {
     try {
       if (!bookingId || !supabase) throw new Error('تعذر التحقق من حالة الحصة.');
       if (!profile?.id) throw new Error('تعذر التحقق من هوية صاحب طلب الإنهاء.');
-      let current = await refreshLifecycle();
-      if (!isSessionEnded(current ?? {})) {
-        const endMessage = {
-          type: 'session-end',
-          elapsed: elapsedSeconds,
-          userId: profile.id,
-        };
-        const sendEndRequest = async (forceRealtimeFallback: boolean) => {
-          const primarySent = rtc.sendDataMessage(endMessage);
-          const needsFallback = shouldUseSessionEndRealtimeFallback({
-            forceRealtimeFallback,
-            primarySent,
-            connectionConnected: rtc.connectionState === 'connected',
-            dataChannelOpen: rtc.dataChannelState === 'open',
-          });
-          const fallbackSent = needsFallback
-            ? await sendSessionEndBroadcast(elapsedSeconds)
-            : false;
-          return primarySent || fallbackSent;
-        };
-        // Keep the established Agora/DataChannel protocol: the platform teacher
-        // records the authoritative end timestamp and its trigger settles billing.
-        const sent = await sendEndRequest(false);
-        if (!sent) {
-          throw new Error('تعذر إرسال طلب إنهاء الحصة عبر القنوات المتاحة. لم يتم إغلاق الاتصال؛ أعد المحاولة.');
-        }
-        const deadline = Date.now() + 15_000;
-        let nextRetryAt = Date.now() + 3_000;
-        while (!isSessionEnded(current ?? {}) && Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          current = await refreshLifecycle();
-          const now = Date.now();
-          if (shouldRetrySessionEndRequest(current ?? {}, now, nextRetryAt, deadline)) {
-            const retrySent = await sendEndRequest(true);
-            if (!retrySent) {
-              console.warn('لم تقبل قنوات المنصة إعادة إرسال طلب إنهاء الحصة.');
-            }
-            nextRetryAt = now + 3_000;
-          }
-        }
-        if (!isSessionEnded(current ?? {})) {
-          throw new Error('لم يصل تأكيد إنهاء الحصة من المنصة. بقي الاتصال مفتوحًا؛ أعد المحاولة أو اطلب من المعلم إنهاءها.');
-        }
+      const { error: endError } = await supabase.rpc(
+        'end_live_session' as any,
+        { p_booking_id: bookingId } as any,
+      );
+      if (endError) {
+        const current = await refreshLifecycle().catch(() => null);
+        if (!isSessionEnded(current ?? {})) throw endError;
       }
-      await rtc.stop();
-      if (isSessionCallActive) await endCall();
+
+      // Persist first so the other participant is covered even when offline;
+      // the two live channels are best-effort notifications, not completion gates.
+      rtc.sendDataMessage({
+        type: 'session-end',
+        elapsed: elapsedSeconds,
+        userId: profile.id,
+      });
+      let realtimeTimer: ReturnType<typeof setTimeout> | undefined;
+      const realtimeSent = await Promise.race([
+        sendSessionEndBroadcast(elapsedSeconds),
+        new Promise<boolean>((resolve) => {
+          realtimeTimer = setTimeout(() => resolve(false), 1_500);
+        }),
+      ]);
+      if (realtimeTimer) clearTimeout(realtimeTimer);
+      if (!realtimeSent) console.warn('تم إنهاء الحصة في قاعدة البيانات؛ تعذر إرسال إشارة Realtime.');
+
+      void queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: 'upcoming' }) });
+      void queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: 'past' }) });
+      void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: 'mine' }) });
+      void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: 'incoming' }) });
       setJoinRequested(false);
-      await refreshLifecycle();
       setConfirmEndVisible(false);
+      await closeRoom();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'تعذر إنهاء الحصة للطرفين.';
       setLifecycleError(message);

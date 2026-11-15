@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterClearedWhiteboardActions, whiteboardActionSignature } from "../sessionWhiteboardState.ts";
+import { filterClearedWhiteboardActions, sampleWhiteboardPath, whiteboardActionSignature } from "../sessionWhiteboardState.ts";
 
 test("whiteboard snapshots do not restore actions from before a clear", () => {
   const studentAction = {
@@ -34,5 +34,20 @@ test("new whiteboard actions remain visible after a prior clear", () => {
   assert.deepEqual(
     filterClearedWhiteboardActions([oldAction, newAction], clearedSignatures),
     [newAction],
+  );
+});
+
+test("whiteboard paths keep endpoints while sampling intermediate points every 120ms", () => {
+  const points = [
+    { x: 0, y: 0 },
+    { x: 1, y: 1 },
+    { x: 2, y: 2 },
+    { x: 3, y: 3 },
+    { x: 4, y: 4 },
+  ];
+
+  assert.deepEqual(
+    sampleWhiteboardPath(points, [0, 40, 120, 180, 260]),
+    [points[0], points[2], points[4]],
   );
 });
