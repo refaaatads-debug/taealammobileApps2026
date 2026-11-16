@@ -92,7 +92,7 @@ export default function BookingsScreen() {
       query: {
         enabled: roleResolved,
         queryKey: getListBookingRequestsQueryKey({ view: requestView }),
-        staleTime: role === 'teacher' ? 10_000 : 60_000,
+        staleTime: 0,
         refetchInterval: roleResolved && isFocused ? (role === 'teacher' ? 15_000 : 60_000) : false,
         refetchOnWindowFocus: role === 'teacher',
         refetchOnReconnect: true,
@@ -350,9 +350,10 @@ export default function BookingsScreen() {
             void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: requestView }) });
             void queryClient.invalidateQueries({ queryKey: ['in-person-request-groups', role, profile.id] });
           }
-          void sessionsQuery.refetch();
-          void historyQuery.refetch();
-          void inPersonRequestsQuery.refetch();
+          void requestQuery.refetch();
+            void sessionsQuery.refetch();
+            void historyQuery.refetch();
+            void inPersonRequestsQuery.refetch();
         })
         .on('postgres_changes', {
           event: '*',
@@ -366,9 +367,10 @@ export default function BookingsScreen() {
             void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: requestView }) });
             void queryClient.invalidateQueries({ queryKey: ['in-person-request-groups', role, profile.id] });
           }
-          void sessionsQuery.refetch();
-          void historyQuery.refetch();
-          void inPersonRequestsQuery.refetch();
+          void requestQuery.refetch();
+            void sessionsQuery.refetch();
+            void historyQuery.refetch();
+            void inPersonRequestsQuery.refetch();
         })
         .subscribe((status) => {
           if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
