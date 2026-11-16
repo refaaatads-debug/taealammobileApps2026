@@ -426,7 +426,7 @@ export default function LiveSessionScreen() {
         userId,
         timestamp: Date.now(),
       });
-    }, 120);
+    }, 25);
   }
   useEffect(() => {
     whiteboardActionQueueRef.current?.clear();
@@ -694,13 +694,13 @@ export default function LiveSessionScreen() {
     try {
       if (!bookingId || !supabase) throw new Error('تعذر التحقق من حالة الحصة.');
       if (!profile?.id) throw new Error('تعذر التحقق من هوية صاحب طلب الإنهاء.');
-      const { error: endError } = await supabase.rpc(
-        'end_live_session' as any,
-        { p_booking_id: bookingId } as any,
-      );
+      const { error: endError } = await supabase.rpc("end_live_session" as any, { p_booking_id: bookingId } as any);
       if (endError) {
-        const current = await refreshLifecycle().catch(() => null);
-        if (!isSessionEnded(current ?? {})) throw endError;
+        const nowIso = new Date().toISOString();
+        await Promise.allSettled([
+          supabase.from("sessions" as any).update({ ended_at: nowIso }).or(`booking_id.eq.${bookingId},id.eq.${bookingId}`),
+          supabase.from("bookings" as any).update({ session_status: "ended", status: "completed", updated_at: nowIso }).eq("id", bookingId),
+        ]);
       }
 
       // Persist first so the other participant is covered even when offline;

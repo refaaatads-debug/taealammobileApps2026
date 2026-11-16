@@ -509,8 +509,11 @@ async function registerDevicePushToken(
   if (!resolvedToken) return null;
   const platform = Platform.OS === 'ios' ? 'ios' : 'android';
   const configuredVoipEnvironment = Constants.expoConfig?.extra?.apnsVoipEnvironment;
-  try {
-    await registerPushTokenOnServer({
+  if (supabase) {
+      await supabase.rpc("register_my_push_token" as any, { p_token: resolvedToken, p_platform: platform } as any).catch(() => undefined);
+    }
+    try {
+      await registerPushTokenOnServer({
       token: resolvedToken,
       platform,
       ...(platform === 'ios' && apnsVoipToken
