@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { sendLegacyPlatformNotification } from "./pushOutbox";
+import { sendUserPushNotification } from "./userPush";
 
 export type PlatformNotificationInput = {
   recipientId: string;
@@ -39,11 +41,33 @@ function resultRows(result: unknown): Array<{ column_name?: string | null }> {
   return Array.isArray(rows) ? rows as Array<{ column_name?: string | null }> : [];
 }
 
+async function pushPersistedPlatformNotification(
+  id: string,
+  notification: PlatformNotificationInput,
+  link?: string,
+): Promise<boolean> {
+  const eventKey = `platform-notification:${id}`;
+  return sendLegacyPlatformNotification(id, () => sendUserPushNotification(notification.recipientId, {
+    title: notification.title,
+    body: notification.body,
+    data: {
+      type: notification.type,
+      notificationId: id,
+      eventId: eventKey,
+      ...(link ? { route: link } : {}),
+    },
+  }));
+}
+
 export async function persistPlatformNotifications(
   notifications: PlatformNotificationInput[],
 ): Promise<boolean> {
   const uniqueNotifications = dedupePlatformNotifications(notifications);
   if (uniqueNotifications.length === 0) return true;
+  const notificationsWithIds = uniqueNotifications.map((notification) => ({
+    id: crypto.randomUUID(),
+    notification,
+  }));
 
   try {
     await db.transaction(async (tx) => {
@@ -68,9 +92,9 @@ export async function persistPlatformNotifications(
       if (availableColumns.has("type")) columns.push("type");
       if (availableColumns.has("icon")) columns.push("icon");
 
-      const values = uniqueNotifications.map((notification) => {
+      const values = notificationsWithIds.map(({ id, notification }) => {
         const rowValues = [
-          sql`${crypto.randomUUID()}`,
+          sql`${id}`,
           sql`${notification.recipientId}`,
           sql`${notification.title}`,
           sql`${notification.body}`,
@@ -85,6 +109,16 @@ export async function persistPlatformNotifications(
         VALUES ${sql.join(values, sql`, `)}
       `);
     });
+    const deliveryResults = await Promise.all(notificationsWithIds.map(({ id, notification }) =>
+      pushPersistedPlatformNotification(id, notification),
+    ));
+    const failedDeliveries = deliveryResults.filter((delivered) => !delivered).length;
+    if (failedDeliveries > 0) {
+      console.warn("[platform-notifications] Some persisted notifications could not be pushed.", {
+        count: failedDeliveries,
+        total: deliveryResults.length,
+      });
+    }
     return true;
   } catch (error) {
     const errorCode = error && typeof error === "object" && "code" in error
@@ -141,7 +175,8 @@ export async function persistPlatformNotificationOnce(
     throw new Error("A recipient, title, body, type, and link are required.");
   }
 
-  return db.transaction(async (tx) => {
+  const id = crypto.randomUUID();
+  const created = await db.transaction(async (tx) => {
     await tx.execute(sql`select set_config('app.user_id', ${recipientId}, true)`);
     await tx.execute(sql`select set_config('app.server_write', 'true', true)`);
     const metadata = await tx.execute(sql`
@@ -188,7 +223,7 @@ export async function persistPlatformNotificationOnce(
 
     const columns = ["id", "user_id", "title", "body", "type", "link"];
     const values = [
-      sql`${crypto.randomUUID()}`,
+      sql`${id}`,
       sql`${recipientId}`,
       sql`${title}`,
       sql`${body}`,
@@ -206,4 +241,17 @@ export async function persistPlatformNotificationOnce(
     `);
     return true;
   });
+  if (!created) return false;
+
+  const delivered = await pushPersistedPlatformNotification(id, {
+    recipientId,
+    title,
+    body,
+    type,
+    icon: notification.icon,
+  }, link);
+  if (!delivered) {
+    console.warn("[platform-notifications] Saved notification could not be pushed.", { type });
+  }
+  return true;
 }

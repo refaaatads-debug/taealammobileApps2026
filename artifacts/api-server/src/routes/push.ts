@@ -21,6 +21,8 @@ import { decodePushTokenBundle, mergePushTokenBundle } from "../lib/pushTokenBun
 import { findNotificationImageUrl } from "../lib/notificationImage";
 import { buildAssignmentNotification, persistPlatformNotificationOnce } from "../lib/platformNotifications";
 import { getSupabaseRoles, readBearerToken, supabaseTable } from "../lib/supabaseAuth";
+import { buildChatPushNotification } from "../lib/pushOutbox";
+import { sendCallPushNotification } from "../lib/callPush";
 import { sendUserPushNotification } from "../lib/userPush";
 import {
   canUseLegacyNotificationFallback,
@@ -294,6 +296,7 @@ router.post("/push/messages", async (req, res): Promise<void> => {
   }
 
   let queued = false;
+  let delivered = false;
   if (messageId) {
     try {
       queued = await enqueuePushOutboxEvent(`chat-message:${messageId}`, "chat_message", {
@@ -303,14 +306,34 @@ router.post("/push/messages", async (req, res): Promise<void> => {
         recipientId,
         kind,
       });
+      if (!queued) {
+        const chatPush = buildChatPushNotification(`chat-message:${messageId}`, {
+          messageId,
+          bookingId,
+          recipientId,
+          kind,
+        });
+        delivered = chatPush
+          ? await sendUserPushNotification(chatPush.recipientId, chatPush.notification)
+          : false;
+      }
     } catch (error) {
       req.log.warn({
         reason: "message_push_enqueue_failed",
         errorName: error instanceof Error ? error.name : "unknown",
       }, "Message was saved, but the API could not confirm its push queue entry");
+      const chatPush = buildChatPushNotification(`chat-message:${messageId}`, {
+        messageId,
+        bookingId,
+        recipientId,
+        kind,
+      });
+      delivered = chatPush
+        ? await sendUserPushNotification(chatPush.recipientId, chatPush.notification)
+        : false;
     }
   }
-  res.status(202).json({ delivered: false, queued });
+  res.status(202).json({ delivered, queued });
 });
 
 router.post("/push/assignment-submissions", async (req, res): Promise<void> => {
@@ -419,6 +442,7 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
   const bookingId = typeof callRow?.booking_id === "string" ? callRow.booking_id : null;
   const roomId = bookingId ?? parsed.data.roomId;
   let queued = false;
+  let delivered = false;
   try {
     queued = await enqueuePushOutboxEvent(`internal-call:${callId}:incoming`, "incoming_call", {
       callId,
@@ -427,14 +451,38 @@ router.post("/calls/incoming", async (req, res): Promise<void> => {
       bookingId,
       roomId,
     });
+    if (!queued) {
+      delivered = await sendCallPushNotification({
+        eventKey: `internal-call:${callId}:incoming`,
+        eventType: "incoming_call",
+        payload: {
+          callId,
+          callerId: userId,
+          recipientId: parsed.data.recipientId,
+          bookingId,
+          roomId,
+        },
+      });
+    }
   } catch (error) {
     req.log.warn({
       reason: "incoming_call_push_enqueue_failed",
       errorName: error instanceof Error ? error.name : "unknown",
     }, "Call was created, but the API could not confirm its push queue entry");
+    delivered = await sendCallPushNotification({
+      eventKey: `internal-call:${callId}:incoming`,
+      eventType: "incoming_call",
+      payload: {
+        callId,
+        callerId: userId,
+        recipientId: parsed.data.recipientId,
+        bookingId,
+        roomId,
+      },
+    });
   }
 
-  res.status(202).json({ callId, delivered: false, queued });
+  res.status(202).json({ callId, delivered, queued });
 });
 
 router.post("/calls/:callId/end", async (req, res): Promise<void> => {

@@ -326,7 +326,7 @@ export async function sendLegacyPlatformNotification(
   sendDirect: () => Promise<boolean>,
   checkQueued: (notificationId: string) => Promise<boolean | null> = hasPlatformNotificationOutboxEvent,
 ): Promise<boolean> {
-  if (notificationId && await checkQueued(notificationId) !== false) return true;
+  if (notificationId && await checkQueued(notificationId) === true) return true;
   return sendDirect();
 }
 
