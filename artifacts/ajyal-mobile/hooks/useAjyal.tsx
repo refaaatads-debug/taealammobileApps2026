@@ -76,7 +76,10 @@ export function AjyalProvider({ children }: { children: React.ReactNode }) {
   const roleResolved = Boolean(profile?.role && profile.roles?.length);
   const notificationsQuery = useQuery({
     queryKey: ajyalNotificationsQueryKey(userId),
-    enabled: Boolean(auth.isAuthenticated && roleResolved && userId),
+    // Notifications belong to the authenticated user and do not depend on
+    // resolving a student/teacher role. Keep the inbox available while the
+    // profile role query is delayed or temporarily unavailable.
+    enabled: Boolean(auth.isAuthenticated && userId && supabase),
     queryFn: () => loadAjyalNotifications(requireSupabaseClient(), userId),
     staleTime: 0,
     refetchInterval: 60_000,

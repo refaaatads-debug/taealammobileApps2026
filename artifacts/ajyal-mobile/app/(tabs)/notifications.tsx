@@ -138,7 +138,6 @@ export default function NotificationsScreen() {
   const isRTL = direction === 'rtl';
   const {
     profile,
-    roleResolved,
     notifications,
     notificationsLoading,
     notificationsError,
@@ -169,7 +168,7 @@ export default function NotificationsScreen() {
 
   useEffect(() => {
     const client = supabase;
-    if (!client || !roleResolved || !profile?.id) return;
+    if (!client || !profile?.id) return;
     let channel: ReturnType<typeof client.channel> | null = null;
     try {
       channel = client
@@ -194,7 +193,7 @@ export default function NotificationsScreen() {
       appStateSubscription.remove();
       if (channel) void client.removeChannel(channel);
     };
-  }, [profile?.id, retryNotifications, roleResolved]);
+  }, [profile?.id, retryNotifications]);
 
   return (
     <Screen>
