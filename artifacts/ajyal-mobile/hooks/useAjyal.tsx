@@ -69,11 +69,7 @@ export function AjyalProvider({ children }: { children: React.ReactNode }) {
       if (!auth.user) throw new Error("تعذر التحقق من الحساب.");
       return loadAjyalProfile(requireSupabaseClient(), auth.user);
     },
-    staleTime: 30_000,
-    refetchInterval: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    retry: 2,
+    staleTime: 60_000, refetchInterval: false, refetchOnWindowFocus: false, refetchOnReconnect: false, retry: 1,
     retryDelay: (attempt) => Math.min(750 * (attempt + 1), 2_000),
   });
   const profile = profileQuery.data ?? undefined;
