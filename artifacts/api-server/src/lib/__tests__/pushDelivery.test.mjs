@@ -8,7 +8,7 @@ import {
 } from "../pushTokenBundle.ts";
 import { pushDedupeKey } from "../pushDedupe.ts";
 import { __testing, sendApnsVoipPush } from "../apnsVoip.ts";
-import { sendExpoPushMessage } from "../expoPush.ts";
+import { __testing as expoPushTesting, sendExpoPushMessage } from "../expoPush.ts";
 import { buildChatPushNotification } from "../pushOutbox.ts";
 
 const expoToken = "ExpoPushToken[unit-test-token]";
@@ -142,6 +142,37 @@ test("Expo push delivery accepts both single-ticket and ticket-array response sh
       await sendExpoPushMessage(message);
       assert.deepEqual(requestBody, [message]);
     }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("an unregistered FCM device is reported from the Expo receipt", async () => {
+  const originalFetch = globalThis.fetch;
+  let reportedFailure = null;
+  try {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: {
+          "ticket-1": {
+            status: "error",
+            message: "The recipient device is not registered with FCM.",
+            details: { error: "DeviceNotRegistered" },
+          },
+        },
+      }),
+    });
+
+    await expoPushTesting.checkExpoPushReceipt("ticket-1", (providerCode, ticketId) => {
+      reportedFailure = { providerCode, ticketId };
+    });
+
+    assert.deepEqual(reportedFailure, {
+      providerCode: "DeviceNotRegistered",
+      ticketId: "ticket-1",
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

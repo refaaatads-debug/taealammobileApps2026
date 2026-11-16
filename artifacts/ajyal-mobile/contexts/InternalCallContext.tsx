@@ -713,6 +713,7 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
   const registerCurrentPushTokens = useCallback(async (
     notifications: NotificationsModule,
     expoToken: string,
+    forceRegistration = false,
   ): Promise<void> => {
     const register = async () => {
       const voipToken = Platform.OS === 'ios' ? currentVoipToken.current : null;
@@ -720,6 +721,7 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
         registeredPushUserId.current === user?.id
         && registeredPushToken.current === expoToken
         && registeredVoipToken.current === voipToken
+        && !forceRegistration
       ) return;
       const registeredToken = await registerDevicePushToken(
         notifications,
@@ -844,7 +846,7 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
     let setupInFlight = false;
     let receivedSubscription: Notifications.Subscription | null = null;
     let responseSubscription: Notifications.Subscription | null = null;
-    const setupNotifications = async () => {
+    const setupNotifications = async (forceTokenRegistration = false) => {
       if (!mounted || setupInFlight) return;
       setupInFlight = true;
       try {
@@ -864,7 +866,7 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
           currentToken
         ) {
           try {
-            await registerCurrentPushTokens(notifications, currentToken);
+            await registerCurrentPushTokens(notifications, currentToken, forceTokenRegistration);
           } catch {
             // Push registration is retryable and must never block the app.
           }
@@ -903,7 +905,7 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
     void setupNotifications();
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        void setupNotifications();
+        void setupNotifications(true);
       }
     });
 
