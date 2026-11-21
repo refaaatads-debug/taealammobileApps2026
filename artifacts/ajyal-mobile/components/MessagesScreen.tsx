@@ -1434,7 +1434,7 @@ export default function MessagesScreen() {
       }
     };
 
-    const timer = setInterval(() => void refreshRecentMessages(), 60_000);
+    const timer = setInterval(() => void refreshRecentMessages(), 20_000);
     const appStateListener = AppState.addEventListener("change", (state) => {
       if (state === "active") void refreshRecentMessages();
     });

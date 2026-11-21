@@ -4,7 +4,8 @@ import * as WebBrowser from "expo-web-browser";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { unregisterPushToken } from "@workspace/api-client-react";
-import { supabase, supabaseConfigError } from "./supabase";
+import { secureStorage, supabase, supabaseAuthStorageKey, supabaseConfigError } from "./supabase";
+import { hydrateQueryCache } from "./queryClient";
 import { createInitialAuthBootstrapGate } from "./authBootstrap";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -135,6 +136,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(session?.user ? mapUser(session.user) : null);
       setIsLoading(false);
     });
+    // Fast start: read the saved session straight from secure storage (no
+    // network) so the app can open immediately. supabase-js still validates and
+    // refreshes the token in the background; a failed refresh signs the user out.
+    if (supabaseAuthStorageKey) {
+      void (async () => {
+        try {
+          const raw = await secureStorage.getItem(supabaseAuthStorageKey);
+          if (!raw || !mounted || authStateVersion.current !== initialSessionVersion) return;
+          const saved = JSON.parse(raw) as { user?: { id?: string; email?: string | null; user_metadata?: Record<string, unknown> }; refresh_token?: string };
+          if (!saved?.user?.id || !saved.refresh_token) return;
+          await hydrateQueryCache(saved.user.id);
+          if (!mounted || authStateVersion.current !== initialSessionVersion) return;
+          initialAuthBootstrap.resolveFromSessionQuery(
+            mapUser({ id: saved.user.id, email: saved.user.email, user_metadata: saved.user.user_metadata }),
+            false,
+          );
+        } catch (error) {
+          console.warn("[auth] Fast session read failed:", error instanceof Error ? error.message : error);
+        }
+      })();
+    }
     void withTimeout(supabase.auth.getSession(), "انتهت مهلة الاتصال بالمنصة")
       .then(({ data }) => {
         const stale = authStateVersion.current !== initialSessionVersion;

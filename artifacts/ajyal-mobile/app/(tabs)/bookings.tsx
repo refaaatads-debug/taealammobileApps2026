@@ -11,6 +11,7 @@ import type { Session } from '@/constants/localData';
 import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRealtimeReconnect } from '@/lib/useRealtimeReconnect';
 import { canConfirmInPersonAttendance, canRevealInPersonAttendanceCode, canStudentCancelInPersonRequest, inPersonAttendanceAction } from '@/lib/inPersonScheduling';
 import { getInPersonBookingIds } from '@/lib/inPersonBookingDetails';
 import { getInPersonBookingSnapshot } from '@/lib/inPersonBookingSnapshot';
@@ -54,6 +55,7 @@ export default function BookingsScreen() {
   const { t, locale, direction, formatNumber } = useAppPreferences();
   const { role, roleResolved, profile, cancelSession } = useAjyal();
   const queryClient = useQueryClient();
+  const realtimeStatus = useRealtimeReconnect();
   const [view, setView] = useState<'upcoming' | 'past'>('upcoming');
   const [historyExpanded, setHistoryExpanded] = useState(true);
   const [cancelTarget, setCancelTarget] = useState<{ id: string; title: string } | null>(null);
@@ -67,8 +69,8 @@ export default function BookingsScreen() {
   const [decisionFeedback, setDecisionFeedback] = useState<'accepted' | 'rejected' | 'error' | null>(null);
   const requestView = role === 'teacher' ? 'incoming' : 'mine';
   const sessionView = 'upcoming';
-  const sessionsQuery = useListMySessions({ view: sessionView }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: sessionView }), staleTime: 60_000, refetchInterval: roleResolved && isFocused ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
-  const historyQuery = useListMySessions({ view: 'past' }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: 'past' }), staleTime: 60_000, refetchInterval: roleResolved && isFocused ? 60_000 : false, refetchOnWindowFocus: false, refetchOnReconnect: false } });
+  const sessionsQuery = useListMySessions({ view: sessionView }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: sessionView }), staleTime: 15_000, refetchOnMount: 'always', refetchInterval: roleResolved && isFocused ? 45_000 : false, refetchOnWindowFocus: true, refetchOnReconnect: true } });
+  const historyQuery = useListMySessions({ view: 'past' }, { query: { enabled: roleResolved, queryKey: getListMySessionsQueryKey({ view: 'past' }), staleTime: 15_000, refetchOnMount: 'always', refetchInterval: roleResolved && isFocused ? 45_000 : false, refetchOnWindowFocus: true, refetchOnReconnect: true } });
   const rawScheduleSessions = useMemo(
     () => [...new Map([...(sessionsQuery.data ?? []), ...(historyQuery.data ?? [])].map((session) => [session.id, session])).values()],
     [historyQuery.data, sessionsQuery.data],
@@ -92,9 +94,10 @@ export default function BookingsScreen() {
       query: {
         enabled: roleResolved,
         queryKey: getListBookingRequestsQueryKey({ view: requestView }),
-        staleTime: 0,
-        refetchInterval: roleResolved && isFocused ? (role === 'teacher' ? 15_000 : 60_000) : false,
-        refetchOnWindowFocus: role === 'teacher',
+        staleTime: role === 'teacher' ? 10_000 : 15_000,
+        refetchOnMount: 'always',
+        refetchInterval: roleResolved && isFocused ? (role === 'teacher' ? 15_000 : 30_000) : false,
+        refetchOnWindowFocus: true,
         refetchOnReconnect: true,
       },
     },
@@ -103,7 +106,8 @@ export default function BookingsScreen() {
     queryKey: ['in-person-request-groups', role, profile?.id],
     enabled: roleResolved && Boolean(profile?.id) && Boolean(supabase),
     staleTime: 15_000,
-    refetchInterval: roleResolved && isFocused ? (role === 'teacher' ? 20_000 : 60_000) : false,
+    refetchOnMount: 'always',
+    refetchInterval: roleResolved && isFocused ? (role === 'teacher' ? 20_000 : 45_000) : false,
     refetchOnReconnect: true,
     refetchOnWindowFocus: true,
     queryFn: async () => {
@@ -295,6 +299,7 @@ export default function BookingsScreen() {
     if (!client || !profile?.id) return undefined;
     const topic = `mobile-bookings-${role}-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let channel: ReturnType<typeof client.channel> | null = null;
+    let disposed = false;
     try {
       channel = client
         .channel(topic)
@@ -373,19 +378,28 @@ export default function BookingsScreen() {
             void inPersonRequestsQuery.refetch();
         })
         .subscribe((status) => {
-          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            console.warn(`[bookings] Realtime channel ${status.toLowerCase()}; using query refreshes instead.`);
+          if (disposed) return;
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            console.warn(`[bookings] Realtime channel ${status.toLowerCase()}; retrying and using query refreshes meanwhile.`);
           }
+          if (status === 'SUBSCRIBED') {
+            // Catch up on anything missed while disconnected.
+            void requestQuery.refetch();
+            void sessionsQuery.refetch();
+            void historyQuery.refetch();
+          }
+          realtimeStatus.onStatus(status);
         });
     } catch (error) {
       console.warn('[bookings] Could not start realtime updates:', error);
     }
     return () => {
+      disposed = true;
       if (channel) void client.removeChannel(channel).catch((error) => {
         console.warn('[bookings] Could not remove realtime channel:', error);
       });
     };
-  }, [historyQuery.refetch, inPersonRequestsQuery.refetch, role, profile?.id, queryClient, requestQuery.refetch, requestView, sessionsQuery.refetch]);
+  }, [historyQuery.refetch, inPersonRequestsQuery.refetch, role, profile?.id, queryClient, requestQuery.refetch, requestView, sessionsQuery.refetch, realtimeStatus.tick, realtimeStatus.onStatus]);
 
   const openSession = (id: string) => {
     const session = scheduleSessions.find((item) => item.id === id);
@@ -513,6 +527,9 @@ export default function BookingsScreen() {
   };
   const sessionListSection = (
     <>
+      {realtimeStatus.down ? (
+        <Text style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', paddingVertical: 4 }}>جارٍ إعادة الاتصال بالتحديثات المباشرة…</Text>
+      ) : null}
       <Pressable
         accessibilityRole={isHistoryView ? 'button' : undefined}
         accessibilityState={isHistoryView ? { expanded: historyExpanded } : undefined}
