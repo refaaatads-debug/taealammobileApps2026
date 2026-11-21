@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
+import { BlurHashImage } from '@/components/BlurHashImage';
 import * as ImagePicker from 'expo-image-picker';
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer, useAudioRecorder } from 'expo-audio';
 import { useColors } from '@/hooks/useColors';
@@ -12,8 +13,13 @@ import type { Assignment } from '@workspace/api-client-react';
 import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { useQueryClient } from '@tanstack/react-query';
+import { extractEdgeFunctionError } from '@/lib/edgeFunctionError';
+import { TeacherAssignmentComposer } from '@/components/TeacherAssignmentComposer';
+import { toggleMultiSelectAnswer } from '@/lib/assignmentAuthoring';
 
 type SubmissionRow = Record<string, unknown>;
+type TeacherReviewStatus = 'submitted' | 'ai_graded' | 'reviewed' | 'mixed';
+type AnswerValue = string | string[];
 type Question = {
   text: string;
   type: string;
@@ -64,7 +70,7 @@ function assignmentQuestions(value: unknown): Question[] {
   });
 }
 
-function submissionAnswers(value: unknown, count: number): string[] {
+function submissionAnswers(value: unknown, count: number): AnswerValue[] {
   let parsed = value;
   if (typeof parsed === 'string') {
     try {
@@ -80,7 +86,11 @@ function submissionAnswers(value: unknown, count: number): string[] {
         .sort(([left], [right]) => Number(left) - Number(right))
         .map(([, answer]) => answer)
       : [];
-  return Array.from({ length: count }, (_, index) => displayAnswer(answers[index]));
+  return Array.from({ length: count }, (_, index) => {
+    const answer = answers[index];
+    if (Array.isArray(answer)) return answer.map(displayAnswer).filter(Boolean);
+    return displayAnswer(answer);
+  });
 }
 
 function displayAnswer(value: unknown): string {
@@ -133,18 +143,27 @@ export default function AssignmentsScreen() {
   const [aiGradingSubmissionId, setAiGradingSubmissionId] = useState<string | null>(null);
   const [savingGradeSubmissionId, setSavingGradeSubmissionId] = useState<string | null>(null);
   const [submissionCounts, setSubmissionCounts] = useState<Record<string, number>>({});
+  const [teacherReviewStatuses, setTeacherReviewStatuses] = useState<Record<string, TeacherReviewStatus>>({});
   const [studentSubmissions, setStudentSubmissions] = useState<SubmissionRow[]>([]);
   const [studentSubmissionsError, setStudentSubmissionsError] = useState<string | null>(null);
   const [activeAssignment, setActiveAssignment] = useState<AssignmentDetail | null>(null);
   const [activeSubmission, setActiveSubmission] = useState<SubmissionRow | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [answers, setAnswers] = useState<string[]>([]);
+  const [answers, setAnswers] = useState<AnswerValue[]>([]);
+  const [assignmentComposerOpen, setAssignmentComposerOpen] = useState(false);
   const [textAnswer, setTextAnswer] = useState('');
   const [selectedImages, setSelectedImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [audioUri, setAudioUri] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const assignmentsQuery = useListMyAssignments();
+  const assignmentsQuery = useListMyAssignments({
+    query: {
+      queryKey: getListMyAssignmentsQueryKey(),
+      refetchInterval: role === 'student' || role === 'teacher' ? 60_000 : false,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+    },
+  });
   const assignments = assignmentsQuery.data ?? [];
   const userId = profile?.id;
   const assignmentIdsKey = useMemo(() => assignments.map((assignment) => assignment.id).join(','), [assignments]);
@@ -171,48 +190,71 @@ export default function AssignmentsScreen() {
   useEffect(() => {
     void loadStudentSubmissions();
   }, [loadStudentSubmissions]);
-  useEffect(() => {
+  const loadTeacherSubmissionState = useCallback(async () => {
     if (role !== 'teacher' || !supabase || !userId || !assignmentIdsKey) {
       setSubmissionCounts({});
+      setTeacherReviewStatuses({});
       return;
     }
     const assignmentIds = assignmentIdsKey.split(',').filter(Boolean);
-    const client = supabase;
-    let active = true;
-    const loadSubmissionCounts = async () => {
-      const result = await client
-        .from('assignment_submissions')
-        .select('assignment_id')
-        .in('assignment_id', assignmentIds);
-      if (!active || result.error) return;
-      const next: Record<string, number> = {};
-      for (const row of (result.data ?? []) as Array<{ assignment_id?: string | null }>) {
-        if (row.assignment_id) next[row.assignment_id] = (next[row.assignment_id] ?? 0) + 1;
-      }
-      setSubmissionCounts(next);
-    };
-    void loadSubmissionCounts();
+    const result = await supabase
+      .from('assignment_submissions')
+      .select('assignment_id,status')
+      .in('assignment_id', assignmentIds);
+    if (result.error) return;
+    const nextCounts: Record<string, number> = {};
+    const statusesByAssignment: Record<string, string[]> = {};
+    for (const row of (result.data ?? []) as Array<{ assignment_id?: string | null; status?: string | null }>) {
+      if (!row.assignment_id) continue;
+      nextCounts[row.assignment_id] = (nextCounts[row.assignment_id] ?? 0) + 1;
+      const status = typeof row.status === 'string' ? row.status.trim().toLowerCase() : 'submitted';
+      statusesByAssignment[row.assignment_id] = [...(statusesByAssignment[row.assignment_id] ?? []), status];
+    }
+    const nextStatuses: Record<string, TeacherReviewStatus> = {};
+    for (const [assignmentId, statuses] of Object.entries(statusesByAssignment)) {
+      const normalized = statuses.map((status) => status === 'reviewed' ? 'reviewed' : status === 'ai_graded' ? 'ai_graded' : 'submitted');
+      const allReviewed = normalized.length > 0 && normalized.every((status) => status === 'reviewed');
+      nextStatuses[assignmentId] = allReviewed
+        ? 'reviewed'
+        : new Set(normalized).size > 1
+          ? 'mixed'
+          : normalized[0] as TeacherReviewStatus;
+    }
+    setSubmissionCounts(nextCounts);
+    setTeacherReviewStatuses(nextStatuses);
+  }, [assignmentIdsKey, role, userId]);
 
-    const channel = supabase.channel(`mobile-teacher-assignment-submissions-${userId}`);
+  useEffect(() => {
+    void loadTeacherSubmissionState();
+    if (role !== 'teacher' || !supabase || !userId || !assignmentIdsKey) return;
+    const channel = supabase.channel(`mobile-teacher-assignment-submissions-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     channel.on('postgres_changes', {
-      event: 'INSERT',
+      event: '*',
       schema: 'public',
       table: 'assignment_submissions',
     }, (payload) => {
-      const assignmentId = typeof payload.new?.assignment_id === 'string' ? payload.new.assignment_id : '';
+      const payloadRow = payload.new && typeof payload.new === 'object' ? payload.new as Record<string, unknown> : {};
+      const assignmentId = typeof payloadRow.assignment_id === 'string' ? payloadRow.assignment_id : '';
+      const assignmentIds = assignmentIdsKey.split(',').filter(Boolean);
       if (!assignmentId || !assignmentIds.includes(assignmentId)) return;
-      setSubmissionCounts((current) => ({ ...current, [assignmentId]: (current[assignmentId] ?? 0) + 1 }));
-      Alert.alert(t('تسليم جديد', 'New submission'), t('وصل حل جديد من أحد الطلاب. افتح المهمة لمراجعته.', 'A new student submission arrived. Open the assignment to review it.'));
+      void loadTeacherSubmissionState();
+      void queryClient.invalidateQueries({ queryKey: getListMyAssignmentsQueryKey() });
+      if (payload.eventType === 'INSERT') {
+        Alert.alert(t('تسليم جديد', 'New submission'), t('وصل حل جديد من أحد الطلاب. افتح المهمة لمراجعته.', 'A new student submission arrived. Open the assignment to review it.'));
+      }
     });
-    channel.subscribe();
+    void channel.subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn(`[assignments] Teacher submission Realtime ${status.toLowerCase()}.`);
+      }
+    });
     return () => {
-      active = false;
       void supabase?.removeChannel(channel);
     };
-  }, [assignmentIdsKey, role, t, userId]);
+  }, [assignmentIdsKey, loadTeacherSubmissionState, queryClient, role, t, userId]);
   useEffect(() => {
     if (role !== 'student' || !supabase || !userId) return;
-    const channel = supabase.channel(`mobile-assignment-submissions-${userId}`);
+    const channel = supabase.channel(`mobile-assignment-submissions-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     channel.on('postgres_changes', {
       event: '*',
       schema: 'public',
@@ -220,16 +262,45 @@ export default function AssignmentsScreen() {
       filter: `student_id=eq.${userId}`,
     }, () => {
       void loadStudentSubmissions();
+      void queryClient.invalidateQueries({ queryKey: getListMyAssignmentsQueryKey() });
     });
-    channel.subscribe();
+    void channel.subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn(`[assignments] Student submission Realtime ${status.toLowerCase()}.`);
+      }
+    });
     return () => {
       void supabase?.removeChannel(channel);
     };
-  }, [loadStudentSubmissions, role, userId]);
+  }, [loadStudentSubmissions, queryClient, role, userId]);
+  useEffect(() => {
+    if (!supabase || !userId || (role !== 'student' && role !== 'teacher')) return;
+    const channel = supabase.channel(`mobile-assignment-list-${role}-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    channel.on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'assignments',
+    }, () => {
+      void queryClient.invalidateQueries({ queryKey: getListMyAssignmentsQueryKey() });
+    });
+    void channel.subscribe((status) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn(`[assignments] Assignment list Realtime ${status.toLowerCase()}; refresh-on-focus remains available.`);
+      }
+    });
+    return () => {
+      void supabase?.removeChannel(channel);
+    };
+  }, [queryClient, role, userId]);
   const submittedIds = useMemo(() => new Set(studentSubmissions.map((submission) => rowText(submission, 'assignment_id'))), [studentSubmissions]);
   const visible = useMemo(() => assignments.filter((item) => filter === 'all' || (filter === 'quizzes' ? item.kind === 'اختبار' : item.kind === 'واجب')), [assignments, filter]);
   const finished = assignments.filter((item) => item.progress === 100 || item.status === 'مكتمل' || submittedIds.has(item.id)).length;
   const average = assignments.length ? Math.round(assignments.reduce((sum, item) => sum + (submittedIds.has(item.id) ? 100 : item.progress), 0) / assignments.length) : 0;
+  const assignmentCounts = useMemo(() => ({
+    all: assignments.length,
+    assignments: assignments.filter((item) => item.kind === 'واجب').length,
+    quizzes: assignments.filter((item) => item.kind === 'اختبار').length,
+  }), [assignments]);
 
   const openTeacherReview = async (id: string, title: string) => {
     setReviewTarget({ id, title });
@@ -292,7 +363,20 @@ export default function AssignmentsScreen() {
       setGradingSubmissionId(id);
       Alert.alert(t('تم التصحيح المبدئي', 'AI review complete'), t('راجِع الدرجة والملاحظات ثم اعتمدها للطالب.', 'Review the score and feedback, then approve it for the student.'));
     } catch (error) {
-      Alert.alert(t('تعذر التصحيح بالذكاء الصناعي', 'AI grading failed'), error instanceof Error ? error.message : t('حاول مرة أخرى.', 'Please try again.'));
+      const functionError = await extractEdgeFunctionError(error);
+      const status = functionError.status;
+      if (status !== null) {
+        console.warn('[grade-assignment] Edge Function request failed', { httpStatus: status });
+      }
+      const errorMessage = status !== null
+        ? [
+          t(`لم يُكمل خادم التصحيح الطلب (HTTP ${status}). أعد المحاولة لاحقاً.`, `The grading service returned HTTP ${status}. Try again later.`),
+          functionError.message,
+        ].filter(Boolean).join('\n')
+        : error instanceof Error
+          ? error.message
+          : t('حاول مرة أخرى.', 'Please try again.');
+      Alert.alert(t('تعذر التصحيح بالذكاء الصناعي', 'AI grading failed'), errorMessage);
     } finally {
       setAiGradingSubmissionId(null);
     }
@@ -323,7 +407,10 @@ export default function AssignmentsScreen() {
       }
       setSubmissions((current) => current.map((item) => rowText(item, 'id') === id ? result.data as SubmissionRow : item));
       setGradingSubmissionId(null);
-      if (reviewTarget?.id) await notifyAssignmentEvent(reviewTarget.id, id, 'graded');
+      if (reviewTarget?.id) {
+        await loadTeacherSubmissionState();
+        await notifyAssignmentEvent(reviewTarget.id, id, 'graded');
+      }
       Alert.alert(t('تم حفظ التصحيح', 'Grade saved'), t('تم حفظ الدرجة وتحديث التسليم وإرسال تنبيه النتيجة إن كان متاحاً.', 'The grade was saved and the submission was refreshed. A result alert was sent when available.'));
     } catch (error) {
       Alert.alert(t('تعذر حفظ التصحيح', 'Could not save grade'), error instanceof Error ? error.message : t('حاول مرة أخرى.', 'Please try again.'));
@@ -384,7 +471,7 @@ export default function AssignmentsScreen() {
 
   const submitAssignment = async () => {
     if (!activeAssignment || !supabase || !userId) return;
-    if (!textAnswer.trim() && answers.every((answer) => !answer.trim())) {
+    if (!textAnswer.trim() && answers.every((answer) => Array.isArray(answer) ? answer.length === 0 : !answer.trim())) {
       Alert.alert(t('أكمل الحل أولاً', 'Complete your answer first'), t('أجب عن سؤال واحد على الأقل قبل التسليم.', 'Answer at least one question before submitting.'));
       return;
     }
@@ -513,11 +600,27 @@ export default function AssignmentsScreen() {
     <Screen>
        <Header avatarText={profile?.displayName?.slice(0, 1)} eyebrow={role === 'student' ? t('تقدمك الدراسي', 'Your learning progress') : t('مركز المتابعة', 'Review center')} title={role === 'student' ? t('المهام والاختبارات', 'Assignments and quizzes') : t('المهام والتقييم', 'Assignments and grading')} onBell={() => router.push('/notifications')} onAvatar={() => router.push('/profile')} />
       {assignmentsQuery.isLoading ? <LoadingBlock /> : null}
-      <View style={[styles.summary, { backgroundColor: colors.primary }]}>
+       <View style={[styles.summary, { backgroundColor: colors.primary }]}>
+         <View style={[styles.summaryGlowOne, { backgroundColor: colors.teal }]} />
+         <View style={[styles.summaryGlowTwo, { backgroundColor: colors.accent }]} />
         <View style={styles.summaryText}>
            <View style={styles.summaryKicker}><View style={[styles.summaryDot, { backgroundColor: colors.accent }]} /><Text style={[styles.summaryEyebrow, { color: colors.tint, writingDirection: direction }]}>{role === 'student' ? t('إيقاع هذا الأسبوع', 'This week’s rhythm') : t('صورة سريعة', 'Quick view')}</Text></View>
            <Text style={[styles.summaryTitle, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{`${formatNumber(finished)} ${t('من', 'of')} ${formatNumber(assignments.length)} ${t('مهام مكتملة', 'completed')}`}</Text>
            <Text style={[styles.summaryBody, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{role === 'student' ? t('تقدّم ثابت يصنع فرقاً.', 'Steady progress makes a difference.') : t('تابع تقدم طلابك من بيانات المنصة.', 'Track your students’ progress from platform data.')}</Text>
+            <View style={[styles.summaryStats, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <View style={[styles.summaryStat, { backgroundColor: 'rgba(255,255,255,0.12)' }]}>
+                <Text style={[styles.summaryStatValue, { color: colors.primaryForeground }]}>{formatNumber(assignments.length)}</Text>
+                <Text style={[styles.summaryStatLabel, { color: colors.tint, writingDirection: direction }]}>{t('إجمالي', 'Total')}</Text>
+              </View>
+              <View style={[styles.summaryStat, { backgroundColor: 'rgba(255,255,255,0.12)' }]}>
+                <Text style={[styles.summaryStatValue, { color: colors.primaryForeground }]}>{formatNumber(Math.max(assignments.length - finished, 0))}</Text>
+                <Text style={[styles.summaryStatLabel, { color: colors.tint, writingDirection: direction }]}>{t('متبقي', 'Remaining')}</Text>
+              </View>
+              <View style={[styles.summaryStat, { backgroundColor: 'rgba(255,255,255,0.12)' }]}>
+                <Text style={[styles.summaryStatValue, { color: colors.primaryForeground }]}>{formatNumber(average)}%</Text>
+                <Text style={[styles.summaryStatLabel, { color: colors.tint, writingDirection: direction }]}>{t('المتوسط', 'Average')}</Text>
+              </View>
+            </View>
         </View>
         <View style={[styles.ring, { borderColor: colors.accent }]}>
            <Text style={[styles.ringValue, { color: colors.primaryForeground }]}>{assignments.length ? `${formatNumber(average)}%` : '—'}</Text>
@@ -526,9 +629,16 @@ export default function AssignmentsScreen() {
       </View>
       <View style={styles.headingRow}>
          <SectionHeading title={t('قائمة التعلّم', 'Learning list')} />
-        <Pressable testID="refresh-assignments" onPress={() => void assignmentsQuery.refetch()} hitSlop={8} style={({ pressed }) => [styles.newButton, { backgroundColor: colors.tealSoft }, pressed && styles.pressed]}>
-           <Icon name="refresh-cw" size={13} color={colors.secondaryForeground} /><Text style={[styles.newButtonText, { color: colors.secondaryForeground }]}>{t('تحديث', 'Refresh')}</Text>
-        </Pressable>
+         <View style={[styles.headingActions, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+           {role === 'teacher' && userId ? (
+             <Pressable testID="open-assignment-composer" accessibilityRole="button" accessibilityLabel={t('إنشاء واجب أو اختبار', 'Create assignment or quiz')} onPress={() => setAssignmentComposerOpen(true)} hitSlop={8} style={({ pressed }) => [styles.newButton, { backgroundColor: colors.primary }, pressed && styles.pressed]}>
+               <Icon name="plus" size={13} color={colors.primaryForeground} /><Text style={[styles.newButtonText, { color: colors.primaryForeground }]}>{t('إنشاء', 'Create')}</Text>
+             </Pressable>
+           ) : null}
+           <Pressable testID="refresh-assignments" onPress={() => void assignmentsQuery.refetch()} hitSlop={8} style={({ pressed }) => [styles.newButton, { backgroundColor: colors.tealSoft }, pressed && styles.pressed]}>
+              <Icon name="refresh-cw" size={13} color={colors.teal} /><Text style={[styles.newButtonText, { color: colors.teal }]}>{t('تحديث', 'Refresh')}</Text>
+           </Pressable>
+         </View>
       </View>
       {role === 'student' && studentSubmissionsError ? (
         <View style={[styles.reviewErrorBanner, { backgroundColor: colors.goldSoft, borderColor: colors.border }]}>
@@ -539,10 +649,21 @@ export default function AssignmentsScreen() {
           </Pressable>
         </View>
       ) : null}
-      <View style={[styles.filters, { borderBottomColor: colors.border }]}>
-         {(['all', 'assignments', 'quizzes'] as const).map((item) => <Pressable key={item} onPress={() => setFilter(item)} style={({ pressed }) => [styles.filter, filter === item && { borderBottomColor: colors.teal, borderBottomWidth: 2 }, pressed && styles.pressed]}><Text style={[styles.filterText, { color: filter === item ? colors.teal : colors.mutedForeground, writingDirection: direction }]}>{item === 'all' ? t('الكل', 'All') : item === 'assignments' ? t('واجبات', 'Assignments') : t('اختبارات', 'Quizzes')}</Text></Pressable>)}
+       <View style={[styles.filters, { backgroundColor: colors.muted, borderColor: colors.border, flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+          {(['all', 'assignments', 'quizzes'] as const).map((item) => {
+            const active = filter === item;
+            const label = item === 'all' ? t('الكل', 'All') : item === 'assignments' ? t('واجبات', 'Assignments') : t('اختبارات', 'Quizzes');
+            return (
+              <Pressable key={item} onPress={() => setFilter(item)} style={({ pressed }) => [styles.filter, active && { backgroundColor: colors.card, shadowColor: colors.primary, shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 }, pressed && styles.pressed]}>
+                <Text style={[styles.filterText, { color: active ? colors.teal : colors.mutedForeground, writingDirection: direction }]}>{label}</Text>
+                <View style={[styles.filterCount, { backgroundColor: active ? colors.tealSoft : colors.card }]}>
+                  <Text style={[styles.filterCountText, { color: active ? colors.teal : colors.mutedForeground }]}>{formatNumber(assignmentCounts[item])}</Text>
+                </View>
+              </Pressable>
+            );
+          })}
       </View>
-         {assignmentsQuery.isError ? <EmptyState icon="alert-circle" title={t('تعذر تحميل المهام', 'Unable to load assignments')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => void assignmentsQuery.refetch()} /> : visible.length ? visible.map((item) => <AssignmentRow key={item.id} assignment={item} completed={isAssignmentComplete(item, submittedIds.has(item.id))} submissionCount={role === 'teacher' ? submissionCounts[item.id] ?? 0 : 0} onPress={() => void openAssignment(item.id)} />) : <EmptyState icon="clipboard" title={t('لا توجد مهام', 'No assignments')} body={t('ستظهر المهام المتزامنة من المنصة هنا.', 'Assignments synced from the platform will appear here.')} />}
+         {assignmentsQuery.isError ? <EmptyState icon="alert-circle" title={t('تعذر تحميل المهام', 'Unable to load assignments')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => void assignmentsQuery.refetch()} /> : visible.length ? visible.map((item) => <AssignmentRow key={item.id} assignment={item} completed={isAssignmentComplete(item, submittedIds.has(item.id))} submissionCount={role === 'teacher' ? submissionCounts[item.id] ?? 0 : 0} teacherReviewStatus={role === 'teacher' ? teacherReviewStatuses[item.id] : undefined} onPress={() => void openAssignment(item.id)} />) : <EmptyState icon="clipboard" title={t('لا توجد مهام', 'No assignments')} body={t('ستظهر المهام المتزامنة من المنصة هنا.', 'Assignments synced from the platform will appear here.')} />}
        <Modal visible={Boolean(reviewTarget)} transparent animationType="fade" onRequestClose={() => setReviewTarget(null)}>
          <View style={styles.modalBackdrop}>
            <View style={[styles.reviewCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -560,13 +681,19 @@ export default function AssignmentsScreen() {
                    {submissions.map((submission, index) => {
                      const submissionId = rowText(submission, 'id');
                      const editing = gradingSubmissionId === submissionId;
+                     const rawSubmissionStatus = rowText(submission, 'status').toLowerCase();
+                     const submissionStatusLabel = rawSubmissionStatus === 'reviewed'
+                       ? t('تم التصحيح', 'Reviewed')
+                       : rawSubmissionStatus === 'ai_graded'
+                         ? t('تم التصحيح آلياً', 'AI graded')
+                         : t('قيد المراجعة', 'Awaiting review');
                       const answerValues = submissionAnswers(submission.answers, reviewQuestions.length);
                       const imageUrls = mediaUrls(submission.image_urls);
                       const audioUrl = rowText(submission, 'audio_url');
                      return (
                        <View key={String(submission.id ?? `${submission.student_id ?? 'student'}-${index}`)} style={[styles.submission, { backgroundColor: colors.muted, borderColor: colors.border }]}>
                          <View style={styles.submissionTop}>
-                           <Text style={[styles.submissionStatus, { color: colors.teal, writingDirection: direction }]}>{rowText(submission, 'status') || t('مرسل', 'Submitted')}</Text>
+                           <Text style={[styles.submissionStatus, { color: rawSubmissionStatus === 'reviewed' ? colors.success : colors.teal, writingDirection: direction }]}>{submissionStatusLabel}</Text>
                            <Text style={[styles.submissionStudent, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{rowText(submission, 'student_name', 'student_email', 'student_id') || t('طالب مرتبط بالمهمة', 'Student linked to this assignment')}</Text>
                          </View>
                          <Text style={[styles.reviewBody, { color: colors.mutedForeground }]}>{rowText(submission, 'submitted_at', 'created_at') || t('وقت الإرسال غير متوفر', 'Submission time unavailable')}</Text>
@@ -574,12 +701,12 @@ export default function AssignmentsScreen() {
                           {reviewQuestions.length ? (
                             <View style={styles.submissionQuestions}>
                               {reviewQuestions.map((question, questionIndex) => {
-                                const answer = answerValues[questionIndex];
+                                 const answerText = displayAnswer(answerValues[questionIndex]);
                                 return (
                                   <View key={`${submissionId}-answer-${questionIndex}`} style={[styles.submissionQuestion, { borderColor: colors.border, backgroundColor: colors.card }]}>
                                     <Text style={[styles.submissionQuestionText, { color: colors.foreground }]}>{questionIndex + 1}. {question.text}</Text>
-                                    <Text style={[styles.submissionAnswer, { color: answer ? colors.foreground : colors.mutedForeground }]}>
-                                      {answer || t('لم يجب الطالب عن هذا السؤال.', 'The student did not answer this question.')}
+                                     <Text style={[styles.submissionAnswer, { color: answerText ? colors.foreground : colors.mutedForeground }]}>
+                                       {answerText || t('لم يجب الطالب عن هذا السؤال.', 'The student did not answer this question.')}
                                     </Text>
                                   </View>
                                 );
@@ -595,7 +722,7 @@ export default function AssignmentsScreen() {
                               <View style={styles.submissionImageGrid}>
                                 {imageUrls.map((url, imageIndex) => (
                                   <Pressable key={`${submissionId}-image-${imageIndex}`} onPress={() => void Linking.openURL(url)}>
-                                    <Image source={{ uri: url }} style={styles.submissionImage} resizeMode="cover" />
+                                    <BlurHashImage uri={url} style={styles.submissionImage} />
                                   </Pressable>
                                 ))}
                               </View>
@@ -661,6 +788,42 @@ export default function AssignmentsScreen() {
                   </View>
                   <ScrollView showsVerticalScrollIndicator={false}>
                     {activeAssignment.description ? <Text style={[styles.detailDescription, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{activeAssignment.description}</Text> : null}
+                    {activeAssignment.attachments.length ? (
+                      <View style={styles.extraAnswer}>
+                        <Text style={[styles.fieldLabel, { color: colors.foreground, writingDirection: direction }]}>{t('مرفقات المهمة', 'Assignment attachments')}</Text>
+                        {activeAssignment.attachments.map((attachment, index) => {
+                          const name = rowText(attachment, 'name') || `${t('ملف مرفق', 'Attachment')} ${index + 1}`;
+                          const url = rowText(attachment, 'url');
+                          return (
+                            <Pressable
+                              key={`assignment-attachment-${index}`}
+                              testID={`open-assignment-attachment-${index}`}
+                              onPress={() => {
+                                void (async () => {
+                                  try {
+                                    let resolvedUrl = url;
+                                    if (!resolvedUrl.startsWith('http') && supabase) {
+                                      const signed = await supabase.storage.from('assignment-files').createSignedUrl(resolvedUrl, 60 * 60);
+                                      if (signed.error || !signed.data?.signedUrl) throw signed.error ?? new Error(t('تعذر إنشاء رابط آمن للملف.', 'Could not create a secure file link.'));
+                                      resolvedUrl = signed.data.signedUrl;
+                                    }
+                                    if (!resolvedUrl) throw new Error(t('رابط الملف غير متاح.', 'The file link is unavailable.'));
+                                    await Linking.openURL(resolvedUrl);
+                                  } catch (error) {
+                                    Alert.alert(t('تعذر فتح المرفق', 'Could not open attachment'), error instanceof Error ? error.message : t('حاول مرة أخرى.', 'Please try again.'));
+                                  }
+                                })();
+                              }}
+                              style={[styles.attachmentButton, { backgroundColor: colors.muted, borderColor: colors.border }]}
+                            >
+                              <Icon name="paperclip" size={14} color={colors.teal} />
+                              <Text numberOfLines={1} style={[styles.attachmentText, { color: colors.foreground, writingDirection: direction }]}>{name}</Text>
+                              <Icon name="external-link" size={13} color={colors.mutedForeground} />
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    ) : null}
                     {activeSubmission ? (
                       <View style={[styles.resultBanner, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}>
                         <Text style={[styles.resultTitle, { color: colors.foreground, writingDirection: direction }]}>{t('تم تسليم الحل', 'Submission received')}</Text>
@@ -691,6 +854,28 @@ export default function AssignmentsScreen() {
                               );
                             })}
                           </View>
+                        ) : question.type === 'multiple_select' && question.options.length ? (
+                          <View style={styles.options}>
+                            <Text style={[styles.reviewBody, { color: colors.mutedForeground, marginTop: 0 }]}>{t('يمكن اختيار أكثر من إجابة', 'Select all that apply')}</Text>
+                            {question.options.map((option) => {
+                              const selectedAnswers = Array.isArray(answers[index]) ? answers[index] as string[] : [];
+                              const selected = selectedAnswers.includes(option);
+                              return (
+                                <Pressable
+                                  key={option}
+                                  disabled={Boolean(activeSubmission)}
+                                  onPress={() => setAnswers((current) => current.map((answer, answerIndex) => {
+                                    if (answerIndex !== index) return answer;
+                                    return toggleMultiSelectAnswer(Array.isArray(answer) ? answer : [], option);
+                                  }))}
+                                  style={[styles.option, { borderColor: selected ? colors.teal : colors.border, backgroundColor: selected ? colors.tealSoft : colors.card }]}
+                                >
+                                  <View style={[styles.optionDot, { borderColor: selected ? colors.teal : colors.mutedForeground, backgroundColor: selected ? colors.teal : 'transparent' }]} />
+                                  <Text style={[styles.optionText, { color: colors.foreground, writingDirection: direction }]}>{option}</Text>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
                         ) : question.type === 'true_false' ? (
                           <View style={styles.options}>
                             {['صح', 'خطأ'].map((option) => {
@@ -701,7 +886,7 @@ export default function AssignmentsScreen() {
                         ) : (
                           <TextInput
                             editable={!activeSubmission}
-                            value={answers[index] ?? ''}
+                            value={typeof answers[index] === 'string' ? answers[index] : ''}
                             onChangeText={(value) => setAnswers((current) => current.map((answer, answerIndex) => answerIndex === index ? value : answer))}
                             multiline
                             placeholder={t('اكتب إجابتك هنا', 'Write your answer here')}
@@ -759,27 +944,45 @@ export default function AssignmentsScreen() {
             </View>
           </View>
         </Modal>
+        <TeacherAssignmentComposer
+          visible={assignmentComposerOpen && role === 'teacher'}
+          teacherId={userId ?? ''}
+          onClose={() => setAssignmentComposerOpen(false)}
+          onCreated={() => {
+            setAssignmentComposerOpen(false);
+            void queryClient.invalidateQueries({ queryKey: getListMyAssignmentsQueryKey() });
+          }}
+        />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  summary: { minHeight: 151, borderRadius: 22, padding: 17, flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
+  summary: { minHeight: 185, borderRadius: 24, padding: 17, flexDirection: 'row', alignItems: 'center', marginBottom: 24, position: 'relative', overflow: 'hidden', shadowColor: '#173E8C', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 4 },
+  summaryGlowOne: { position: 'absolute', width: 190, height: 190, borderRadius: 95, left: -90, top: -106, opacity: 0.13 },
+  summaryGlowTwo: { position: 'absolute', width: 118, height: 118, borderRadius: 59, right: -41, bottom: -52, opacity: 0.14 },
   summaryText: { flex: 1, alignItems: 'flex-end' },
   summaryKicker: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   summaryDot: { width: 6, height: 6, borderRadius: 3 },
   summaryEyebrow: { fontSize: 10, fontFamily: 'Inter_500Medium', writingDirection: 'rtl' },
-  summaryTitle: { fontSize: 18, fontFamily: 'Inter_700Bold', marginTop: 10, textAlign: 'right', writingDirection: 'rtl' },
+  summaryTitle: { fontSize: 19, lineHeight: 25, fontFamily: 'Inter_700Bold', marginTop: 9, textAlign: 'right', writingDirection: 'rtl' },
   summaryBody: { fontSize: 10, fontFamily: 'Inter_400Regular', marginTop: 5, writingDirection: 'rtl' },
-  ring: { width: 79, height: 79, borderRadius: 40, borderWidth: 5, alignItems: 'center', justifyContent: 'center', marginLeft: 3 },
+  summaryStats: { width: '100%', alignItems: 'stretch', gap: 6, marginTop: 13 },
+  summaryStat: { minWidth: 48, flex: 1, borderRadius: 10, paddingVertical: 6, paddingHorizontal: 5, alignItems: 'center' },
+  summaryStatValue: { fontSize: 13, fontFamily: 'Inter_700Bold' },
+  summaryStatLabel: { fontSize: 8, fontFamily: 'Inter_500Medium', marginTop: 2 },
+  ring: { width: 86, height: 86, borderRadius: 43, borderWidth: 5, alignItems: 'center', justifyContent: 'center', marginLeft: 5 },
   ringValue: { fontSize: 17, fontFamily: 'Inter_700Bold' },
   ringLabel: { fontSize: 9, fontFamily: 'Inter_500Medium', marginTop: 2 },
-  headingRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  headingRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 2 },
+  headingActions: { alignItems: 'center', gap: 6 },
   newButton: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 9, marginBottom: 11, flexDirection: 'row', alignItems: 'center', gap: 5 },
   newButtonText: { fontSize: 10, fontFamily: 'Inter_600SemiBold' },
-  filters: { flexDirection: 'row', borderBottomWidth: 1, marginBottom: 15, gap: 24 },
-  filter: { paddingBottom: 9 },
-  filterText: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
+  filters: { minHeight: 49, borderWidth: 1, borderRadius: 15, padding: 4, marginBottom: 15, gap: 4 },
+  filter: { flex: 1, minHeight: 39, borderRadius: 11, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
+  filterText: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+  filterCount: { minWidth: 21, height: 21, borderRadius: 7, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  filterCountText: { fontSize: 9, fontFamily: 'Inter_700Bold' },
   pressed: { opacity: 0.72 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(6, 24, 44, 0.55)', justifyContent: 'center', padding: 18 },
   reviewCard: { borderRadius: 20, borderWidth: 1, padding: 16, maxHeight: '82%' },

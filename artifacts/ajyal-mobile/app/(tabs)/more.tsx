@@ -35,6 +35,7 @@ const studentItems: MenuItem[] = [
 const teacherItems: MenuItem[] = [
   { icon: 'users', title: 'الطلاب', body: 'تابع طلابك وابدأ محادثة أو مكالمة', route: '/students', tone: 'teal' },
   { icon: 'clipboard', title: 'الواجبات والمراجعة', body: 'راجع تسليمات الطلاب واعتمد النتائج', route: '/assignments', tone: 'gold' },
+  { icon: 'book-open', title: 'جهّز المادة العلمية', body: 'روابط الكتب والمصادر لتجهيز الدروس', route: '/teacher-learning-materials', tone: 'teal' },
   { icon: 'book-open', title: 'المواد التعليمية', body: 'راجع تسجيلات الجلسات المرتبطة بطلابك', route: '/teacher-materials', tone: 'navy' },
   { icon: 'dollar-sign', title: 'سحب الأرباح', body: 'الرصيد المتاح وطلبات السحب السابقة', route: '/teacher-withdrawals', tone: 'teal' },
   { icon: 'phone', title: 'محفظة الاتصال', body: 'شحن الرصيد وسجل المكالمات الهاتفية', route: '/call-wallet', tone: 'navy' },
@@ -58,6 +59,8 @@ const menuTranslations: Record<string, string> = {
   'مساعد الواجبات البصري': 'Visual homework helper',
   'صوّر واجبك واحصل على شرح خطوة بخطوة': 'Take a photo of your homework and get a step-by-step explanation',
   'المواد التعليمية': 'Learning materials',
+  'جهّز المادة العلمية': 'Prepare lesson materials',
+  'روابط الكتب والمصادر لتجهيز الدروس': 'Books and sources for lesson preparation',
   'شاهد تسجيلات الجلسات والمواد المرتبطة بها': 'Watch session recordings and related materials',
   'راجع تسجيلات الجلسات المرتبطة بطلابك': 'Review session recordings linked to your students',
   'الفواتير': 'Invoices',

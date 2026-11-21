@@ -22,6 +22,7 @@ const colors = {
     tealSoft: '#ECF8F3',
     navySoft: '#F1F5FB',
     goldSoft: '#FFF8E8',
+    gold: '#A77916',
     success: '#21C45D',
   },
   dark: {
@@ -47,6 +48,7 @@ const colors = {
     tealSoft: '#183A30',
     navySoft: '#1D2B46',
     goldSoft: '#403611',
+    gold: '#E8C75A',
     success: '#60D990',
   },
 

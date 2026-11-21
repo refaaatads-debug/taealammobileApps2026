@@ -48,17 +48,15 @@ export function hasAiTutorFeature(plan: SubscriptionRow): boolean {
   return typeof rawFeatures === "string" && mentionsAiTutor(rawFeatures);
 }
 
-export function isSubscriptionActive(subscription: SubscriptionRow, nowMs = Date.now()): boolean {
+export function isSubscriptionActive(subscription: SubscriptionRow, _nowMs?: number): boolean {
   if (booleanValue(subscription, "is_active") !== true) return false;
   if ((numberValue(subscription, "remaining_minutes", "remainingMinutes") ?? 0) <= 0) return false;
-
-  const endsAt = stringValue(subscription, "ends_at", "endsAt");
-  if (!endsAt) return true;
-  const endsAtMs = new Date(endsAt).getTime();
-  return Number.isFinite(endsAtMs) && endsAtMs > nowMs;
+  // Match the platform: ends_at is historical/display metadata. Access remains
+  // available while the subscription is active and has minutes remaining.
+  return true;
 }
 
-export function hasAiTutorEntitlement(subscriptions: SubscriptionRow[], plans: SubscriptionRow[], nowMs = Date.now()): boolean {
+export function hasAiTutorEntitlement(subscriptions: SubscriptionRow[], plans: SubscriptionRow[], _nowMs?: number): boolean {
   const plansById = new Map(
     plans
       .map((plan) => [stringValue(plan, "id"), plan] as const)
@@ -66,7 +64,7 @@ export function hasAiTutorEntitlement(subscriptions: SubscriptionRow[], plans: S
   );
 
   return subscriptions.some((subscription) => {
-    if (!isSubscriptionActive(subscription, nowMs)) return false;
+    if (!isSubscriptionActive(subscription)) return false;
     const planId = stringValue(subscription, "plan_id", "planId");
     const plan = planId ? plansById.get(planId) : undefined;
     return Boolean(plan && hasAiTutorFeature(plan));

@@ -4,7 +4,9 @@ import * as WebBrowser from "expo-web-browser";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { unregisterPushToken } from "@workspace/api-client-react";
-import { supabase, supabaseConfigError } from "./supabase";
+import { secureStorage, supabase, supabaseAuthStorageKey, supabaseConfigError } from "./supabase";
+import { hydrateQueryCache } from "./queryClient";
+import { createInitialAuthBootstrapGate } from "./authBootstrap";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -14,6 +16,7 @@ export type AuthUser = {
   firstName: string | null;
   lastName: string | null;
   profileImageUrl: string | null;
+  roleHint?: string | null;
 };
 
 type AuthContextValue = {
@@ -22,6 +25,7 @@ type AuthContextValue = {
   isAuthenticated: boolean;
   isPasswordRecovery: boolean;
   beginPasswordRecovery: () => void;
+  retrySessionRestore: () => Promise<boolean>;
   login: (mode?: 'login' | 'signup', role?: 'student' | 'teacher', credentials?: { email: string; password: string; fullName?: string }) => Promise<void>;
   loginWithGoogle: (role?: 'student' | 'teacher', isSignup?: boolean) => Promise<void>;
   completePendingRole: (authenticatedEmail?: string | null) => Promise<void>;
@@ -35,6 +39,7 @@ const AuthContext = createContext<AuthContextValue>({
   isAuthenticated: false,
   isPasswordRecovery: false,
   beginPasswordRecovery: () => undefined,
+  retrySessionRestore: async () => false,
   login: async () => undefined,
   loginWithGoogle: async () => undefined,
   completePendingRole: async () => undefined,
@@ -72,6 +77,7 @@ function mapUser(user: { id: string; email?: string | null; user_metadata?: Reco
     firstName: typeof metadata.first_name === "string" ? metadata.first_name : firstName ?? null,
     lastName: typeof metadata.last_name === "string" ? metadata.last_name : lastNameParts.join(" ") || null,
     profileImageUrl: typeof metadata.avatar_url === "string" ? metadata.avatar_url : null,
+    roleHint: typeof metadata.role === "string" ? metadata.role : null,
   };
 }
 
@@ -106,22 +112,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     let mounted = true;
     const initialSessionVersion = authStateVersion.current;
-    void withTimeout(supabase.auth.getSession(), "انتهت مهلة الاتصال بالمنصة")
-      .then(({ data }) => {
-        const stale = authStateVersion.current !== initialSessionVersion;
-        if (!mounted || stale) return;
-        setUser(data.session?.user ? mapUser(data.session.user) : null);
-      })
-      .catch((error) => {
-        if (!mounted) return;
-        console.warn("[auth] Initial session could not be loaded:", error instanceof Error ? error.message : error);
-        setUser(null);
-      })
-      .finally(() => {
-        if (mounted) setIsLoading(false);
-      });
+    const initialAuthBootstrap = createInitialAuthBootstrapGate((initialUser) => {
+      if (!mounted) return;
+      setUser(initialUser);
+      setIsLoading(false);
+    });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
+      if (_event === "INITIAL_SESSION") {
+        initialAuthBootstrap.resolveFromInitialEvent(
+          session?.user ? mapUser(session.user) : null,
+          authStateVersion.current !== initialSessionVersion,
+        );
+        return;
+      }
       authStateVersion.current += 1;
       if (_event === "PASSWORD_RECOVERY") setIsPasswordRecovery(true);
       if (_event === "SIGNED_OUT") setIsPasswordRecovery(false);
@@ -132,6 +136,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(session?.user ? mapUser(session.user) : null);
       setIsLoading(false);
     });
+    // Fast start: read the saved session straight from secure storage (no
+    // network) so the app can open immediately. supabase-js still validates and
+    // refreshes the token in the background; a failed refresh signs the user out.
+    if (supabaseAuthStorageKey) {
+      void (async () => {
+        try {
+          const raw = await secureStorage.getItem(supabaseAuthStorageKey);
+          if (!raw || !mounted || authStateVersion.current !== initialSessionVersion) return;
+          const saved = JSON.parse(raw) as { user?: { id?: string; email?: string | null; user_metadata?: Record<string, unknown> }; refresh_token?: string };
+          if (!saved?.user?.id || !saved.refresh_token) return;
+          await hydrateQueryCache(saved.user.id);
+          if (!mounted || authStateVersion.current !== initialSessionVersion) return;
+          initialAuthBootstrap.resolveFromSessionQuery(
+            mapUser({ id: saved.user.id, email: saved.user.email, user_metadata: saved.user.user_metadata }),
+            false,
+          );
+        } catch (error) {
+          console.warn("[auth] Fast session read failed:", error instanceof Error ? error.message : error);
+        }
+      })();
+    }
+    void withTimeout(supabase.auth.getSession(), "انتهت مهلة الاتصال بالمنصة")
+      .then(({ data }) => {
+        const stale = authStateVersion.current !== initialSessionVersion;
+        if (!mounted || stale) return;
+        initialAuthBootstrap.resolveFromSessionQuery(
+          data.session?.user ? mapUser(data.session.user) : null,
+          stale,
+        );
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        console.warn("[auth] Initial session could not be loaded:", error instanceof Error ? error.message : error);
+        // A failed/empty session query is not proof of sign-out. Keep waiting
+        // for INITIAL_SESSION; the root bootstrap timeout presents recovery.
+      })
     return () => {
       mounted = false;
       listener.subscription.unsubscribe();
@@ -323,6 +363,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsPasswordRecovery(true);
   }, []);
 
+  const retrySessionRestore = useCallback(async () => {
+    if (!supabase) return false;
+    authStateVersion.current += 1;
+    const restoreVersion = authStateVersion.current;
+    setIsLoading(true);
+    try {
+      const { data, error } = await withTimeout(
+        supabase.auth.getSession(),
+        "انتهت مهلة استعادة الجلسة",
+      );
+      if (error) throw error;
+      if (authStateVersion.current !== restoreVersion) {
+        return Boolean(data.session?.user);
+      }
+      const restoredUser = data.session?.user ? mapUser(data.session.user) : null;
+      setUser(restoredUser);
+      setIsLoading(false);
+      return Boolean(restoredUser);
+    } catch (error) {
+      // A timeout or storage/network failure does not prove the user signed out.
+      // Keep the sign-in form hidden and let the user retry without losing the
+      // persisted Supabase session.
+      if (authStateVersion.current === restoreVersion) setIsLoading(true);
+      throw error;
+    }
+  }, []);
+
   const logout = useCallback(async () => {
     // Update the UI immediately. Local auth cleanup must not hold the user
     // inside the account screen while SecureStore or the network responds.
@@ -338,7 +405,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  return <AuthContext.Provider value={{ user, isLoading, isAuthenticated: !!user, isPasswordRecovery, beginPasswordRecovery, login, loginWithGoogle, completePendingRole, completePasswordRecovery, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, isLoading, isAuthenticated: !!user, isPasswordRecovery, beginPasswordRecovery, retrySessionRestore, login, loginWithGoogle, completePendingRole, completePasswordRecovery, logout }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

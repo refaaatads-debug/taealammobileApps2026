@@ -14,3 +14,45 @@ mtime_ms = 1789578417227
 storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:2a184f84-f507-46a5-a5e0-bb1bb782f8cf/9d272235-08a8-47e5-bd22-21c1924c3e14/d2a43e68-1d99-4177-a7cc-530e8285f02d"
 storage_version_token = "1789578462785786"
 content_type = "image/jpeg"
+
+[[outputs]]
+id = "L89Tj6lmiofd9NXyY6NxF"
+uri = "file://generated-artifacts/Ajyal-Knowledge-Store-Kit.zip"
+type = "unspecified"
+title = "حزمة صور الطالب والمعلم"
+description = "ست صور منفصلة حسب الدور، بثلاثة مقاسات للنشر، مع الأيقونات والنصوص والمصادر القابلة للتحرير."
+logical_id = "e24a8ed8-9d14-4757-a991-0c441130aaed"
+content_hash = "sha256:fdf88a27a3ed20e11c8ed54dfde2cb1c4c6dfb6a34e8049c8e6e76ac6d29f267"
+size = 15613258
+mtime_ms = 1793514772128
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:2a184f84-f507-46a5-a5e0-bb1bb782f8cf/e24a8ed8-9d14-4757-a991-0c441130aaed/f531518b-7ca0-43fa-8cd5-a913310bd57f"
+storage_version_token = "1793514809420400"
+content_type = "application/octet-stream"
+
+[[outputs]]
+id = "zImiUbm-SyhiVcQSJXTVm"
+uri = "file://generated-artifacts/store-assets/contact-sheet.png"
+type = "image"
+title = "معاينة الطالب والمعلم"
+description = "الصف العلوي للطالب، والصف السفلي للمعلم، باستخدام بيانات اصطناعية."
+logical_id = "106a60f9-eeec-40cf-b34e-1291e44aa4d2"
+content_hash = "sha256:18f9c3a4cc5f95f44f9bf0507d965e9e3b973a29c438fb9e10de1400325b8611"
+size = 581417
+mtime_ms = 1793514764220
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:2a184f84-f507-46a5-a5e0-bb1bb782f8cf/106a60f9-eeec-40cf-b34e-1291e44aa4d2/18b576b7-eb04-45ea-900b-86abac40f0e8"
+storage_version_token = "1793514810776880"
+content_type = "image/png"
+
+[[outputs]]
+id = "8AsplpP_WEFYlsPsBaCJf"
+uri = "file://generated-artifacts/store-assets/preview.html"
+type = "html"
+title = "معرض الصور حسب الدور"
+description = "معرض HTML ثابت يوضح مجموعتي الطالب والمعلم."
+logical_id = "f5df2ab4-9177-4f63-b0f6-410a3d376f91"
+content_hash = "sha256:3ec28a785f1a06aec09f6dc5843278f2b64186cc4ea159cdc7ad371847051414"
+size = 305487
+mtime_ms = 1793514757076
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:2a184f84-f507-46a5-a5e0-bb1bb782f8cf/f5df2ab4-9177-4f63-b0f6-410a3d376f91/09fd03a4-495b-43bb-be1d-b3eb94eb4ce7"
+storage_version_token = "1793514812073843"
+content_type = "text/html"

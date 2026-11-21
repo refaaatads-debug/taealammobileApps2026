@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo } from 'react';
 import { AppState } from 'react-native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { useAjyal } from '@/hooks/useAjyal';
 import { EmptyState, Header, Icon, Screen, LoadingBlock, type IconName } from '@/components/AjyalUI';
-import { getListMyNotificationsQueryKey, useListMyNotifications, type Notification as ApiNotification } from '@workspace/api-client-react';
+import type { Notification as ApiNotification } from '@workspace/api-client-react';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { supabase } from '@/lib/supabase';
-import { useAuth } from '@/lib/auth';
 
 const notificationIconNames = new Set<IconName>([
   'bell',
@@ -41,6 +41,9 @@ const notificationGroupMeta: Record<NotificationGroupKey, { title: string; engli
 const notificationGroupOrder: NotificationGroupKey[] = ['sessions', 'messages', 'payments', 'account', 'general'];
 
 function getNotificationGroup(item: ApiNotification): NotificationGroupKey {
+  if (item.type === 'teacher_in_person_approval' || item.type === 'teacher_in_person_availability') {
+    return 'account';
+  }
   switch (safeNotificationIcon(item.icon)) {
     case 'calendar':
     case 'check-circle':
@@ -87,6 +90,7 @@ function getNotificationRoute(item: ApiNotification): NotificationRoute | null {
   if (type === 'chat_message' || type === 'message' || type === 'new_message') return '/messages';
   if (type === 'payment' || type === 'subscription' || type === 'subscription_updated') return '/subscription';
   if (type === 'invoice') return '/invoices';
+  if (type === 'teacher_in_person_approval' || type === 'teacher_in_person_availability') return '/profile';
   if (
     type === 'booking_request'
     || type === 'booking_confirmed'
@@ -96,6 +100,7 @@ function getNotificationRoute(item: ApiNotification): NotificationRoute | null {
     || type === 'session_reminder'
     || type === 'session_starting'
     || type === 'session_started'
+    || type === 'session_join'
     || type === 'session_ended'
     || type === 'instant_session'
     || type === 'first_impression'
@@ -131,12 +136,15 @@ export default function NotificationsScreen() {
   const colors = useColors();
   const { t, direction, formatNumber } = useAppPreferences();
   const isRTL = direction === 'rtl';
-  const { profile, roleResolved, markAllRead, markRead } = useAjyal();
-  const { user } = useAuth();
-  const notificationsQuery = useListMyNotifications({
-    query: { queryKey: getListMyNotificationsQueryKey(), enabled: Boolean(user?.id && roleResolved) },
-  });
-  const notifications = notificationsQuery.data ?? [];
+  const {
+    profile,
+    notifications,
+    notificationsLoading,
+    notificationsError,
+    retryNotifications,
+    markAllRead,
+    markRead,
+  } = useAjyal();
   const unreadCount = useMemo(() => notifications.filter((item) => item.unread).length, [notifications]);
   const notificationGroups = useMemo(() => {
     const groups = new Map<NotificationGroupKey, ApiNotification[]>();
@@ -160,33 +168,42 @@ export default function NotificationsScreen() {
 
   useEffect(() => {
     const client = supabase;
-    if (!client || !user?.id) return;
-    const channel = client
-      .channel(`notifications:${user.id}`)
+    if (!client || !profile?.id) return;
+    let channel: ReturnType<typeof client.channel> | null = null;
+    try {
+      channel = client
+      .channel(`mobile-notifications-list-${profile.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-        () => { void notificationsQuery.refetch(); },
+        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${profile.id}` },
+        () => { void retryNotifications(); },
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[notifications] Realtime ${status.toLowerCase()}; periodic refresh remains available.`);
+        }
+      });
+    } catch (error) {
+      console.warn('[notifications] Could not start Realtime updates:', error);
+    }
     const appStateSubscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void notificationsQuery.refetch();
+      if (state === 'active') void retryNotifications();
     });
     return () => {
       appStateSubscription.remove();
-      void client.removeChannel(channel);
+      if (channel) void client.removeChannel(channel);
     };
-  }, [notificationsQuery.refetch, user?.id]);
+  }, [profile?.id, retryNotifications]);
 
   return (
     <Screen>
       <Header avatarText={profile?.displayName?.slice(0, 1)} eyebrow={t('كل ما يهمك، في مكان واحد', 'Everything you need in one place')} title={t('الإشعارات', 'Notifications')} unread={unreadCount > 0} onBell={() => undefined} onAvatar={() => router.push('/profile')} />
-      {notificationsQuery.isLoading ? <LoadingBlock /> : null}
+      {notificationsLoading ? <LoadingBlock /> : null}
       <View style={[styles.noticeHero, { backgroundColor: colors.tealSoft }]}>
         <View style={[styles.noticeIcon, { backgroundColor: colors.teal }]}><Icon name={unreadCount ? 'bell' : 'check'} size={19} color={colors.primaryForeground} /></View>
         <View style={[styles.noticeCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}><Text style={[styles.noticeCount, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{unreadCount ? `${formatNumber(unreadCount)} ${t('تنبيهات جديدة', 'new notifications')}` : t('أنت على اطلاع', 'You’re all caught up')}</Text><Text style={[styles.noticeBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{unreadCount ? t('راجع آخر المستجدات قبل بدء يومك.', 'Review the latest updates before you start your day.') : t('لا توجد تنبيهات جديدة في الوقت الحالي.', 'There are no new notifications right now.')}</Text></View>
       </View>
-      {notificationsQuery.isError ? <EmptyState icon="alert-circle" title={t('تعذر تحميل الإشعارات', 'Could not load notifications')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => void notificationsQuery.refetch()} /> : notifications.length ? (
+      {notificationsError ? <EmptyState icon="alert-circle" title={t('تعذر تحميل الإشعارات', 'Could not load notifications')} body={t('تحقق من اتصالك ثم أعد المحاولة.', 'Check your connection and try again.')} action={t('إعادة المحاولة', 'Try again')} onAction={() => void retryNotifications()} /> : notifications.length ? (
         <View>
           <View style={[styles.listHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
             <View style={[styles.listHeaderCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
@@ -211,12 +228,24 @@ export default function NotificationsScreen() {
                   const isRead = !item.unread;
                   return (
                     <Pressable key={item.id} testID={`notification-${item.id}`} onPress={() => openNotification(item)} accessibilityRole="button" style={({ pressed }) => [styles.noticeRow, { backgroundColor: colors.card, borderColor: colors.border }, !isRead && { borderRightColor: colors.teal, borderRightWidth: 3 }, pressed && styles.pressed]}>
-                      <View style={[styles.rowIcon, { backgroundColor: background }]}><Icon name={safeNotificationIcon(item.icon)} size={17} color={tone} /></View>
-                      <View style={[styles.rowCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
-                        <View style={[styles.rowTitleLine, { flexDirection: isRTL ? 'row' : 'row-reverse' }]}><Text style={[styles.rowTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{item.title}</Text>{!isRead ? <View style={[styles.unreadDot, { backgroundColor: colors.teal }]} /> : null}</View>
-                        <Text style={[styles.rowBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{item.body}</Text>
-                        <Text style={[styles.rowTime, { color: colors.mutedForeground }]}>{item.time}</Text>
+                      <View style={styles.noticeRowMain}>
+                        <View style={[styles.rowIcon, { backgroundColor: background }]}><Icon name={safeNotificationIcon(item.icon)} size={17} color={tone} /></View>
+                        <View style={[styles.rowCopy, { alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+                          <View style={[styles.rowTitleLine, { flexDirection: isRTL ? 'row' : 'row-reverse' }]}><Text style={[styles.rowTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{item.title}</Text>{!isRead ? <View style={[styles.unreadDot, { backgroundColor: colors.teal }]} /> : null}</View>
+                          <Text style={[styles.rowBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{item.body}</Text>
+                          <Text style={[styles.rowTime, { color: colors.mutedForeground }]}>{item.time}</Text>
+                        </View>
                       </View>
+                      {item.imageUrl ? (
+                        <ExpoImage
+                          source={{ uri: item.imageUrl }}
+                          style={[styles.noticeImage, { backgroundColor: colors.muted }]}
+                          contentFit="contain"
+                          cachePolicy="memory-disk"
+                          transition={160}
+                          accessibilityLabel={t('صورة مرفقة بالإشعار', 'Image attached to the notification')}
+                        />
+                      ) : null}
                     </Pressable>
                   );
                 })}
@@ -247,7 +276,8 @@ const styles = StyleSheet.create({
   groupHeaderCopy: { flex: 1 },
   groupTitle: { fontSize: 13, fontFamily: 'Inter_700Bold' },
   groupCount: { fontSize: 9, marginTop: 2, fontFamily: 'Inter_400Regular' },
-  noticeRow: { minHeight: 103, borderRadius: 18, borderWidth: 1, padding: 13, flexDirection: 'row', alignItems: 'flex-start', gap: 11, marginBottom: 10 },
+  noticeRow: { minHeight: 103, borderRadius: 18, borderWidth: 1, padding: 13, marginBottom: 10 },
+  noticeRowMain: { flexDirection: 'row', alignItems: 'flex-start', gap: 11 },
   rowIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   rowCopy: { flex: 1, alignItems: 'flex-end' },
   rowTitleLine: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
@@ -255,5 +285,6 @@ const styles = StyleSheet.create({
   unreadDot: { width: 7, height: 7, borderRadius: 4 },
   rowBody: { width: '100%', textAlign: 'right', fontSize: 10, lineHeight: 17, marginTop: 5, fontFamily: 'Inter_400Regular', writingDirection: 'rtl' },
   rowTime: { width: '100%', textAlign: 'right', fontSize: 9, marginTop: 7, fontFamily: 'Inter_500Medium' },
+  noticeImage: { width: '100%', height: 190, borderRadius: 13, marginTop: 11 },
   pressed: { opacity: 0.72 },
 });

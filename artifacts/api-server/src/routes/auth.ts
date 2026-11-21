@@ -18,6 +18,7 @@ import {
   SESSION_TTL,
   type SessionData,
 } from "../lib/auth";
+import { safeReturnTo } from "../lib/safeReturnTo";
 
 const router: IRouter = Router();
 const OIDC_COOKIE_TTL = 10 * 60 * 1000;
@@ -26,10 +27,6 @@ function getOrigin(req: Request): string {
   const proto = req.headers["x-forwarded-proto"] || "https";
   const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost";
   return `${proto}://${host}`;
-}
-
-function safeReturnTo(value: unknown): string {
-  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") ? value : "/";
 }
 
 function setSessionCookie(res: Response, sid: string): void {

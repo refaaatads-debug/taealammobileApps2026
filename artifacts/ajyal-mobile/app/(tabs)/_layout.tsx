@@ -5,11 +5,13 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { Tabs } from 'expo-router';
 import type { BottomTabBarProps } from 'expo-router/build/react-navigation/bottom-tabs';
+import { useQueryClient } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { getReadChatMessageIds, subscribeToChatReadState } from '@/lib/localChatReadState';
+import { bookingMessageRealtimeFilters } from '@/lib/chatMessageHistory';
 
 type BrandIconName = keyof typeof MaterialCommunityIcons.glyphMap;
 
@@ -125,13 +127,23 @@ function AjyalTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
 
 function useUnreadMessageCount() {
   const { user } = useAuth();
+  const userId = user?.id;
+  const queryClient = useQueryClient();
   const [count, setCount] = useState(0);
+  const [bookingState, setBookingState] = useState<{ userId: string | null; ids: string[] }>({ userId: null, ids: [] });
   const requestRef = useRef(0);
+  const unreadMessageIdsRef = useRef<Set<string>>(new Set());
+  const realtimeUnreadMessageIdsRef = useRef<Set<string>>(new Set());
+  const bookingIds = bookingState.userId === userId ? bookingState.ids : [];
+  const bookingIdsKey = bookingIds.join(',');
 
   const load = useCallback(async () => {
     const requestId = ++requestRef.current;
-    if (!supabase || !user) {
+    if (!supabase || !userId) {
       setCount(0);
+      setBookingState({ userId: null, ids: [] });
+      unreadMessageIdsRef.current.clear();
+      realtimeUnreadMessageIdsRef.current.clear();
       return;
     }
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -143,24 +155,52 @@ function useUnreadMessageCount() {
         const bookingsResult = await supabase
           .from('bookings')
           .select('id')
-          .or(`student_id.eq.${user.id},teacher_id.eq.${user.id}`);
+          .or(`student_id.eq.${userId},teacher_id.eq.${userId}`);
         if (bookingsResult.error) throw bookingsResult.error;
-        if (!bookingsResult.data?.length) return 0;
+        if (!bookingsResult.data?.length) {
+          return {
+            bookingIds: [] as string[],
+            unreadIds: [] as string[],
+            readIds: new Set<string>(),
+          };
+        }
 
         const bookingIds = bookingsResult.data.map((row) => String(row.id));
         const [readMessageIds, messagesResult] = await Promise.all([
-          getReadChatMessageIds(user.id),
+          getReadChatMessageIds(userId),
           supabase
             .from('chat_messages')
             .select('id,sender_id')
             .in('booking_id', bookingIds)
-            .neq('sender_id', user.id),
+            .neq('sender_id', userId),
         ]);
         if (messagesResult.error) throw messagesResult.error;
-        return (messagesResult.data ?? []).filter((message) => !readMessageIds.has(String(message.id))).length;
+        return {
+          bookingIds,
+          unreadIds: (messagesResult.data ?? [])
+            .map((message) => String(message.id))
+            .filter((messageId) => !readMessageIds.has(messageId)),
+          readIds: readMessageIds,
+        };
       })();
-      const unreadCount = await Promise.race([loadData, timeout]);
-      if (requestId === requestRef.current) setCount(unreadCount);
+      const result = await Promise.race([loadData, timeout]);
+      if (requestId === requestRef.current) {
+        setBookingState((current) => (
+          current.userId === userId
+          && current.ids.length === result.bookingIds.length
+          && current.ids.every((id, index) => id === result.bookingIds[index])
+            ? current
+            : { userId, ids: result.bookingIds }
+        ));
+        const nextUnreadIds = new Set(result.unreadIds);
+        realtimeUnreadMessageIdsRef.current.forEach((id) => {
+          if (!result.readIds.has(id)) nextUnreadIds.add(id);
+        });
+        realtimeUnreadMessageIdsRef.current.clear();
+        unreadMessageIdsRef.current = nextUnreadIds;
+        setCount(nextUnreadIds.size);
+        queryClient.setQueryData(['student-unread-chat-count', userId], nextUnreadIds.size);
+      }
     } catch (error) {
       if (requestId !== requestRef.current) return;
       console.warn(
@@ -168,21 +208,70 @@ function useUnreadMessageCount() {
         error instanceof Error ? error.message : error,
       );
       setCount(0);
+      queryClient.setQueryData(['student-unread-chat-count', userId], 0);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
     }
-  }, [user]);
+  }, [queryClient, userId]);
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
     const client = supabase;
-    if (!client || !user) return undefined;
+    if (!client || !userId) return undefined;
     const channel = client
-      .channel(`mobile-unread-messages-${user.id}-${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => void load())
+      .channel(`mobile-unread-messages-${userId}-${Date.now()}`);
+    for (const filter of bookingMessageRealtimeFilters(bookingIds)) {
+      channel.on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'chat_messages',
+        filter,
+      }, (payload) => {
+        if (payload.eventType !== 'INSERT') {
+          void load();
+          return;
+        }
+        const message = payload.new as { id?: unknown; sender_id?: unknown };
+        const messageId = message.id === undefined || message.id === null ? '' : String(message.id);
+        if (!messageId || String(message.sender_id) === userId) return;
+        void getReadChatMessageIds(userId).then((readIds) => {
+          if (readIds.has(messageId) || unreadMessageIdsRef.current.has(messageId)) return;
+          realtimeUnreadMessageIdsRef.current.add(messageId);
+          unreadMessageIdsRef.current.add(messageId);
+          setCount((current) => {
+            const next = current + 1;
+            queryClient.setQueryData(['student-unread-chat-count', userId], next);
+            return next;
+          });
+        });
+      });
+    }
+    channel
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'bookings',
+        filter: `student_id=eq.${userId}`,
+      }, () => void load())
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'bookings',
+        filter: `teacher_id=eq.${userId}`,
+      }, () => void load())
       .subscribe();
+    return () => {
+      void client.removeChannel(channel);
+    };
+  }, [bookingIdsKey, load, queryClient, userId]);
+
+  useEffect(() => {
+    if (!userId) return undefined;
     const unsubscribeReadState = subscribeToChatReadState((changedUserId) => {
-      if (changedUserId === user.id) void load();
+      if (changedUserId === userId) void load();
     });
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') void load();
@@ -190,9 +279,8 @@ function useUnreadMessageCount() {
     return () => {
       unsubscribeReadState();
       appStateSubscription.remove();
-      void client.removeChannel(channel);
     };
-  }, [load, user]);
+  }, [load, userId]);
 
   return count;
 }

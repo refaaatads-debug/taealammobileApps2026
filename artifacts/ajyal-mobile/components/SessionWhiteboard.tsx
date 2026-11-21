@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { PanResponder, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle as SvgCircle, Line as SvgLine, Polyline, Rect as SvgRect, Text as SvgText } from 'react-native-svg';
 import { useColors } from '@/hooks/useColors';
+import { sampleWhiteboardPath } from '@/lib/sessionWhiteboardState';
 
 export type WhiteboardPoint = { x: number; y: number };
 export type WhiteboardAction = {
@@ -112,6 +113,7 @@ export function SessionWhiteboard({
   const [measuredHeight, setMeasuredHeight] = useState(height);
   const [draftPoints, setDraftPoints] = useState<WhiteboardPoint[]>([]);
   const draftPointsRef = useRef<WhiteboardPoint[]>([]);
+  const draftPointTimestampsRef = useRef<number[]>([]);
   const toVirtualAction = useCallback((action: WhiteboardAction): WhiteboardAction => {
     if (action.coordinateSpace === 'virtual') return action;
     const scaleX = VIRTUAL_WIDTH / Math.max(1, width);
@@ -142,12 +144,14 @@ export function SessionWhiteboard({
   ), [measuredHeight, width]);
   const commitDraft = useCallback(() => {
     const points = draftPointsRef.current;
+    const sampledPoints = sampleWhiteboardPath(points, draftPointTimestampsRef.current, 120);
     draftPointsRef.current = [];
+    draftPointTimestampsRef.current = [];
     setDraftPoints([]);
-    if (!canDraw || points.length < 2 || !onAction) return;
+    if (!canDraw || sampledPoints.length < 2 || !onAction) return;
     onAction(toVirtualAction({
       type: 'path',
-      points,
+      points: sampledPoints,
       color: colors.teal,
       lineWidth: 3,
       coordinateSpace: 'local',
@@ -160,12 +164,14 @@ export function SessionWhiteboard({
       if (!canDraw) return;
       const point = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
       draftPointsRef.current = [point];
+      draftPointTimestampsRef.current = [Date.now()];
       setDraftPoints([point]);
     },
     onPanResponderMove: (event) => {
       if (!canDraw) return;
       const point = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
       draftPointsRef.current = [...draftPointsRef.current, point];
+      draftPointTimestampsRef.current = [...draftPointTimestampsRef.current, Date.now()];
       setDraftPoints((current) => [...current, point]);
     },
     onPanResponderRelease: commitDraft,
