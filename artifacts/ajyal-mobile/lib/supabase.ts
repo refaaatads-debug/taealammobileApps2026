@@ -14,7 +14,7 @@ export const profileUiTestMode = isProfileUiTestMode(
 );
 
 const nativeSecureStorage = createChunkedSecureStorage(SecureStore);
-const secureStorage = Platform.OS === "web"
+export const secureStorage = Platform.OS === "web"
   ? AsyncStorage
   : nativeSecureStorage;
 
@@ -27,9 +27,21 @@ export const supabase = !profileUiTestMode && supabasePublishableKey
         detectSessionInUrl: Platform.OS === "web",
         flowType: "pkce",
       },
+      realtime: {
+        heartbeatIntervalMs: 15_000,
+        timeout: 20_000,
+      },
     })
   : null;
 
 export const supabaseConfigError = supabasePublishableKey
   ? null
   : "تعذر إعداد اتصال المنصة. أضف مفتاح Supabase القابل للنشر إلى بيئة التطبيق.";
+/** Default supabase-js storage key: sb-<first host label>-auth-token. */
+export const supabaseAuthStorageKey = (() => {
+  try {
+    return `sb-${new URL(supabaseUrl).hostname.split(".")[0]}-auth-token`;
+  } catch {
+    return null;
+  }
+})();

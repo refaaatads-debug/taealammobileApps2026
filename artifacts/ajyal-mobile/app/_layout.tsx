@@ -3,7 +3,9 @@ import { Image, Pressable, StyleSheet, Text, TextInput, View, useWindowDimension
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { clearPersistedQueryCache, queryClient, setPersistUser, startQueryPersistence, wireFocusManager } from '@/lib/queryClient';
+import { startRealtimeKeeper } from '@/lib/realtimeKeeper';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -31,16 +33,9 @@ import TeacherReviewAccessScreen from '@/components/TeacherReviewAccessScreen';
 
 SplashScreen.preventAutoHideAsync();
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 60_000,
-      refetchOnMount: false,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-    },
-  },
-});
+wireFocusManager();
+startRealtimeKeeper();
+
 const APP_FONT_MAP = {
   Inter_400Regular: Cairo_400Regular,
   Inter_500Medium: Cairo_500Medium,
@@ -85,6 +80,8 @@ function RootLayoutNav() {
   const { profile, role, roleResolved, profileError, retryProfile, logout: logoutAjyal, isLoading: profileLoading } = useAjyal();
   const { t } = useAppPreferences();
   const pathname = usePathname();
+  const pathnameRef = React.useRef(pathname);
+  pathnameRef.current = pathname;
   const { width: viewportWidth } = useWindowDimensions();
   const [authMode, setAuthMode] = React.useState<'login' | 'signup'>('login');
   const [signupRole, setSignupRole] = React.useState<'student' | 'teacher'>('student');
@@ -122,6 +119,12 @@ function RootLayoutNav() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => startQueryPersistence(), []);
+  useEffect(() => {
+    setPersistUser(user?.id ?? null);
+    if (!authLoading && !user) void clearPersistedQueryCache();
+  }, [authLoading, user]);
 
   const bootstrapLoading = authLoading || (isAuthenticated && profileLoading);
   const homeReady = Boolean(
@@ -171,10 +174,10 @@ function RootLayoutNav() {
   // update first.
   useEffect(() => {
     const client = supabase;
-    if (!client || !homeReady || !profile?.id || role !== 'student' || pathname === '/live-session') return undefined;
+    if (!client || !homeReady || !profile?.id || role !== 'student') return undefined;
     let mounted = true;
     const openStartedBooking = (bookingId: string) => {
-      if (!mounted || pathname === '/live-session' || autoOpenedSessionIds.current.has(bookingId)) return;
+      if (!mounted || pathnameRef.current === '/live-session' || autoOpenedSessionIds.current.has(bookingId)) return;
       autoOpenedSessionIds.current.add(bookingId);
       router.replace({ pathname: '/live-session', params: { booking: bookingId } });
     };
@@ -220,6 +223,8 @@ function RootLayoutNav() {
     };
 
     void loadActiveSessions();
+    // Safety net only: realtime below is the primary trigger.
+    const fallbackTimer = setInterval(() => void loadActiveSessions(), 45_000);
     const channel = client
       .channel(`mobile-session-start-${profile.id}`)
       .on('postgres_changes', {
@@ -276,9 +281,10 @@ function RootLayoutNav() {
 
     return () => {
       mounted = false;
+      clearInterval(fallbackTimer);
       void client.removeChannel(channel);
     };
-  }, [homeReady, pathname, profile?.id, role]);
+  }, [homeReady, profile?.id, role]);
 
   const isPublicRoute = PUBLIC_PATHS.has(pathname);
   let overlay: React.ReactNode = null;
