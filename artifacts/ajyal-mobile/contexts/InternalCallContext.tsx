@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { recordPushDebug } from '@/lib/pushDebug';
 import { AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer } from 'expo-audio';
@@ -444,6 +445,7 @@ async function configureCallNotifications(notifications: NotificationsModule): P
   const permission = currentPermission.granted
     ? currentPermission
     : await notifications.requestPermissionsAsync();
+  recordPushDebug('notification_permission', { granted: permission.granted, status: permission.status });
   console.info('[push] notification_permission', {
     platform: Platform.OS,
     granted: permission.granted,
@@ -480,6 +482,7 @@ async function getDevicePushToken(notifications: NotificationsModule): Promise<s
       projectId: null,
       reason: 'missing_project_id',
     });
+    recordPushDebug('missing_project_id');
   }
   try {
     const tokenResponse = await notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
@@ -490,6 +493,11 @@ async function getDevicePushToken(notifications: NotificationsModule): Promise<s
     });
     return tokenResponse.data;
   } catch (error) {
+    recordPushDebug('expo_token_failed', {
+      projectId: projectId ?? null,
+      errorName: error instanceof Error ? error.name : 'unknown',
+      errorMessage: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+    });
     console.warn('[push] expo_token_failed', {
       platform: Platform.OS,
       projectId: projectId ?? null,
@@ -522,12 +530,18 @@ async function registerDevicePushToken(
           }
         : {}),
     });
+    recordPushDebug('token_registration_succeeded', { platform });
     console.info('[push] token_registration_succeeded', {
       platform,
       token_exists: true,
       registration: 'success',
     });
   } catch (error) {
+    recordPushDebug('token_registration_failed', {
+      platform,
+      errorName: error instanceof Error ? error.name : 'unknown',
+      errorMessage: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+    });
     console.warn('[push] token_registration_failed', {
       platform,
       token_exists: true,
