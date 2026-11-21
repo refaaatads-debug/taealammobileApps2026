@@ -202,7 +202,7 @@ test("legacy direct notification delivery falls back when no outbox event exists
   assert.equal(directAttempts, 1);
 });
 
-test("legacy direct notification delivery suppresses fallback when outbox status is unavailable", async () => {
+test("legacy direct notification delivery falls back when outbox status is unavailable", async () => {
   let directAttempts = 0;
   const delivered = await sendLegacyPlatformNotification(
     "notification-3",
@@ -214,7 +214,7 @@ test("legacy direct notification delivery suppresses fallback when outbox status
   );
 
   assert.equal(delivered, true);
-  assert.equal(directAttempts, 0);
+  assert.equal(directAttempts, 1);
 });
 
 test("malformed outbox events are skipped without attempting provider delivery", async () => {

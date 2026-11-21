@@ -95,6 +95,8 @@ type ExpoReceiptResponse = {
   }>;
 };
 
+export type ExpoReceiptErrorHandler = (providerCode: string, ticketId: string) => void | Promise<void>;
+
 export class ExpoPushError extends Error {
   constructor(
     message: string,
@@ -109,13 +111,16 @@ export function isExpoPushToken(token: string): boolean {
   return /^(Expo|Exponent)PushToken\[[^\]]+\]$/.test(token);
 }
 
-function scheduleExpoReceiptCheck(ticketId: string): void {
+function scheduleExpoReceiptCheck(ticketId: string, onReceiptError?: ExpoReceiptErrorHandler): void {
   setTimeout(() => {
-    void checkExpoPushReceipt(ticketId);
+    void checkExpoPushReceipt(ticketId, onReceiptError);
   }, 15_000);
 }
 
-async function checkExpoPushReceipt(ticketId: string): Promise<void> {
+async function checkExpoPushReceipt(
+  ticketId: string,
+  onReceiptError?: ExpoReceiptErrorHandler,
+): Promise<void> {
   try {
     const response = await fetch("https://exp.host/--/api/v2/push/getReceipts", {
       method: "POST",
@@ -126,6 +131,17 @@ async function checkExpoPushReceipt(ticketId: string): Promise<void> {
     const result = await response.json() as ExpoReceiptResponse;
     const receipt = result.data?.[ticketId];
     const providerCode = receipt?.details?.error;
+    if (receipt?.status === "error" && providerCode && onReceiptError) {
+      try {
+        await onReceiptError(providerCode, ticketId);
+      } catch (error) {
+        console.warn("[push] expo_receipt_error_handler_failed", {
+          ticketId,
+          providerCode,
+          errorName: error instanceof Error ? error.name : "unknown",
+        });
+      }
+    }
     console.info("[push] expo_receipt", {
       ticketId,
       httpStatus: response.status,
@@ -141,7 +157,10 @@ async function checkExpoPushReceipt(ticketId: string): Promise<void> {
   }
 }
 
-export async function sendExpoPushMessage(message: ExpoPushMessage): Promise<void> {
+export async function sendExpoPushMessage(
+  message: ExpoPushMessage,
+  onReceiptError?: ExpoReceiptErrorHandler,
+): Promise<void> {
   const response = await fetch("https://exp.host/--/api/v2/push/send", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -170,5 +189,7 @@ export async function sendExpoPushMessage(message: ExpoPushMessage): Promise<voi
     const providerError = providerCode ?? ticket?.message ?? `HTTP ${response.status}`;
     throw new ExpoPushError(`Expo push rejected notification: ${providerError}`, providerCode);
   }
-  if (ticket.id) scheduleExpoReceiptCheck(ticket.id);
+  if (ticket.id) scheduleExpoReceiptCheck(ticket.id, onReceiptError);
 }
+
+export const __testing = { checkExpoPushReceipt };

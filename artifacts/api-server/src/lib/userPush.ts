@@ -1,5 +1,5 @@
 import { db, pushTokensTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   ExpoPushError,
   isExpoPushToken,
@@ -34,6 +34,7 @@ function reservePushKey(key: string): boolean {
  */
 export async function sendUserPushNotification(userId: string, payload: UserPushPayload): Promise<boolean> {
   const dedupeKey = pushDedupeKey(userId, payload.data);
+  let attemptedToken: string | null = null;
   if (dedupeKey && !reservePushKey(dedupeKey)) {
     console.info("[push] regular_notification_suppressed_duplicate");
     return false;
@@ -53,6 +54,7 @@ export async function sendUserPushNotification(userId: string, payload: UserPush
       console.warn("[push] regular_notification_skipped", { reason: "missing_token" });
       return false;
     }
+    attemptedToken = destination.token;
     const tokenBundle = decodePushTokenBundle(destination.token);
     if (!tokenBundle || !isExpoPushToken(tokenBundle.expoToken)) {
       if (dedupeKey) recentPushes.delete(dedupeKey);
@@ -70,17 +72,33 @@ export async function sendUserPushNotification(userId: string, payload: UserPush
       priority: payload.priority ?? "high",
       ttl: payload.ttl ?? 3600,
       channelId: payload.channelId ?? presentation.channelId,
+    }, async (providerCode) => {
+      if (providerCode !== "DeviceNotRegistered" && providerCode !== "InvalidPushToken") return;
+      const tokenToInvalidate = attemptedToken;
+      if (!tokenToInvalidate) return;
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.server_write', 'true', true)`);
+        await tx.delete(pushTokensTable).where(and(
+          eq(pushTokensTable.userId, userId),
+          eq(pushTokensTable.token, tokenToInvalidate),
+        ));
+      });
+      console.warn("[push] invalid_device_token_removed", { providerCode });
     });
     return true;
   } catch (error) {
     if (dedupeKey) recentPushes.delete(dedupeKey);
+    const tokenToInvalidate = attemptedToken;
     if (error instanceof ExpoPushError && (
       error.providerCode === "DeviceNotRegistered"
       || error.providerCode === "InvalidPushToken"
-    )) {
+    ) && tokenToInvalidate) {
       await db.transaction(async (tx) => {
         await tx.execute(sql`select set_config('app.server_write', 'true', true)`);
-        await tx.delete(pushTokensTable).where(eq(pushTokensTable.userId, userId));
+        await tx.delete(pushTokensTable).where(and(
+          eq(pushTokensTable.userId, userId),
+          eq(pushTokensTable.token, tokenToInvalidate),
+        ));
       }).catch(() => undefined);
     }
     console.warn("[push] regular_notification_failed", {
