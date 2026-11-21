@@ -1053,12 +1053,18 @@ export function InternalCallProvider({ children }: { children: React.ReactNode }
       const { data, error } = await supabase.rpc('start_internal_call', {
         p_student_id: recipientId,
         p_booking_id: roomId?.trim() || null,
-        p_transport_provider: 'agora',
+        // The server creates every call as 'webrtc' and upgrades it to 'agora'
+        // when the callee accepts and both sides are capable. Sending 'agora'
+        // here is rejected with INVALID_PROVIDER.
+        p_transport_provider: 'webrtc',
         p_caller_agora_capable: true,
       });
       if (error) throw new Error(error.message);
       const remote = data && typeof data === 'object' ? data as { call?: { id?: unknown }; id?: unknown; success?: boolean; message?: string } : null;
-      if (remote?.success === false) throw new Error(remote.message ?? 'تعذر بدء المكالمة');
+      if (remote?.success === false) {
+        const code = (remote as { code?: string }).code;
+        throw new Error(remote.message ?? `تعذر بدء المكالمة${code ? ` (${code})` : ''}`);
+      }
       resolvedCallId = asString(remote?.call?.id) ?? asString(remote?.id);
       if (!resolvedCallId) throw new Error('لم تصل هوية المكالمة من المنصة');
     }
