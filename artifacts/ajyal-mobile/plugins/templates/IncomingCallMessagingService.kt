@@ -24,12 +24,31 @@ class IncomingCallMessagingService : ExpoFirebaseMessagingService() {
   }
 
   override fun onMessageReceived(message: RemoteMessage) {
-    val data = message.data
+    val data = flattenPushData(message.data)
     when (data["type"]) {
       "incoming_call" -> if (!isAppInForeground()) showIncomingCall(data)
       "call_ended", "call_accepted" -> closeIncomingCall(data["callId"].orEmpty())
     }
     super.onMessageReceived(message)
+  }
+
+  // Expo's push service delivers the app's custom data as a JSON string under
+  // the "body" key. Merge it into the top level so type/callId/callerName are found.
+  private fun flattenPushData(raw: Map<String, String>): Map<String, String> {
+    val merged = HashMap<String, String>(raw)
+    val body = raw["body"] ?: return merged
+    try {
+      val json = org.json.JSONObject(body)
+      val keys = json.keys()
+      while (keys.hasNext()) {
+        val key = keys.next()
+        if (json.isNull(key)) continue
+        merged[key] = json.get(key).toString()
+      }
+    } catch (error: Exception) {
+      Log.w(TAG, "Push body is not JSON; using top-level data only")
+    }
+    return merged
   }
 
   private fun isAppInForeground(): Boolean {
