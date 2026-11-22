@@ -29,6 +29,7 @@ import {
   useAudioRecorder,
 } from "expo-audio";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { usePeerOnline } from "@/lib/presence";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
@@ -959,12 +960,13 @@ function ConversationView({
     }
   };
 
+  const peerOnline = usePeerOnline(participant.participantId);
   return (
     <Screen scroll={false} contentStyle={styles.conversationScreen}>
       <KeyboardAvoidingView behavior="padding" style={styles.keyboardRoot} keyboardVerticalOffset={0}>
         <Header onBack={onBack} eyebrow={t("محادثة آمنة داخل المنصة", "Secure platform chat")} title={participant.name} avatarText={participant.avatar} onAvatar={() => router.push("/profile")} />
         <View style={[styles.conversationMeta, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}>
-          <View style={[styles.onlineDot, { backgroundColor: colors.teal }]} />
+          <View style={[styles.onlineDot, { backgroundColor: peerOnline ? colors.teal : colors.mutedForeground, opacity: peerOnline ? 1 : 0.45 }]} />
           <Text style={[styles.conversationMetaText, { color: colors.teal, writingDirection: direction }]} numberOfLines={2}>
             {participant.roleLabel === "معلم" ? t("معلم", "Teacher") : t("طالب", "Student")} · {participant.subject || t("مادة غير محددة", "Subject unavailable")} · {dateLabel(participant.scheduledAt, locale)} · {bookingStatusLabel(participant.bookingStatus, participant.sessionStatus, t)}
           </Text>
@@ -1013,7 +1015,7 @@ function ConversationView({
                   </Text>
                   <MessageAttachment message={item} outgoing={outgoing} />
                   {text(item, "content") && !attachmentLabel(item.file_type, item.file_name) ? <Text style={[styles.messageText, { color: outgoing ? colors.primaryForeground : colors.foreground }]}>{text(item, "content")}</Text> : null}
-                  <Text style={[styles.messageDate, { color: outgoing ? colors.tint : colors.mutedForeground }]}>{dateLabel(item.created_at, locale)}</Text>
+                  <Text style={[styles.messageDate, { color: outgoing ? colors.tint : colors.mutedForeground }]}>{dateLabel(item.created_at, locale)}{outgoing ? "  ✓" : ""}</Text>
                 </View>
               </View>
             );
