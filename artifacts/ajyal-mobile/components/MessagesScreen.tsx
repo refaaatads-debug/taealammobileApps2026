@@ -771,6 +771,8 @@ function ConversationView({
   const [recordElapsedMs, setRecordElapsedMs] = useState(0);
   const [recordLevels, setRecordLevels] = useState<number[]>([]);
   const webCancelRef = useRef(false);
+  // Voice notes show up in the list right away and settle once the upload is done.
+  const [pendingVoice, setPendingVoice] = useState<{ key: string; asset: UploadAsset; status: "uploading" | "failed"; createdAt: string }[]>([]);
   const recordStartingRef = useRef(false);
   const webRecorderRef = useRef<MediaRecorder | null>(null);
   const webStreamRef = useRef<MediaStream | null>(null);
@@ -910,7 +912,32 @@ function ConversationView({
     }
   };
 
+  const runPendingVoice = async (key: string, asset: UploadAsset) => {
+    if (!bookingId) return;
+    setPendingVoice((current) => current.map((item) => (item.key === key ? { ...item, status: "uploading" } : item)));
+    try {
+      const uploaded = await uploadToChat(asset, bookingId);
+      try {
+        await insertMessage({ content: "", kind: "voice", asset: uploaded });
+      } catch (error) {
+        await supabase?.storage.from("chat-files").remove([uploaded.path]).catch(() => undefined);
+        throw error;
+      }
+      setPendingVoice((current) => current.filter((item) => item.key !== key));
+    } catch {
+      setPendingVoice((current) => current.map((item) => (item.key === key ? { ...item, status: "failed" } : item)));
+    }
+  };
+
   const uploadAndSend = async (asset: UploadAsset) => {
+    if (bookingId && (asset.mimeType ?? "").startsWith("audio/")) {
+      const key = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      shouldStickToBottomRef.current = true;
+      setPendingVoice((current) => [...current, { key, asset, status: "uploading", createdAt: new Date().toISOString() }]);
+      setMenuOpen(false);
+      void runPendingVoice(key, asset);
+      return;
+    }
     if (busy || !bookingId) return;
     setBusy(true);
     setMenuOpen(false);
@@ -1117,10 +1144,37 @@ function ConversationView({
         <FlatList
           ref={listRef}
           style={styles.messageListFrame}
-          data={messages}
+          data={pendingVoice.length ? ([...messages, ...pendingVoice.map((item) => ({ id: item.key, sender_id: userId, created_at: item.createdAt, __pending: item.status }))] as typeof messages) : messages}
           keyExtractor={(item, index) => String(item.id || `${item.created_at}-${index}`)}
           renderItem={({ item }) => {
             const outgoing = String(item.sender_id) === userId;
+            const pendingStatus = (item as { __pending?: "uploading" | "failed" }).__pending;
+            if (pendingStatus) {
+              const pendingKey = String(item.id);
+              return (
+                <View style={[styles.messageRow, { alignItems: "flex-end" }]}>
+                  <View style={[styles.messageBubble, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: pendingStatus === "uploading" ? 0.65 : 1 }]}>
+                    <Text style={[styles.messageSender, { color: colors.tint }]}>{t("أنت", "You")}</Text>
+                    <View style={{ flexDirection: isRTL ? "row-reverse" : "row", alignItems: "center", gap: 8, minWidth: 160 }}>
+                      {pendingStatus === "uploading" ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Icon name="alert-circle" size={18} color={colors.primaryForeground} />}
+                      <Text style={[styles.messageText, { color: colors.primaryForeground, writingDirection: direction }]}>
+                        {pendingStatus === "uploading" ? t("جارٍ إرسال الرسالة الصوتية…", "Sending voice message…") : t("تعذر إرسال الرسالة الصوتية", "Voice message failed")}
+                      </Text>
+                    </View>
+                    {pendingStatus === "failed" ? (
+                      <View style={{ flexDirection: isRTL ? "row-reverse" : "row", gap: 14, marginTop: 8 }}>
+                        <Pressable onPress={() => { const entry = pendingVoice.find((p) => p.key === pendingKey); if (entry) void runPendingVoice(pendingKey, entry.asset); }}>
+                          <Text style={[styles.messageDate, { color: colors.primaryForeground, fontFamily: "Inter_700Bold" }]}>{t("إعادة المحاولة", "Retry")}</Text>
+                        </Pressable>
+                        <Pressable onPress={() => setPendingVoice((current) => current.filter((p) => p.key !== pendingKey))}>
+                          <Text style={[styles.messageDate, { color: colors.tint }]}>{t("حذف", "Delete")}</Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            }
             return (
               <View style={[styles.messageRow, { alignItems: outgoing ? "flex-end" : "flex-start" }]}>
                 <View style={[styles.messageBubble, { backgroundColor: outgoing ? colors.primary : colors.card, borderColor: outgoing ? colors.primary : colors.border }]}>
