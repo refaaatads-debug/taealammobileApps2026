@@ -11,6 +11,7 @@ import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
+import { rtlStyles } from "@/lib/rtlStyles";
 import { supabase } from "@/lib/supabase";
 import { firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "@/lib/inPersonScheduling";
 import { getInPersonBookingSnapshot } from "@/lib/inPersonBookingSnapshot";
@@ -50,6 +51,7 @@ function localLabel(value: unknown, locale: string) {
 export default function InPersonScreen() {
   const colors = useColors();
   const { t, locale, direction } = useAppPreferences();
+  const styles = useMemo(() => rtlStyles(baseStyles, direction), [direction]);
   const { profile, role } = useAjyal();
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -686,7 +688,7 @@ export default function InPersonScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
   studentIntro: { gap: 4, marginTop: 1, marginBottom: 8, paddingHorizontal: 3 },
   studentIntroEyebrow: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_700Bold", textAlign: "right", letterSpacing: 0.3 },
   studentIntroTitle: { fontSize: 21, lineHeight: 28, fontFamily: "Inter_700Bold", textAlign: "right" },
