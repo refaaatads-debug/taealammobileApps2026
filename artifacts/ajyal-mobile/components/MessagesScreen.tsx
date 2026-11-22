@@ -731,6 +731,7 @@ function ConversationView({
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recordStartingRef = useRef(false);
   const webRecorderRef = useRef<MediaRecorder | null>(null);
   const webStreamRef = useRef<MediaStream | null>(null);
   const webChunksRef = useRef<Blob[]>([]);
@@ -943,7 +944,8 @@ function ConversationView({
       }
       return;
     }
-    if (busy || !bookingId) return;
+    if (busy || !bookingId || recordStartingRef.current) return;
+    recordStartingRef.current = true;
     try {
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
@@ -956,7 +958,15 @@ function ConversationView({
       setMenuOpen(false);
       setRecording(true);
     } catch {
+      // A second tap during start-up can fail while the first start is already recording.
+      if (recorder.isRecording) {
+        setMenuOpen(false);
+        setRecording(true);
+        return;
+      }
       Alert.alert(t("تعذر بدء التسجيل", "Could not start recording"), t("تحقق من إذن الميكروفون ثم حاول مرة أخرى.", "Check microphone permission and try again."));
+    } finally {
+      recordStartingRef.current = false;
     }
   };
 
