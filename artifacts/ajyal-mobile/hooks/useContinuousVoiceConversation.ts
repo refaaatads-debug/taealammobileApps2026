@@ -12,6 +12,7 @@ import {
 import * as Speech from "expo-speech";
 import { normalizeAiAnswerAudio } from "@/lib/aiAnswerAudio";
 import { speakAiAnswer } from "@/lib/speakAiAnswer";
+import { reportError } from "@/lib/errorReporting";
 
 export type ContinuousVoicePhase =
   | "idle"
@@ -43,7 +44,15 @@ const RECORDING_OPTIONS = {
   ...RecordingPresets.HIGH_QUALITY,
   isMeteringEnabled: true,
 };
-const SPEECH_THRESHOLD_DB = -48;
+// Speech threshold adapts to the room: noise floor (quietest level of the last
+// few seconds) plus a margin, kept inside sane bounds. A fixed -48 dB never
+// ended the turn in a noisy room and never started it for a soft voice.
+const MIN_THRESHOLD_DB = -52;
+const MAX_THRESHOLD_DB = -25;
+const FLOOR_MARGIN_DB = 10;
+const FLOOR_WINDOW_MS = 4000;
+const MAX_UTTERANCE_MS = 20000;
+const STALL_REPORT_MS = 30000;
 const SILENCE_DURATION_MS = 1600;
 const MIN_SPEECH_DURATION_MS = 500;
 const PLAYER_START_TIMEOUT_MS = 12000;
@@ -70,6 +79,9 @@ export function useContinuousVoiceConversation({
   const startLockRef = useRef(false);
   const processingTurnRef = useRef(false);
   const speechStartedAtRef = useRef<number | null>(null);
+  const levelsRef = useRef<{ t: number; level: number }[]>([]);
+  const listeningSinceRef = useRef<number | null>(null);
+  const stallReportedRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPlaybackSessionRef = useRef<number | null>(null);
   const pendingAnswerTextRef = useRef("");
@@ -88,6 +100,7 @@ export function useContinuousVoiceConversation({
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     silenceTimerRef.current = null;
     speechStartedAtRef.current = null;
+    levelsRef.current = [];
   }, []);
 
   const clearPlaybackWatchdog = useCallback(() => {
@@ -147,6 +160,8 @@ export function useContinuousVoiceConversation({
     if (!isCurrentSession(sessionId)) return;
     clearSpeechDetection();
     recorder.record();
+    listeningSinceRef.current = Date.now();
+    stallReportedRef.current = false;
     setPhase("listening");
   }, [clearSpeechDetection, isCurrentSession, recorder]);
 
@@ -329,10 +344,42 @@ export function useContinuousVoiceConversation({
     }
 
     const level = recorderStatus.metering;
-    if (typeof level !== "number") return;
+    const now = Date.now();
+    if (typeof level !== "number") {
+      if (
+        listeningSinceRef.current !== null
+        && !stallReportedRef.current
+        && now - listeningSinceRef.current > 3000
+      ) {
+        stallReportedRef.current = true;
+        reportError(new Error("voice tutor: no metering from recorder"), { phase: "listening" }, "voice");
+      }
+      return;
+    }
 
-    if (level > SPEECH_THRESHOLD_DB) {
-      speechStartedAtRef.current ??= Date.now();
+    const window = levelsRef.current;
+    window.push({ t: now, level });
+    while (window.length && now - window[0].t > FLOOR_WINDOW_MS) window.shift();
+    const floor = window.reduce((min, entry) => Math.min(min, entry.level), 0);
+    const threshold = Math.min(MAX_THRESHOLD_DB, Math.max(MIN_THRESHOLD_DB, floor + FLOOR_MARGIN_DB));
+
+    if (
+      listeningSinceRef.current !== null
+      && !stallReportedRef.current
+      && speechStartedAtRef.current === null
+      && now - listeningSinceRef.current > STALL_REPORT_MS
+    ) {
+      stallReportedRef.current = true;
+      reportError(new Error("voice tutor: no speech detected for 30s"), { floor, threshold, level }, "voice");
+    }
+
+    if (level > threshold) {
+      speechStartedAtRef.current ??= now;
+      // Hard cap: never keep recording forever (constant noise or a long monologue).
+      if (now - speechStartedAtRef.current > MAX_UTTERANCE_MS) {
+        void submitUtterance(sessionIdRef.current);
+        return;
+      }
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
       return;
@@ -446,5 +493,11 @@ export function useContinuousVoiceConversation({
     void setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
   }, [clearPlaybackWatchdog, clearSpeechDetection, player, recorder]);
 
-  return { isActive, phase, start, end, playAudio, stopAnswerPlayback };
+  /** Manual "send now" for when automatic end-of-speech detection does not trigger. */
+  const sendNow = useCallback(() => {
+    if (phase !== "listening" || processingTurnRef.current) return;
+    void submitUtterance(sessionIdRef.current);
+  }, [phase, submitUtterance]);
+
+  return { isActive, phase, start, end, playAudio, stopAnswerPlayback, sendNow };
 }
