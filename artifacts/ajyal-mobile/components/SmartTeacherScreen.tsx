@@ -29,6 +29,7 @@ import {
   type VoiceQuestionHandler,
 } from "@/hooks/useContinuousVoiceConversation";
 import { EmptyState, Header, Icon, Screen } from "@/components/AjyalUI";
+import * as FileSystemLegacy from "expo-file-system/legacy";
 import { audioUploadDescriptor, createWebAudioUpload } from "@/lib/voiceAudioUpload";
 import VoiceModeScreen from "@/components/VoiceModeScreen";
 import { leaveTutorAfterVoiceCleanup } from "@/lib/tutorBackNavigation";
@@ -328,47 +329,46 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
         throw new Error("انتهت صلاحية الدخول. سجّل الدخول مرة أخرى.");
       }
 
-      const formData = new FormData();
+      const uploadUrl = `${supabaseUrl}/functions/v1/ai-support-transcribe`;
+      const uploadHeaders = {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        apikey: supabasePublishableKey,
+      };
+      let uploadStatus = 0;
+      let rawBody = "";
+      const uploadTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("voice tutor: upload timed out after 45s")), 45000),
+      );
       if (Platform.OS === "web") {
+        const formData = new FormData();
         const webAudio = await createWebAudioUpload(uri);
         formData.append("audio", webAudio.blob, webAudio.name);
-      } else {
-        const descriptor = audioUploadDescriptor(uri);
-        // React Native's multipart adapter understands the URI descriptor.
-        // Using expo-file-system File here breaks on the current native runtime
-        // before the request is sent (`validatePath is not a function`).
-        formData.append("audio", { uri, ...descriptor } as unknown as Blob);
-      }
-
-      // Do not set Content-Type manually: expo/fetch adds the multipart boundary.
-      // Passing { uri, name, type } to functions.invoke loses the file on native.
-      // Native uploads use React Native's own fetch: its multipart adapter reads the
-      // { uri, name, type } descriptor. A hard timeout makes a stuck upload fail
-      // visibly instead of leaving the orb on "sending" forever.
-      const uploadController = new AbortController();
-      const uploadTimer = setTimeout(() => uploadController.abort(), 45000);
-      let response: Response;
-      let rawBody: string;
-      try {
-        response = await globalThis.fetch(`${supabaseUrl}/functions/v1/ai-support-transcribe`, {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-            Authorization: `Bearer ${accessToken}`,
-            apikey: supabasePublishableKey,
-          },
-          body: formData,
-          signal: uploadController.signal,
-        });
+        const response = await Promise.race([
+          globalThis.fetch(uploadUrl, { method: "POST", headers: uploadHeaders, body: formData }),
+          uploadTimeout,
+        ]);
+        uploadStatus = response.status;
         rawBody = await response.text();
-      } catch (uploadError) {
-        if (uploadController.signal.aborted) {
-          throw new Error("voice tutor: upload timed out after 45s");
-        }
-        throw uploadError;
-      } finally {
-        clearTimeout(uploadTimer);
+      } else {
+        // fetch + FormData file parts fail on this native runtime ("Unsupported
+        // FormDataPart implementation"), so the recording is uploaded natively.
+        const descriptor = audioUploadDescriptor(uri);
+        const result = await Promise.race([
+          FileSystemLegacy.uploadAsync(uploadUrl, uri, {
+            httpMethod: "POST",
+            uploadType: FileSystemLegacy.FileSystemUploadType.MULTIPART,
+            fieldName: "audio",
+            mimeType: descriptor.type,
+            headers: uploadHeaders,
+            sessionType: FileSystemLegacy.FileSystemSessionType.FOREGROUND,
+          }),
+          uploadTimeout,
+        ]);
+        uploadStatus = result.status;
+        rawBody = result.body ?? "";
       }
+      const uploadOk = uploadStatus >= 200 && uploadStatus < 300;
       let data: TranscriptionResponse | null = null;
       try {
         data = rawBody ? JSON.parse(rawBody) as TranscriptionResponse : null;
@@ -376,7 +376,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
         // Preserve the raw server response below when it is not JSON.
       }
       if (!context.isCurrent()) return null;
-      if (!response.ok || typeof data?.text !== "string" || !data.text.trim()) {
+      if (!uploadOk || typeof data?.text !== "string" || !data.text.trim()) {
         const serverMessage = typeof data?.error === "string"
           ? data.error
           : typeof data?.message === "string"
@@ -384,9 +384,9 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
             : rawBody.trim();
         if (serverMessage) throw new Error(serverMessage);
         throw new Error(
-          response.status === 401 || response.status === 403
+          uploadStatus === 401 || uploadStatus === 403
             ? "انتهت صلاحية الدخول أو لا يملك الحساب صلاحية استخدام المساعد الصوتي."
-            : response.status === 413
+            : uploadStatus === 413
               ? "التسجيل الصوتي كبير على خدمة المساعد."
               : "تعذر فهم التسجيل الصوتي.",
         );
