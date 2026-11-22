@@ -14,7 +14,6 @@ import {
 import { router, useFocusEffect } from "expo-router";
 import { BlurHashImage } from "@/components/BlurHashImage";
 import * as ImagePicker from "expo-image-picker";
-import { fetch as expoFetch } from "expo/fetch";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
@@ -320,7 +319,10 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
     if (leavingTutorRef.current || !supabase || role !== "student" || !hasAiTutorAccess) return null;
     setError(null);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionData = await Promise.race([
+        supabase.auth.getSession().then((result) => result.data),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("voice tutor: getSession timed out after 8s")), 8000)),
+      ]);
       const accessToken = sessionData.session?.access_token;
       if (!accessToken || !supabasePublishableKey) {
         throw new Error("انتهت صلاحية الدخول. سجّل الدخول مرة أخرى.");
@@ -340,16 +342,33 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
 
       // Do not set Content-Type manually: expo/fetch adds the multipart boundary.
       // Passing { uri, name, type } to functions.invoke loses the file on native.
-      const response = await expoFetch(`${supabaseUrl}/functions/v1/ai-support-transcribe`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${accessToken}`,
-          apikey: supabasePublishableKey,
-        },
-        body: formData,
-      });
-      const rawBody = await response.text();
+      // Native uploads use React Native's own fetch: its multipart adapter reads the
+      // { uri, name, type } descriptor. A hard timeout makes a stuck upload fail
+      // visibly instead of leaving the orb on "sending" forever.
+      const uploadController = new AbortController();
+      const uploadTimer = setTimeout(() => uploadController.abort(), 45000);
+      let response: Response;
+      let rawBody: string;
+      try {
+        response = await globalThis.fetch(`${supabaseUrl}/functions/v1/ai-support-transcribe`, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${accessToken}`,
+            apikey: supabasePublishableKey,
+          },
+          body: formData,
+          signal: uploadController.signal,
+        });
+        rawBody = await response.text();
+      } catch (uploadError) {
+        if (uploadController.signal.aborted) {
+          throw new Error("voice tutor: upload timed out after 45s");
+        }
+        throw uploadError;
+      } finally {
+        clearTimeout(uploadTimer);
+      }
       let data: TranscriptionResponse | null = null;
       try {
         data = rawBody ? JSON.parse(rawBody) as TranscriptionResponse : null;
