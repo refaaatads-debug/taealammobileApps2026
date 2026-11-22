@@ -7,6 +7,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { clearPersistedQueryCache, queryClient, setPersistUser, startQueryPersistence, wireFocusManager } from '@/lib/queryClient';
 import { startRealtimeKeeper } from '@/lib/realtimeKeeper';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useOwnPresence } from '@/lib/presence';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -153,6 +154,7 @@ function RootLayoutNav() {
   }, []);
 
   useEffect(() => startQueryPersistence(), []);
+  useOwnPresence(user?.id ?? null);
   useEffect(() => {
     setPersistUser(user?.id ?? null);
     if (!authLoading && !user) void clearPersistedQueryCache();
