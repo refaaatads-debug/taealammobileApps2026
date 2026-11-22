@@ -690,6 +690,16 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
                           : "يتم تشغيل الميكروفون للمحادثة."
                   : "اضغط على الميكروفون وتحدث مع مدرسك الذكي بصوتك."}
               </Text>
+              {voiceConversation.isActive && voiceConversation.phase === "listening" ? (
+                <Pressable
+                  testID="send-voice-now"
+                  onPress={voiceConversation.sendNow}
+                  style={[styles.voiceButton, { backgroundColor: colors.primary, marginBottom: 10 }]}
+                >
+                  <Icon name="send" size={18} color={colors.primaryForeground} />
+                  <Text style={[styles.voiceButtonText, { color: colors.primaryForeground }]}>إرسال الآن</Text>
+                </Pressable>
+              ) : null}
               <Pressable
                 testID="toggle-ai-recording"
                 onPress={() => voiceConversation.isActive
