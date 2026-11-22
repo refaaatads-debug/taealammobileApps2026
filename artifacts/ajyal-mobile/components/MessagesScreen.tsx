@@ -769,10 +769,13 @@ function ConversationView({
   const send = async () => {
     if (!draft.trim() || busy || !bookingId) return;
     setBusy(true);
+    const sentText = draft.trim();
+    // Clear the input right away. It is restored only if the insert fails.
+    setDraft("");
     try {
-      await insertMessage({ content: draft.trim(), kind: "text" });
-      setDraft("");
+      await insertMessage({ content: sentText, kind: "text" });
     } catch {
+      setDraft((current) => (current.trim() ? current : sentText));
       Alert.alert(t("تعذر إرسال الرسالة", "Could not send message"), t("تحقق من الاتصال وحاول مرة أخرى.", "Check your connection and try again."));
     } finally {
       setBusy(false);
