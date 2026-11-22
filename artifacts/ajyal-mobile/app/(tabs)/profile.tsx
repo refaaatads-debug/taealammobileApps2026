@@ -622,6 +622,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
              <LinkRow icon="message-circle" label={t("تواصل مع الفريق", "Contact the team")} onPress={() => router.push("/support")} />
              <LinkRow icon="shield" label={t("سياسة الخصوصية", "Privacy policy")} onPress={() => router.push("/privacy")} />
              <LinkRow icon="file-text" label={t("شروط الاستخدام", "Terms of use")} onPress={() => router.push("/terms")} />
+             <LinkRow icon="trash-2" label={t("حذف حسابي", "Delete my account")} onPress={() => router.push("/delete-account")} />
             </FormCard>
           </ProfileSection>
           <View
