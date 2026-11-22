@@ -158,11 +158,19 @@ export function useContinuousVoiceConversation({
   const startListening = useCallback(async (sessionId: number) => {
     if (!isCurrentSession(sessionId)) return;
     setPhase("preparing");
-    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-    await recorder.prepareToRecordAsync();
-    if (!isCurrentSession(sessionId)) return;
-    clearSpeechDetection();
-    recorder.record();
+    let step = "audio-mode";
+    try {
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      step = "prepare";
+      await recorder.prepareToRecordAsync();
+      if (!isCurrentSession(sessionId)) return;
+      clearSpeechDetection();
+      step = "record";
+      recorder.record();
+    } catch (error) {
+      reportError(error, { step: `start:${step}` }, "voice");
+      throw error;
+    }
     listeningSinceRef.current = Date.now();
     stallReportedRef.current = false;
     setPhase("listening");
@@ -207,7 +215,10 @@ export function useContinuousVoiceConversation({
       if (!isCurrentSession(sessionId)) return;
 
       const uri = recorder.uri;
-      if (!uri) throw new Error("لم يتم حفظ التسجيل الصوتي. حاول مرة أخرى.");
+      if (!uri) {
+        reportError(new Error("voice tutor: recorder has no uri after stop"), { step: "stop", hadRecording: recorder.isRecording }, "voice");
+        throw new Error("لم يتم حفظ التسجيل الصوتي. حاول مرة أخرى.");
+      }
 
       const reply = await onQuestionRef.current(uri, {
         isCurrent: () => isCurrentSession(sessionId),
@@ -249,6 +260,7 @@ export function useContinuousVoiceConversation({
         }
       }, PLAYER_START_TIMEOUT_MS);
     } catch (error) {
+      reportError(error, { step: "submit", haveAnswer: Boolean(answerText) }, "voice");
       if (isCurrentSession(sessionId)) {
         const fallbackText = pendingAnswerTextRef.current || answerText;
         pendingPlaybackSessionRef.current = null;

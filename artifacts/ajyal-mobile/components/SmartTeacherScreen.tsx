@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase, supabasePublishableKey, supabaseUrl } from "@/lib/supabase";
+import { reportError } from "@/lib/errorReporting";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useAiTutorAccess } from "@/hooks/useAiTutorAccess";
 import {
@@ -374,6 +375,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
       if (!context.isCurrent()) return null;
       return await askTeacher(data.text, true);
     } catch (recordError) {
+      reportError(recordError, { step: "upload-or-ask" }, "voice");
       if (context.isCurrent() && !leavingTutorRef.current) {
         setError(errorMessage(recordError, "تعذر معالجة السؤال الصوتي."));
       }
@@ -688,7 +690,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
                             ? "جارٍ فهم سؤالك…"
                             : "جارٍ تجهيز الميكروفون…"
                 }
-                statusBody={voiceConversation.muted ? "اضغط على الميكروفون لتكمل الحديث." : undefined}
+                statusBody={error ?? (voiceConversation.muted ? "اضغط على الميكروفون لتكمل الحديث." : undefined)}
                 onToggleMute={() => voiceConversation.setMuted(!voiceConversation.muted)}
                 onEnd={() => void endVoiceConversation()}
               />
