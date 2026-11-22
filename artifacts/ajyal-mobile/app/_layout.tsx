@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Image, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -29,6 +29,7 @@ import { StatusBar } from 'expo-status-bar';
 import { clearRememberedLogin } from '@/lib/rememberedLogin';
 import { shouldAutoOpenStartedSession } from '@/lib/liveSessionRoute';
 import OnboardingScreen from '@/components/OnboardingScreen';
+import PermissionsOnboarding from '@/components/PermissionsOnboarding';
 import TeacherReviewAccessScreen from '@/components/TeacherReviewAccessScreen';
 import { shouldRenderSignInForm } from '@/lib/authBootstrap';
 
@@ -65,6 +66,7 @@ const PUBLIC_PATHS = new Set([
 ]);
 if (profileUiTestMode) PUBLIC_PATHS.add('/profile-test');
 const ONBOARDING_COMPLETED_KEY = 'ajyal.onboarding.completed.v1';
+const PERMISSIONS_ONBOARDING_KEY = 'ajyal.permissions.onboarding.v1';
 const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
   '/profile',
   '/(tabs)/profile',
@@ -95,6 +97,8 @@ function RootLayoutNav() {
   const [bootstrapTimedOut, setBootstrapTimedOut] = React.useState(false);
   const [onboardingResolved, setOnboardingResolved] = React.useState(false);
   const [showOnboarding, setShowOnboarding] = React.useState(false);
+  const [permissionsOnboardingResolved, setPermissionsOnboardingResolved] = React.useState(false);
+  const [showPermissionsOnboarding, setShowPermissionsOnboarding] = React.useState(false);
   const autoOpenedSessionIds = React.useRef(new Set<string>());
   useEffect(() => {
     // Remove credentials saved by older releases. Session persistence is
@@ -115,6 +119,26 @@ function RootLayoutNav() {
         console.warn('[onboarding] Could not read completion state:', error instanceof Error ? error.message : error);
         setShowOnboarding(true);
         setOnboardingResolved(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      setPermissionsOnboardingResolved(true);
+      return undefined;
+    }
+    let mounted = true;
+    void AsyncStorage.getItem(PERMISSIONS_ONBOARDING_KEY)
+      .then((done) => {
+        if (!mounted) return;
+        setShowPermissionsOnboarding(done !== '1');
+        setPermissionsOnboardingResolved(true);
+      })
+      .catch(() => {
+        if (mounted) setPermissionsOnboardingResolved(true);
       });
     return () => {
       mounted = false;
@@ -559,6 +583,25 @@ function RootLayoutNav() {
           void AsyncStorage.setItem(ONBOARDING_COMPLETED_KEY, '1').catch((error) => {
             console.warn('[onboarding] Could not save completion state:', error instanceof Error ? error.message : error);
           });
+        }}
+      />
+    );
+  }
+  const canShowPermissionsOnboarding = permissionsOnboardingResolved
+    && showPermissionsOnboarding
+    && isAuthenticated
+    && !!profile
+    && roleResolved
+    && !profileLoading
+    && !isPasswordRecovery
+    && !isPublicRoute
+    && overlay === null;
+  if (canShowPermissionsOnboarding) {
+    overlay = (
+      <PermissionsOnboarding
+        onDone={() => {
+          setShowPermissionsOnboarding(false);
+          void AsyncStorage.setItem(PERMISSIONS_ONBOARDING_KEY, '1').catch(() => undefined);
         }}
       />
     );
