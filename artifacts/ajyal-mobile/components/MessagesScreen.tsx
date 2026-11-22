@@ -962,7 +962,7 @@ function ConversationView({
             testID="start-instant-session"
             disabled={instantSessionBusy}
             onPress={onInstantSession}
-            style={({ pressed }) => [styles.instantSessionButton, { backgroundColor: colors.tealSoft, borderColor: colors.teal }, pressed && styles.pressed]}
+            style={({ pressed }) => [styles.instantSessionButton, isRTL && { flexDirection: "row-reverse" as const }, { backgroundColor: colors.tealSoft, borderColor: colors.teal }, pressed && styles.pressed]}
           >
             {instantSessionBusy ? <ActivityIndicator size="small" color={colors.teal} /> : <Icon name="video" size={16} color={colors.teal} />}
             <Text style={[styles.instantSessionButtonText, { color: colors.teal }]}>{instantSessionBusy ? t("جارٍ التحقق…", "Checking…") : t("بدء جلسة فورية", "Start instant session")}</Text>
@@ -1530,7 +1530,7 @@ export default function MessagesScreen() {
   return (
     <Screen>
       <Header title={t("الرسائل", "Messages")} eyebrow={t("تواصل داخل أجيال المعرفة", "Connect inside Ajyal Knowledge")} avatarText={user?.email?.slice(0, 1)} onAvatar={() => router.push("/profile")} />
-      <DepthCard wrapperStyle={styles.introCardWrap} surfaceStyle={styles.introCard} surfaceColor={colors.navySoft} depthColor={colors.tealSoft} borderColor={colors.border}>
+      <DepthCard wrapperStyle={styles.introCardWrap} surfaceStyle={isRTL ? { ...styles.introCard, flexDirection: "row-reverse" as const } : styles.introCard} surfaceColor={colors.navySoft} depthColor={colors.tealSoft} borderColor={colors.border}>
         <View style={[styles.introIcon, { backgroundColor: colors.primary }]}><Icon name="message-circle" size={23} color={colors.primaryForeground} /></View>
         <View style={[styles.introCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
           <Text style={[styles.introEyebrow, { color: colors.teal, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("مساحة تعلم متصلة", "Connected learning space")}</Text>
@@ -1542,7 +1542,7 @@ export default function MessagesScreen() {
               { icon: "paperclip" as const, label: t("مرفقات", "Files") },
               { icon: "phone" as const, label: t("مكالمات", "Calls") },
             ].map((feature) => (
-              <View key={feature.label} style={[styles.featurePill, { backgroundColor: colors.card }]}>
+              <View key={feature.label} style={[styles.featurePill, isRTL && { flexDirection: "row-reverse" as const }, { backgroundColor: colors.card }]}>
                 <Icon name={feature.icon} size={12} color={colors.teal} />
                 <Text style={[styles.featurePillText, { color: colors.foreground, writingDirection: direction }]}>{feature.label}</Text>
               </View>

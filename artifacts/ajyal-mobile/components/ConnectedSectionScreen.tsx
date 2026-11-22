@@ -594,12 +594,12 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
          <View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("بيانات من حساب المنصة", "Data from your platform account")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{detail ? t("خطتك الحالية", "Your current plan") : t("اختر ما يناسب هدفك", "Choose what fits your goal")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("المعلومات المعروضة متزامنة من Supabase مباشرة.", "This information syncs directly from Supabase.")}</Text></View>
       </View>
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-         <View style={styles.cardTop}><Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{activePlan ? text(activePlan, "name", "name_en", "name_ar") ?? t("الاشتراك الحالي", "Current plan") : query.data ? t("لا يوجد اشتراك فعال", "No active plan") : t("جارٍ تحميل بيانات الاشتراك…", "Loading subscription…")}</Text>{overallStatus ? <Text style={[styles.badge, statusStyle(overallStatus, colors)]}>{t(overallStatus, overallStatus === "فعال" ? "Active" : overallStatus === "منتهي" ? "Ended" : overallStatus === "موقوف" ? "Paused" : "Not subscribed")}</Text> : <Text style={[styles.badge, { color: colors.mutedForeground, backgroundColor: colors.background }]}>{t("جارٍ التحميل…", "Loading…")}</Text>}</View>
+         <View style={[styles.cardTop, direction === "rtl" && { flexDirection: "row-reverse" }]}><Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{activePlan ? text(activePlan, "name", "name_en", "name_ar") ?? t("الاشتراك الحالي", "Current plan") : query.data ? t("لا يوجد اشتراك فعال", "No active plan") : t("جارٍ تحميل بيانات الاشتراك…", "Loading subscription…")}</Text>{overallStatus ? <Text style={[styles.badge, statusStyle(overallStatus, colors)]}>{t(overallStatus, overallStatus === "فعال" ? "Active" : overallStatus === "منتهي" ? "Ended" : overallStatus === "موقوف" ? "Paused" : "Not subscribed")}</Text> : <Text style={[styles.badge, { color: colors.mutedForeground, backgroundColor: colors.background }]}>{t("جارٍ التحميل…", "Loading…")}</Text>}</View>
           {activeRows.length ? <><ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(aggregateRemainingSessions)} ${t("جلسة", "sessions")}`} /><ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(aggregateRemainingMinutes)} ${t("دقيقة", "min")}`} /><ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(active, "starts_at", "created_at"), locale)} /><ValueRow label={t("صلاحية الدقائق", "Minute validity")} value={t("مفتوحة ما دام الرصيد متاحًا", "Open while balance remains")} /></> : query.data ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("يمكنك اختيار إحدى الباقات المتاحة للبدء في حجز الجلسات.", "Choose one of the available plans to start booking sessions.")}</Text> : null}
       </View>
       {detail && query.data && activeRows.length ? (
         <View style={[styles.usageCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.cardTop}>
+          <View style={[styles.cardTop, direction === "rtl" && { flexDirection: "row-reverse" }]}>
              <Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{t("تفاصيل الاستهلاك", "Usage details")}</Text>
             <Icon name="trending-up" size={18} color={colors.teal} />
           </View>
@@ -617,10 +617,10 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
               <Text style={[styles.usageLabel, { color: colors.mutedForeground }]}>{t("متبقية", "Remaining")}</Text>
             </View>
           </View>
-          <View style={[styles.progressTrack, { backgroundColor: colors.background }]}>
+          <View style={[styles.progressTrack, { backgroundColor: colors.background }, direction === "rtl" && { flexDirection: "row-reverse" }]}>
             <View style={[styles.progressFill, { width: `${usagePercent}%`, backgroundColor: colors.teal }]} />
           </View>
-          <View style={styles.usageCaption}>
+          <View style={[styles.usageCaption, direction === "rtl" && { flexDirection: "row-reverse" }]}>
              <Text style={[styles.cardBody, { color: colors.mutedForeground, marginTop: 0 }]}>{formatNumber(Math.round(usagePercent))}% {t("مستخدم", "used")}</Text>
              <Text style={[styles.cardBody, { color: colors.mutedForeground, marginTop: 0 }]}>{t("الاستهلاك الفعلي بعد الجلسات المكتملة", "Actual usage after completed sessions")}</Text>
           </View>
