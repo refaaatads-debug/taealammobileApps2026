@@ -48,7 +48,10 @@ const RECORDING_OPTIONS = {
 // few seconds) plus a margin, kept inside sane bounds. A fixed -48 dB never
 // ended the turn in a noisy room and never started it for a soft voice.
 const MIN_THRESHOLD_DB = -52;
-const MAX_THRESHOLD_DB = -25;
+// Ceiling must sit well above typical loud-room floors: a -25 ceiling meant a
+// floor near -23 dB (seen on a real device) put the threshold below the floor,
+// so the room itself counted as speech and the turn never ended cleanly.
+const MAX_THRESHOLD_DB = -8;
 const FLOOR_MARGIN_DB = 10;
 const FLOOR_WINDOW_MS = 4000;
 const MAX_UTTERANCE_MS = 20000;
@@ -407,7 +410,7 @@ export function useContinuousVoiceConversation({
       && now - listeningSinceRef.current > STALL_REPORT_MS
     ) {
       stallReportedRef.current = true;
-      reportError(new Error("voice tutor: no speech detected for 30s"), { floor, threshold, level }, "voice");
+      reportError(new Error("voice tutor: no speech detected for 30s"), { floor, threshold, level, samples: window.length }, "voice");
     }
 
     if (level > threshold) {
