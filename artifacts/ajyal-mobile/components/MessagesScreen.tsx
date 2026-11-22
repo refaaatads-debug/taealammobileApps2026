@@ -762,7 +762,8 @@ function ConversationView({
         kind: payload.kind ?? "text",
       }),
     }).catch(() => undefined);
-    await onReload();
+    // The message is already saved at this point. A failed refresh must not show a send error.
+    try { await onReload(); } catch { /* realtime or the next refresh will pick it up */ }
   };
 
   const send = async () => {
