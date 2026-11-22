@@ -4,6 +4,7 @@ import {
   AppState,
   Alert,
   FlatList,
+  Keyboard,
   Linking,
   Modal,
   Platform,
@@ -623,8 +624,33 @@ function Composer({
   const colors = useColors();
   const { t, direction } = useAppPreferences();
   const isRTL = direction === "rtl";
+  const wrapRef = useRef<View>(null);
+  const [keyboardLift, setKeyboardLift] = useState(0);
+  // On some Android devices the keyboard still covers the input after the keyboard
+  // view has moved it. Measure the input against the keyboard top and lift it by
+  // whatever still overlaps. The lift resets when the keyboard closes.
+  useEffect(() => {
+    if (Platform.OS !== "android") return undefined;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const showSub = Keyboard.addListener("keyboardDidShow", (event) => {
+      const keyboardTop = event.endCoordinates.screenY;
+      const check = () => {
+        wrapRef.current?.measureInWindow((_x, y, _w, height) => {
+          const overlap = y + height - keyboardTop;
+          if (overlap > 2) setKeyboardLift((current) => current + overlap + 6);
+        });
+      };
+      timers.push(setTimeout(check, 350));
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => setKeyboardLift(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+      timers.forEach(clearTimeout);
+    };
+  }, []);
   return (
-    <View style={styles.composerWrap}>
+    <View ref={wrapRef} style={[styles.composerWrap, keyboardLift ? { marginBottom: keyboardLift } : null]}>
       {menuOpen && !recording ? (
         <View style={[styles.attachmentMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Pressable onPress={onPickImage} style={({ pressed }) => [styles.menuItem, pressed && styles.pressed]}>
