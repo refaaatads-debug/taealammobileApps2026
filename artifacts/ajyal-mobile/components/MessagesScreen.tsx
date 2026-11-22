@@ -27,6 +27,7 @@ import {
   useAudioPlayer,
   useAudioPlayerStatus,
   useAudioRecorder,
+  useAudioRecorderState,
 } from "expo-audio";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { usePeerOnline } from "@/lib/presence";
@@ -599,6 +600,11 @@ function ParticipantRow({ item, onPress }: { item: Participant; onPress: () => v
   );
 }
 
+function formatRecordTime(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 function Composer({
   draft,
   onChange,
@@ -606,6 +612,11 @@ function Composer({
   onPickImage,
   onPickPdf,
   onRecord,
+  onCancelRecord,
+  onTogglePause,
+  recordPaused,
+  recordElapsedMs,
+  recordLevels,
   menuOpen,
   recording,
   busy,
@@ -617,6 +628,11 @@ function Composer({
   onPickImage: () => void;
   onPickPdf: () => void;
   onRecord: () => void;
+  onCancelRecord: () => void;
+  onTogglePause: () => void;
+  recordPaused: boolean;
+  recordElapsedMs: number;
+  recordLevels: number[];
   menuOpen: boolean;
   recording: boolean;
   busy: boolean;
@@ -665,10 +681,29 @@ function Composer({
         </View>
       ) : null}
       {recording ? (
-        <View style={[styles.recordingBar, { backgroundColor: colors.goldSoft, borderColor: colors.accent }]}>
-          <View style={[styles.recordDot, { backgroundColor: colors.destructive }]} />
-          <Text style={[styles.recordingText, { color: colors.foreground, writingDirection: direction }]}>{t("جارٍ تسجيل الرسالة الصوتية…", "Recording voice message…")}</Text>
-          <Pressable onPress={onRecord} style={[styles.stopRecord, { backgroundColor: colors.destructive }]}><Icon name="square" size={13} color={colors.primaryForeground} /></Pressable>
+        <View style={[styles.recorderPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[styles.recorderWaveRow, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+            <Text style={[styles.recorderTimer, { color: colors.foreground }]}>{formatRecordTime(recordElapsedMs)}</Text>
+            <View style={[styles.recorderWave, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+              {Array.from({ length: 40 }, (_, index) => {
+                const level = recordLevels[recordLevels.length - 1 - index];
+                const height = 4 + (level ?? 0.06) * 26;
+                return <View key={index} style={[styles.recorderBar, { height, backgroundColor: recordPaused ? colors.mutedForeground : colors.teal, opacity: level === undefined ? 0.25 : 1 }]} />;
+              })}
+            </View>
+          </View>
+          <View style={[styles.recorderActions, { flexDirection: isRTL ? "row" : "row-reverse" }]}>
+            <Pressable testID="recorder-send" accessibilityLabel={t("إرسال", "Send")} onPress={onRecord} style={[styles.recorderSend, { backgroundColor: colors.teal }]}>
+              <Icon name="send" size={20} color={colors.primaryForeground} />
+            </Pressable>
+            <Pressable testID="recorder-pause" onPress={onTogglePause} style={[styles.recorderPause, { backgroundColor: colors.muted }]}>
+              <Icon name={recordPaused ? "mic" : "pause"} size={16} color={recordPaused ? colors.destructive : colors.foreground} />
+              <Text style={[styles.recorderPauseText, { color: colors.foreground, writingDirection: direction }]}>{recordPaused ? t("استئناف", "Resume") : t("إيقاف مؤقت", "Pause")}</Text>
+            </Pressable>
+            <Pressable testID="recorder-cancel" accessibilityLabel={t("حذف", "Delete")} onPress={onCancelRecord} style={[styles.recorderTrash, { backgroundColor: colors.destructive + "22" }]}>
+              <Icon name="trash-2" size={20} color={colors.destructive} />
+            </Pressable>
+          </View>
         </View>
       ) : (
         <View style={[styles.composer, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -730,11 +765,76 @@ function ConversationView({
   const [menuOpen, setMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  const recorderState = useAudioRecorderState(recorder, 100);
+  const [recordPaused, setRecordPaused] = useState(false);
+  const [recordElapsedMs, setRecordElapsedMs] = useState(0);
+  const [recordLevels, setRecordLevels] = useState<number[]>([]);
+  const webCancelRef = useRef(false);
   const recordStartingRef = useRef(false);
   const webRecorderRef = useRef<MediaRecorder | null>(null);
   const webStreamRef = useRef<MediaStream | null>(null);
   const webChunksRef = useRef<Blob[]>([]);
+
+  // Timer and waveform for the recording bar. Levels come from expo-audio metering
+  // (dB, about -60 to 0). Without metering the bars stay low, not faked.
+  useEffect(() => {
+    if (!recording) {
+      setRecordPaused(false);
+      setRecordElapsedMs(0);
+      setRecordLevels([]);
+      return undefined;
+    }
+    const startedAt = Date.now();
+    let accumulated = 0;
+    let lastTick = startedAt;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (!recordPausedRef.current) accumulated += now - lastTick;
+      lastTick = now;
+      setRecordElapsedMs(accumulated);
+    }, 200);
+    return () => clearInterval(timer);
+  }, [recording]);
+  const recordPausedRef = useRef(false);
+  recordPausedRef.current = recordPaused;
+  useEffect(() => {
+    if (!recording || recordPaused) return;
+    const metering = typeof recorderState.metering === "number" ? recorderState.metering : -60;
+    const level = Math.max(0.06, Math.min(1, (metering + 60) / 60));
+    setRecordLevels((current) => [...current.slice(-39), level]);
+  }, [recorderState.metering, recorderState.durationMillis, recording, recordPaused]);
+
+  const toggleRecordPause = () => {
+    try {
+      if (Platform.OS === "web") {
+        const mediaRecorder = webRecorderRef.current;
+        if (!mediaRecorder) return;
+        if (recordPaused) mediaRecorder.resume(); else mediaRecorder.pause();
+      } else if (recordPaused) {
+        recorder.record();
+      } else {
+        recorder.pause();
+      }
+      setRecordPaused((current) => !current);
+    } catch {
+      /* keep recording state unchanged */
+    }
+  };
+
+  const cancelRecording = async () => {
+    if (Platform.OS === "web") {
+      webCancelRef.current = true;
+      webRecorderRef.current?.stop();
+      return;
+    }
+    try {
+      await recorder.stop();
+    } catch {
+      /* already stopped */
+    }
+    setRecording(false);
+  };
 
   const handleMessageListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
@@ -906,6 +1006,10 @@ function ConversationView({
           webRecorderRef.current = null;
           webChunksRef.current = [];
           setRecording(false);
+          if (webCancelRef.current) {
+            webCancelRef.current = false;
+            return;
+          }
           if (blob.size < 200) {
         Alert.alert(t("التسجيل قصير جداً", "Recording is too short"), t("سجّل رسالة أطول ثم حاول مرة أخرى.", "Record a longer message and try again."));
             return;
@@ -1082,6 +1186,11 @@ function ConversationView({
           onPickImage={() => { if (menuOpen) void pickImage(); else toggleMenu(); }}
           onPickPdf={() => void pickPdf()}
           onRecord={() => void record()}
+          onCancelRecord={() => void cancelRecording()}
+          onTogglePause={toggleRecordPause}
+          recordPaused={recordPaused}
+          recordElapsedMs={recordElapsedMs}
+          recordLevels={recordLevels}
           menuOpen={menuOpen}
           recording={recording}
           busy={busy}
@@ -1780,6 +1889,16 @@ const styles = StyleSheet.create({
   menuIcon: { width: 28, height: 28, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   menuText: { fontSize: 9, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
   recordingBar: { minHeight: 57, borderWidth: 1, borderRadius: 18, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 8 },
+  recorderPanel: { borderWidth: 1, borderRadius: 22, paddingHorizontal: 14, paddingVertical: 10, gap: 10 },
+  recorderWaveRow: { alignItems: "center", gap: 10 },
+  recorderTimer: { fontSize: 14, fontFamily: "Inter_600SemiBold", minWidth: 40, textAlign: "center" },
+  recorderWave: { flex: 1, height: 34, alignItems: "center", justifyContent: "flex-start", gap: 2, overflow: "hidden" },
+  recorderBar: { width: 3, borderRadius: 2 },
+  recorderActions: { alignItems: "center", justifyContent: "space-between", gap: 10 },
+  recorderSend: { width: 54, height: 54, borderRadius: 27, alignItems: "center", justifyContent: "center" },
+  recorderPause: { flex: 1, height: 48, borderRadius: 24, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  recorderPauseText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  recorderTrash: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   recordDot: { width: 9, height: 9, borderRadius: 5 },
   recordingText: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 11, fontFamily: "Inter_600SemiBold" },
   stopRecord: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
