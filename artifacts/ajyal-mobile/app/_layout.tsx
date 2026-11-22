@@ -174,9 +174,12 @@ function RootLayoutNav() {
       setBootstrapTimedOut(false);
       return;
     }
-    const timeout = setTimeout(() => setBootstrapTimedOut(true), 12_000);
+    // Session restore keeps the short limit. The profile and role fetch runs several
+    // sequential queries on a slow server, so it gets a longer wait before the
+    // error screen appears. The screen still clears by itself when the data lands.
+    const timeout = setTimeout(() => setBootstrapTimedOut(true), authLoading ? 12_000 : 35_000);
     return () => clearTimeout(timeout);
-  }, [bootstrapLoading]);
+  }, [bootstrapLoading, authLoading]);
   useEffect(() => {
     if (!isAuthenticated) {
       homeNavigationAttempted.current = false;
