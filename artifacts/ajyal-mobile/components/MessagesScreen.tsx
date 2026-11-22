@@ -651,7 +651,11 @@ function Composer({
     const timers: ReturnType<typeof setTimeout>[] = [];
     const showSub = Keyboard.addListener("keyboardDidShow", (event) => {
       const keyboardTop = event.endCoordinates.screenY;
+      timers.splice(0).forEach(clearTimeout);
+      setKeyboardLift(0);
       const check = () => {
+        // The keyboard may already be closed by now; never lift in that case.
+        if (!Keyboard.isVisible()) { setKeyboardLift(0); return; }
         wrapRef.current?.measureInWindow((_x, y, _w, height) => {
           const overlap = y + height - keyboardTop;
           if (overlap > 2) setKeyboardLift((current) => current + overlap + 6);
@@ -659,10 +663,13 @@ function Composer({
       };
       timers.push(setTimeout(check, 350));
     });
-    const hideSub = Keyboard.addListener("keyboardDidHide", () => setKeyboardLift(0));
+    const resetLift = () => { timers.splice(0).forEach(clearTimeout); setKeyboardLift(0); };
+    const hideSub = Keyboard.addListener("keyboardDidHide", resetLift);
+    const willHideSub = Keyboard.addListener("keyboardWillHide", resetLift);
     return () => {
       showSub.remove();
       hideSub.remove();
+      willHideSub.remove();
       timers.forEach(clearTimeout);
     };
   }, []);
