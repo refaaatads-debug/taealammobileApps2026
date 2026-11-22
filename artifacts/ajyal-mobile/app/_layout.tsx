@@ -57,7 +57,9 @@ const appFontsReady = loadAsync(APP_FONT_MAP)
   });
 // The API is hosted outside Replit. EXPO_PUBLIC_DOMAIN remains the Expo
 // preview/packager domain, so it must not be used as the mobile API origin.
-const apiDomain = process.env.EXPO_PUBLIC_API_DOMAIN;
+// Fallback to the production API host so a build/update published without the
+// EXPO_PUBLIC_API_DOMAIN variable still reaches the API instead of using relative URLs.
+const apiDomain = process.env.EXPO_PUBLIC_API_DOMAIN || "api.ajyalalmaerifa.com";
 if (apiDomain) setBaseUrl(`https://${apiDomain}`);
 setAuthTokenGetter(getAuthToken);
 
