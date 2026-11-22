@@ -21,17 +21,17 @@ type Props = {
   size?: number;
 };
 
-const NAVY = "#0F1E3D";
-const NAVY_MID = "#173E8C";
-const TEAL = "#2E9E79";
+const NAVY_TEAL = "#15476A"; // deep navy-teal edge of the orb body (approved v2)
+const TEAL_MID = "#32A67F"; // brand teal (50,166,127)
+const TEAL = "#32A67F";
 const TEAL_LIGHT = "#4FC59A";
 
 // Ajyal star: 8 points with rounded tips and a slight pinwheel twist.
 function starPath(cx: number, cy: number, outer: number, inner: number): string {
   const pts: string[] = [];
   for (let i = 0; i < 8; i++) {
-    const tip = ((i * 45 - 90 - 6) * Math.PI) / 180;
-    const notch = ((i * 45 + 22.5 - 90 + 4) * Math.PI) / 180;
+    const tip = ((i * 45 - 90) * Math.PI) / 180;
+    const notch = ((i * 45 + 22.5 - 90) * Math.PI) / 180;
     pts.push(`${cx + outer * Math.cos(tip)},${cy + outer * Math.sin(tip)}`);
     pts.push(`${cx + inner * Math.cos(notch)},${cy + inner * Math.sin(notch)}`);
   }
@@ -121,13 +121,13 @@ export default function VoiceOrb({ state, level = 0, size = 260 }: Props) {
       <Animated.View style={[StyleSheet.absoluteFill, midStyle]}>
         <Svg width={size} height={size} viewBox="0 0 100 100">
           <Defs>
-            <RadialGradient id="body" cx="38%" cy="32%" r="75%">
-              <Stop offset="0%" stopColor={accent} stopOpacity="0.95" />
-              <Stop offset="45%" stopColor={NAVY_MID} stopOpacity="1" />
-              <Stop offset="100%" stopColor={NAVY} stopOpacity="1" />
+            <RadialGradient id="body" cx="50%" cy="50%" r="55%">
+              <Stop offset="0%" stopColor={TEAL_LIGHT} stopOpacity="1" />
+              <Stop offset="45%" stopColor={TEAL_MID} stopOpacity="1" />
+              <Stop offset="100%" stopColor={NAVY_TEAL} stopOpacity="1" />
             </RadialGradient>
             <RadialGradient id="shine" cx="35%" cy="25%" r="40%">
-              <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.22" />
+              <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.12" />
               <Stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
             </RadialGradient>
           </Defs>

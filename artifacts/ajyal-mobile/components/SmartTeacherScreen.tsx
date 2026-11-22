@@ -689,8 +689,6 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
                             : "جارٍ تجهيز الميكروفون…"
                 }
                 statusBody={voiceConversation.muted ? "اضغط على الميكروفون لتكمل الحديث." : undefined}
-                canSendNow={voiceConversation.phase === "listening" && !voiceConversation.muted}
-                onSendNow={voiceConversation.sendNow}
                 onToggleMute={() => voiceConversation.setMuted(!voiceConversation.muted)}
                 onEnd={() => void endVoiceConversation()}
               />
