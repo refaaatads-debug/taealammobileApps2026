@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Icon } from "@/components/AjyalUI";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
+import { rtlStyles } from "@/lib/rtlStyles";
 import { useColors } from "@/hooks/useColors";
 
 export type InPersonTeacherResult = {
@@ -45,6 +46,7 @@ export default function InPersonTeacherResultsSheet({
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { t, locale, direction } = useAppPreferences();
+  const styles = useMemo(() => rtlStyles(baseStyles, direction), [direction]);
   const selectedCount = selectedTeacherIds.length;
   const textStyle = { color: colors.foreground, writingDirection: direction } as const;
   const mutedStyle = { color: colors.mutedForeground, writingDirection: direction } as const;
@@ -211,7 +213,7 @@ export default function InPersonTeacherResultsSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   scrim: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(10, 24, 44, 0.48)" },
   sheet: { maxHeight: "84%", borderTopLeftRadius: 26, borderTopRightRadius: 26, borderWidth: 1, paddingHorizontal: 18, paddingTop: 9, shadowColor: "#10264A", shadowOpacity: 0.2, shadowRadius: 22, shadowOffset: { width: 0, height: -8 }, elevation: 16 },
