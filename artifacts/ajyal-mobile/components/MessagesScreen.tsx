@@ -29,6 +29,7 @@ import {
   useAudioRecorder,
 } from "expo-audio";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { useChatReceipts } from "@/lib/chatReceipts";
 import { usePeerOnline } from "@/lib/presence";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
@@ -961,6 +962,7 @@ function ConversationView({
   };
 
   const peerOnline = usePeerOnline(participant.participantId);
+  const readByPeer = useChatReceipts(userId, messages as { id?: unknown; sender_id?: unknown }[]);
   return (
     <Screen scroll={false} contentStyle={styles.conversationScreen}>
       <KeyboardAvoidingView behavior="padding" style={styles.keyboardRoot} keyboardVerticalOffset={0}>
@@ -1015,7 +1017,7 @@ function ConversationView({
                   </Text>
                   <MessageAttachment message={item} outgoing={outgoing} />
                   {text(item, "content") && !attachmentLabel(item.file_type, item.file_name) ? <Text style={[styles.messageText, { color: outgoing ? colors.primaryForeground : colors.foreground }]}>{text(item, "content")}</Text> : null}
-                  <Text style={[styles.messageDate, { color: outgoing ? colors.tint : colors.mutedForeground }]}>{dateLabel(item.created_at, locale)}{outgoing ? "  ✓" : ""}</Text>
+                  <Text style={[styles.messageDate, { color: outgoing ? colors.tint : colors.mutedForeground }]}>{dateLabel(item.created_at, locale)}{outgoing ? (readByPeer.has(String(item.id)) ? "  ✓✓" : "  ✓") : ""}</Text>
                 </View>
               </View>
             );
