@@ -1291,7 +1291,7 @@ export default function MessagesScreen() {
     const requestId = ++threadHistoryRequestRef.current;
     const key = participantHistoryKey(participant);
     setThreadHistory((current) => current.key === key
-      ? { ...current, status: "loading" }
+      ? { ...current, status: current.status === "ready" && current.messages.length ? "ready" : "loading" }
       : { key, status: "loading", messages: [] });
 
     try {
