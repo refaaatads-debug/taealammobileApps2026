@@ -1,3 +1,4 @@
+import { reportError } from "@/lib/errorReporting";
 import type { Notification as ApiNotification } from "@workspace/api-client-react";
 import type { Role, UserProfile } from "@/constants/localData";
 
@@ -460,9 +461,13 @@ async function bestEffortInsertNotification(
 ): Promise<void> {
   try {
     const result = await client.from("notifications").insert(notification);
-    if (result.error) console.warn(`[ajyal] ${operation} notification was not saved.`);
-  } catch {
+    if (result.error) {
+      console.warn(`[ajyal] ${operation} notification was not saved.`);
+      reportError(result.error, { operation, where: 'notification' }, 'notification');
+    }
+  } catch (error) {
     console.warn(`[ajyal] ${operation} notification was not saved.`);
+    reportError(error, { operation, where: 'notification' }, 'notification');
   }
 }
 

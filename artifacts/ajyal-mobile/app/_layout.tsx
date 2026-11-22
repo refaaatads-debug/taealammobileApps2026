@@ -22,6 +22,9 @@ import { useColors } from '@/hooks/useColors';
 import { InternalCallProvider } from '@/contexts/InternalCallContext';
 import { IncomingCallOverlay } from '@/components/IncomingCallOverlay';
 import { enforceAvailableUpdate } from '@/lib/appUpdates';
+import { installGlobalErrorReporting, reportError } from '@/lib/errorReporting';
+import { startNetworkMonitor } from '@/lib/networkStatus';
+import { OfflineBanner } from '@/components/OfflineBanner';
 import { BRAND_ICON } from '@/components/AjyalUI';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { AppPreferencesProvider, useAppPreferences } from '@/contexts/AppPreferencesContext';
@@ -37,6 +40,8 @@ SplashScreen.preventAutoHideAsync();
 
 wireFocusManager();
 startRealtimeKeeper();
+installGlobalErrorReporting();
+startNetworkMonitor();
 
 const APP_FONT_MAP = {
   Inter_400Regular: Cairo_400Regular,
@@ -816,7 +821,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AppPreferencesProvider>
         <PreferencesStatusBar />
-        <ErrorBoundary>
+        <ErrorBoundary onError={(error, stack) => reportError(error, { componentStack: stack.slice(0, 1500) }, 'render')}>
           <QueryClientProvider client={queryClient}>
             <AuthProvider>
               <InternalCallProvider>
@@ -825,6 +830,7 @@ export default function RootLayout() {
                     <KeyboardProvider>
                       <RootLayoutNav />
                       <IncomingCallOverlay />
+                      <OfflineBanner />
                     </KeyboardProvider>
                   </GestureHandlerRootView>
                 </AjyalProvider>
