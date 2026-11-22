@@ -10,7 +10,7 @@ import Animated, {
   withSequence,
   withTiming,
 } from "react-native-reanimated";
-import Svg, { Defs, Path, RadialGradient, Stop, Circle } from "react-native-svg";
+import Svg, { Defs, Path, RadialGradient, LinearGradient, Stop, Circle } from "react-native-svg";
 
 export type VoiceOrbState = "idle" | "listening" | "thinking" | "speaking" | "muted";
 
@@ -21,9 +21,9 @@ type Props = {
   size?: number;
 };
 
-const NAVY = "#0F1E3D";
-const NAVY_MID = "#173E8C";
-const TEAL = "#2E9E79";
+const NAVY_TEAL = "#15476A"; // deep navy-teal edge of the orb body (approved v2)
+const TEAL_MID = "#32A67F"; // brand teal (50,166,127)
+const TEAL = "#32A67F";
 const TEAL_LIGHT = "#4FC59A";
 
 // Ajyal star: 8 points with rounded tips and a slight pinwheel twist.
@@ -121,25 +121,29 @@ export default function VoiceOrb({ state, level = 0, size = 260 }: Props) {
       <Animated.View style={[StyleSheet.absoluteFill, midStyle]}>
         <Svg width={size} height={size} viewBox="0 0 100 100">
           <Defs>
-            <RadialGradient id="body" cx="38%" cy="32%" r="75%">
-              <Stop offset="0%" stopColor={accent} stopOpacity="0.95" />
-              <Stop offset="45%" stopColor={NAVY_MID} stopOpacity="1" />
-              <Stop offset="100%" stopColor={NAVY} stopOpacity="1" />
+            <RadialGradient id="body" cx="50%" cy="50%" r="50%">
+              <Stop offset="0%" stopColor="#3C9E8C" stopOpacity="1" />
+              <Stop offset="55%" stopColor="#2F8F82" stopOpacity="1" />
+              <Stop offset="82%" stopColor="#2A6A86" stopOpacity="0.8" />
+              <Stop offset="100%" stopColor="#1D2F6E" stopOpacity="0" />
             </RadialGradient>
+            <LinearGradient id="starFill" x1="0%" y1="0%" x2="100%" y2="100%">
+              <Stop offset="0%" stopColor="#FFFFFF" />
+              <Stop offset="100%" stopColor="#E3E7EE" />
+            </LinearGradient>
             <RadialGradient id="shine" cx="35%" cy="25%" r="40%">
-              <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.22" />
+              <Stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.12" />
               <Stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
             </RadialGradient>
           </Defs>
-          <Circle cx="50" cy="50" r="38" fill="url(#body)" />
-          <Circle cx="50" cy="50" r="38" fill="url(#shine)" />
-        </Svg>
+          <Circle cx="50" cy="50" r="40" fill="url(#body)" />
+                  </Svg>
       </Animated.View>
       <View style={[StyleSheet.absoluteFill, styles.center]} pointerEvents="none">
         <Animated.View style={[{ width: core, height: core }, starStyle]}>
           <Svg width={core} height={core} viewBox="0 0 100 100">
-            <Path d={star} fill="#000000" opacity={0.18} transform="translate(0 2.5)" strokeLinejoin="round" stroke="#000000" strokeWidth={5} />
-            <Path d={star} fill="#FFFFFF" stroke="#FFFFFF" strokeWidth={5} strokeLinejoin="round" />
+            <Path d={star} fill="#000000" opacity={0.10} transform="translate(0 2)" strokeLinejoin="round" stroke="#000000" strokeWidth={5} />
+            <Path d={star} fill="url(#starFill)" stroke="#F4F6FA" strokeWidth={5} strokeLinejoin="round" />
           </Svg>
         </Animated.View>
       </View>
