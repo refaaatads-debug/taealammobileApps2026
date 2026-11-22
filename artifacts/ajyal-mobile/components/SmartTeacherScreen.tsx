@@ -30,6 +30,7 @@ import {
 } from "@/hooks/useContinuousVoiceConversation";
 import { EmptyState, Header, Icon, Screen } from "@/components/AjyalUI";
 import { audioUploadDescriptor, createWebAudioUpload } from "@/lib/voiceAudioUpload";
+import VoiceModeScreen from "@/components/VoiceModeScreen";
 import { leaveTutorAfterVoiceCleanup } from "@/lib/tutorBackNavigation";
 import { shouldUseAiSpeechFallback } from "@/lib/aiAnswerAudio";
 import { speakAiAnswer } from "@/lib/speakAiAnswer";
@@ -659,6 +660,40 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
             </KeyboardAvoidingView>
           ) : (
             <View style={[styles.voicePanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <VoiceModeScreen
+                visible={voiceConversation.isActive}
+                state={
+                  voiceConversation.muted
+                    ? "muted"
+                    : voiceConversation.phase === "speaking"
+                      ? "speaking"
+                      : voiceConversation.phase === "listening"
+                        ? "listening"
+                        : voiceConversation.phase === "transcribing" || sending
+                          ? "thinking"
+                          : "idle"
+                }
+                level={voiceConversation.level}
+                muted={voiceConversation.muted}
+                statusTitle={
+                  voiceConversation.muted
+                    ? "الميكروفون مكتوم"
+                    : voiceConversation.phase === "speaking"
+                      ? "المدرس الذكي يتحدث إليك…"
+                      : voiceConversation.phase === "listening"
+                        ? "أنا أستمع إليك…"
+                        : sending
+                          ? "جارٍ تجهيز الإجابة…"
+                          : voiceConversation.phase === "transcribing"
+                            ? "جارٍ فهم سؤالك…"
+                            : "جارٍ تجهيز الميكروفون…"
+                }
+                statusBody={voiceConversation.muted ? "اضغط على الميكروفون لتكمل الحديث." : undefined}
+                canSendNow={voiceConversation.phase === "listening" && !voiceConversation.muted}
+                onSendNow={voiceConversation.sendNow}
+                onToggleMute={() => voiceConversation.setMuted(!voiceConversation.muted)}
+                onEnd={() => void endVoiceConversation()}
+              />
               <View style={[styles.voiceOrb, { backgroundColor: voiceConversation.phase === "listening" ? colors.teal : voiceConversation.isActive ? colors.navySoft : colors.muted }]}>
                 {voiceConversation.phase === "listening"
                   ? <View style={[styles.recordingDot, { backgroundColor: colors.destructive }]} />

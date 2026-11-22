@@ -68,6 +68,9 @@ export function useContinuousVoiceConversation({
 
   const [isActive, setIsActive] = useState(false);
   const [phase, setPhase] = useState<ContinuousVoicePhase>("idle");
+  const [muted, setMutedState] = useState(false);
+  const mutedRef = useRef(false);
+  const [level, setLevel] = useState(0);
 
   const onQuestionRef = useRef(onQuestion);
   const onErrorRef = useRef(onError);
@@ -287,6 +290,8 @@ export function useContinuousVoiceConversation({
       const sessionId = sessionIdRef.current + 1;
       sessionIdRef.current = sessionId;
       activeRef.current = true;
+      mutedRef.current = false;
+      setMutedState(false);
       setIsActive(true);
       await startListening(sessionId);
     } catch (error) {
@@ -337,8 +342,28 @@ export function useContinuousVoiceConversation({
     }
   }, [clearPlaybackWatchdog, clearSpeechDetection, player, recorder]);
 
+  const setMuted = useCallback((value: boolean) => {
+    mutedRef.current = value;
+    setMutedState(value);
+    if (value) clearSpeechDetection();
+  }, [clearSpeechDetection]);
+
+  // 0..1 mic level for the orb (-60 dB or quieter = 0, -10 dB or louder = 1).
+  useEffect(() => {
+    const metering = recorderStatus.metering;
+    if (!isActive || phase !== "listening" || muted || typeof metering !== "number") {
+      setLevel(0);
+      return;
+    }
+    setLevel(Math.max(0, Math.min(1, (metering + 60) / 50)));
+  }, [isActive, muted, phase, recorderStatus.metering]);
+
   useEffect(() => {
     if (!isActive || phase !== "listening" || !recorderStatus.isRecording) {
+      clearSpeechDetection();
+      return;
+    }
+    if (mutedRef.current) {
       clearSpeechDetection();
       return;
     }
@@ -404,6 +429,7 @@ export function useContinuousVoiceConversation({
     clearSpeechDetection,
     isActive,
     isCurrentSession,
+    muted,
     phase,
     recorderStatus.durationMillis,
     recorderStatus.isRecording,
@@ -499,5 +525,5 @@ export function useContinuousVoiceConversation({
     void submitUtterance(sessionIdRef.current);
   }, [phase, submitUtterance]);
 
-  return { isActive, phase, start, end, playAudio, stopAnswerPlayback, sendNow };
+  return { isActive, phase, start, end, playAudio, stopAnswerPlayback, sendNow, level, muted, setMuted };
 }
