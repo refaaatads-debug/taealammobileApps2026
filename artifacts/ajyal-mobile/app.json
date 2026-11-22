@@ -39,7 +39,8 @@
       "favicon": "./assets/images/ajyal-icon.png"
     },
     "updates": {
-      "checkAutomatically": "ON_ERROR_RECOVERY",
+      "url": "https://u.expo.dev/4f6614d5-2a55-410c-8c71-f9430594fbfd",
+      "checkAutomatically": "ON_LOAD",
       "fallbackToCacheTimeout": 0
     },
     "runtimeVersion": {
@@ -47,7 +48,7 @@
     },
     "extra": {
       "updatePolicy": {
-        "mandatory": true,
+        "mandatory": false,
         "minimumSupportedVersion": "1.0.0"
       },
       "eas": {
