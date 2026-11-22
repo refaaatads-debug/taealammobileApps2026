@@ -1166,41 +1166,42 @@ export default function MessagesScreen() {
           ),
         ),
       ];
-      const enrichment = await Promise.allSettled([
-        Promise.all(
-          batches(ids).map((bookingIdBatch) =>
-            client
-              .from("chat_messages")
-              .select("id,booking_id,sender_id,content,file_name,file_type,created_at")
-              .in("booking_id", bookingIdBatch)
-              .order("created_at", { ascending: true }),
-          ),
+      // Profiles and messages load independently so names never wait for the
+      // message history. The message list is bounded to the newest rows.
+      const profilesTask = Promise.all(
+        batches(participantIds).map((participantIdBatch) =>
+          client.from("public_profiles").select("user_id,full_name,avatar_url").in("user_id", participantIdBatch),
         ),
-        Promise.all(
-          batches(participantIds).map((participantIdBatch) =>
-            client.from("public_profiles").select("user_id,full_name,avatar_url").in("user_id", participantIdBatch),
-          ),
-        ),
-      ]);
-      if (requestId !== loadRequestRef.current) return;
-
-      const messagesResult = enrichment[0];
-      if (messagesResult.status === "fulfilled") {
-        const messageError = messagesResult.value.find((result) => result.error)?.error;
-        if (messageError) console.warn("[messages] message history failed:", messageError.message);
-        else setMessages(messagesResult.value.flatMap((result) => result.data ?? []) as Row[]);
-      } else {
-        console.warn("[messages] message history failed:", messagesResult.reason);
-      }
-
-      const profilesResult = enrichment[1];
-      if (profilesResult.status === "fulfilled") {
-        const profileError = profilesResult.value.find((result) => result.error)?.error;
+      ).then((results) => {
+        if (requestId !== loadRequestRef.current) return;
+        const profileError = results.find((result) => result.error)?.error;
         if (profileError) console.warn("[messages] profile lookup failed:", profileError.message);
-        else setProfiles(profilesResult.value.flatMap((result) => result.data ?? []) as Row[]);
-      } else {
-        console.warn("[messages] profile lookup failed:", profilesResult.reason);
-      }
+        else setProfiles(results.flatMap((result) => result.data ?? []) as Row[]);
+      }).catch((profileFailure) => {
+        console.warn("[messages] profile lookup failed:", profileFailure);
+      });
+      const messagesTask = Promise.all(
+        batches(ids).map((bookingIdBatch) =>
+          client
+            .from("chat_messages")
+            .select("id,booking_id,sender_id,content,file_name,file_type,created_at")
+            .in("booking_id", bookingIdBatch)
+            .order("created_at", { ascending: false })
+            .limit(400),
+        ),
+      ).then((results) => {
+        if (requestId !== loadRequestRef.current) return;
+        const messageError = results.find((result) => result.error)?.error;
+        if (messageError) console.warn("[messages] message history failed:", messageError.message);
+        else {
+          const rows = results.flatMap((result) => result.data ?? []) as Row[];
+          rows.sort((a, b) => new Date(String(a.created_at)).getTime() - new Date(String(b.created_at)).getTime());
+          setMessages(rows);
+        }
+      }).catch((messageFailure) => {
+        console.warn("[messages] message history failed:", messageFailure);
+      });
+      await Promise.all([profilesTask, messagesTask]);
     } catch (loadError) {
       if (requestId !== loadRequestRef.current) return;
       console.warn(
