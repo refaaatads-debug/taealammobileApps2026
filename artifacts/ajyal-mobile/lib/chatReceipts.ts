@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { receiptMessageIds, receiptChunks } from "./chatReceiptIds";
 
 type MessageLike = { id?: unknown; sender_id?: unknown };
 
@@ -24,8 +25,7 @@ function markUnavailable(error: { code?: string; message?: string } | null | und
 export function useChatReceipts(userId: string, messages: MessageLike[]): Set<string> {
   const [readByPeer, setReadByPeer] = useState<Set<string>>(new Set());
   const reportedRef = useRef<Set<string>>(new Set());
-  const ownIds = messages.filter((m) => String(m.sender_id) === userId).map((m) => String(m.id)).filter(Boolean);
-  const incomingIds = messages.filter((m) => String(m.sender_id) !== userId).map((m) => String(m.id)).filter(Boolean);
+  const { own: ownIds, incoming: incomingIds } = receiptMessageIds(userId, messages);
   const ownKey = ownIds.join(",");
   const incomingKey = incomingIds.join(",");
 
@@ -38,12 +38,15 @@ export function useChatReceipts(userId: string, messages: MessageLike[]): Set<st
     fresh.forEach((id) => reportedRef.current.add(id));
     void (async () => {
       try {
-        const { error } = await client
-          .from("chat_message_reads")
-          .upsert(fresh.map((id) => ({ message_id: id, reader_id: userId })), { onConflict: "message_id,reader_id", ignoreDuplicates: true });
-        if (error) {
-          markUnavailable(error);
-          fresh.forEach((id) => reportedRef.current.delete(id));
+        for (const batch of receiptChunks(fresh)) {
+          const { error } = await client
+            .from("chat_message_reads")
+            .upsert(batch.map((id) => ({ message_id: id, reader_id: userId })), { onConflict: "message_id,reader_id", ignoreDuplicates: true });
+          if (error) {
+            markUnavailable(error);
+            fresh.forEach((id) => reportedRef.current.delete(id));
+            break;
+          }
         }
       } catch {
         fresh.forEach((id) => reportedRef.current.delete(id));
