@@ -10,7 +10,7 @@ export const emptyTranscript = (): Transcript => ({ turns: [], blocked: [], thro
 export function reduceTranscript(state: Transcript, action: TranscriptEvent): Transcript {
  if (action.kind === 'reset') return emptyTranscript();
  if (action.kind === 'interrupt') {
-  const active = state.turns.filter(t => t.role === 'agent' && !t.complete);
+  const active = state.turns.filter(t => t.role === 'agent' && (!t.complete || t.eventId === action.eventId));
   return { turns: state.turns.map(t => active.includes(t) ? { ...t, complete: true, interrupted: true } : t), blocked: [...new Set([...state.blocked, ...active.map(t => t.key)])], through: Math.max(state.through, action.eventId) };
  }
  const role = action.kind === 'message' ? action.role : 'agent';
