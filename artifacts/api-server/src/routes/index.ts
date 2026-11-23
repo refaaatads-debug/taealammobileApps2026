@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import pushImagesRouter from "./pushImages";
 import healthRouter from "./health";
 import authRouter from "./auth";
 import profileRouter from "./profile";
@@ -9,6 +10,7 @@ import directoryRouter from "./directory";
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(pushImagesRouter);
 router.use(authRouter);
 router.use(profileRouter);
 router.use(learningRouter);
