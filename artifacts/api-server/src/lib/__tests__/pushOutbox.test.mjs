@@ -237,3 +237,13 @@ test("malformed outbox events are skipped without attempting provider delivery",
   assert.equal(result, "skip");
   assert.equal(calls, 0);
 });
+
+test("admin image file_url becomes top-level Expo richContent and data imageUrl", () => {
+  const url = "https://ajyalalmaerifa.com/storage/v1/object/public/site-assets/notifications/example.png";
+  const message = buildPlatformNotification("platform-notification:preview", {recipientId:"user",notificationId:"preview",title:"Notice",body:"Body",type:"admin_broadcast",file_url:url});
+  assert.deepEqual(message.notification.richContent,{image:url});
+  assert.equal(message.notification.data.imageUrl,url);
+  const pdf = buildPlatformNotification("platform-notification:preview", {recipientId:"user",notificationId:"preview",title:"Notice",body:"Body",type:"admin_broadcast",file_url:url.replace(".png",".pdf")});
+  assert.equal(pdf.notification.richContent,undefined);
+  assert.equal(pdf.notification.data.imageUrl,undefined);
+});
