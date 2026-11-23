@@ -116,6 +116,8 @@ async function edgeFunctionErrorMessage(
   return errorMessage(result.error, fallback);
 }
 
+const LIVE_VOICE_ENABLED = false;
+
 export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | "homework" } = {}) {
   const colors = useColors();
   const { user } = useAuth();
@@ -408,6 +410,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   };
 
   const startVoiceConversation = async () => {
+    if (!LIVE_VOICE_ENABLED) { setError("المحادثات الصوتية الحية متوقفة. استخدم نص + نطق."); return; }
     if (leavingTutorRef.current || role !== "student" || !hasAiTutorAccess || !aiEnabled) return;
     setError(null);
     await voiceConversation.start();
@@ -571,7 +574,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
           {!isHomeworkMode ? (
             <>
           <View style={[styles.tabs, { backgroundColor: colors.muted }]}>
-            <Pressable
+            {LIVE_VOICE_ENABLED && <Pressable
               testID="ai-tab-voice"
               onPress={() => setTab("voice")}
               disabled={voiceConversation.isActive || voiceConversation.phase === "preparing"}
@@ -579,7 +582,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
             >
               <Icon name="mic" size={15} color={tab === "voice" ? colors.primary : colors.mutedForeground} />
               <Text style={[styles.tabText, { color: tab === "voice" ? colors.primary : colors.mutedForeground }]}>صوتي</Text>
-            </Pressable>
+            </Pressable>}
             <Pressable
               testID="ai-tab-text"
               onPress={() => setTab("text")}
@@ -591,7 +594,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
             </Pressable>
           </View>
 
-          {tab === "text" ? (
+          {!LIVE_VOICE_ENABLED || tab === "text" ? (
             <KeyboardAvoidingView style={[styles.panel, isTextChat && styles.textPanel]} behavior="padding" keyboardVerticalOffset={0}>
               <View style={[styles.panelHeader, { borderColor: colors.border }]}>
                 <View style={[styles.panelHeaderIcon, { backgroundColor: colors.navySoft }]}>
