@@ -27,6 +27,7 @@ import {
   useAudioPlayer,
   useAudioPlayerStatus,
   useAudioRecorder,
+  useAudioRecorderState,
 } from "expo-audio";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useChatReceipts } from "@/lib/chatReceipts";
@@ -600,6 +601,11 @@ function ParticipantRow({ item, onPress }: { item: Participant; onPress: () => v
   );
 }
 
+function formatRecordTime(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 function Composer({
   draft,
   onChange,
@@ -607,6 +613,11 @@ function Composer({
   onPickImage,
   onPickPdf,
   onRecord,
+  onCancelRecord,
+  onTogglePause,
+  recordPaused,
+  recordElapsedMs,
+  recordLevels,
   menuOpen,
   recording,
   busy,
@@ -618,6 +629,11 @@ function Composer({
   onPickImage: () => void;
   onPickPdf: () => void;
   onRecord: () => void;
+  onCancelRecord: () => void;
+  onTogglePause: () => void;
+  recordPaused: boolean;
+  recordElapsedMs: number;
+  recordLevels: number[];
   menuOpen: boolean;
   recording: boolean;
   busy: boolean;
@@ -636,7 +652,11 @@ function Composer({
     const timers: ReturnType<typeof setTimeout>[] = [];
     const showSub = Keyboard.addListener("keyboardDidShow", (event) => {
       const keyboardTop = event.endCoordinates.screenY;
+      timers.splice(0).forEach(clearTimeout);
+      setKeyboardLift(0);
       const check = () => {
+        // The keyboard may already be closed by now; never lift in that case.
+        if (!Keyboard.isVisible()) { setKeyboardLift(0); return; }
         wrapRef.current?.measureInWindow((_x, y, _w, height) => {
           const overlap = y + height - keyboardTop;
           if (overlap > 2) setKeyboardLift((current) => current + overlap + 6);
@@ -644,10 +664,13 @@ function Composer({
       };
       timers.push(setTimeout(check, 350));
     });
-    const hideSub = Keyboard.addListener("keyboardDidHide", () => setKeyboardLift(0));
+    const resetLift = () => { timers.splice(0).forEach(clearTimeout); setKeyboardLift(0); };
+    const hideSub = Keyboard.addListener("keyboardDidHide", resetLift);
+    const willHideSub = Keyboard.addListener("keyboardWillHide", resetLift);
     return () => {
       showSub.remove();
       hideSub.remove();
+      willHideSub.remove();
       timers.forEach(clearTimeout);
     };
   }, []);
@@ -666,10 +689,29 @@ function Composer({
         </View>
       ) : null}
       {recording ? (
-        <View style={[styles.recordingBar, { backgroundColor: colors.goldSoft, borderColor: colors.accent }]}>
-          <View style={[styles.recordDot, { backgroundColor: colors.destructive }]} />
-          <Text style={[styles.recordingText, { color: colors.foreground, writingDirection: direction }]}>{t("جارٍ تسجيل الرسالة الصوتية…", "Recording voice message…")}</Text>
-          <Pressable onPress={onRecord} style={[styles.stopRecord, { backgroundColor: colors.destructive }]}><Icon name="square" size={13} color={colors.primaryForeground} /></Pressable>
+        <View style={[styles.recorderPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[styles.recorderWaveRow, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+            <Text style={[styles.recorderTimer, { color: colors.foreground }]}>{formatRecordTime(recordElapsedMs)}</Text>
+            <View style={[styles.recorderWave, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+              {Array.from({ length: 40 }, (_, index) => {
+                const level = recordLevels[recordLevels.length - 1 - index];
+                const height = 4 + (level ?? 0.06) * 26;
+                return <View key={index} style={[styles.recorderBar, { height, backgroundColor: recordPaused ? colors.mutedForeground : colors.teal, opacity: level === undefined ? 0.25 : 1 }]} />;
+              })}
+            </View>
+          </View>
+          <View style={[styles.recorderActions, { flexDirection: isRTL ? "row" : "row-reverse" }]}>
+            <Pressable testID="recorder-send" accessibilityLabel={t("إرسال", "Send")} onPress={onRecord} style={[styles.recorderSend, { backgroundColor: colors.teal }]}>
+              <Icon name="send" size={20} color={colors.primaryForeground} />
+            </Pressable>
+            <Pressable testID="recorder-pause" onPress={onTogglePause} style={[styles.recorderPause, { backgroundColor: colors.muted }]}>
+              <Icon name={recordPaused ? "mic" : "pause"} size={16} color={recordPaused ? colors.destructive : colors.foreground} />
+              <Text style={[styles.recorderPauseText, { color: colors.foreground, writingDirection: direction }]}>{recordPaused ? t("استئناف", "Resume") : t("إيقاف مؤقت", "Pause")}</Text>
+            </Pressable>
+            <Pressable testID="recorder-cancel" accessibilityLabel={t("حذف", "Delete")} onPress={onCancelRecord} style={[styles.recorderTrash, { backgroundColor: colors.destructive + "22" }]}>
+              <Icon name="trash-2" size={20} color={colors.destructive} />
+            </Pressable>
+          </View>
         </View>
       ) : (
         <View style={[styles.composer, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -731,10 +773,78 @@ function ConversationView({
   const [menuOpen, setMenuOpen] = useState(false);
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  const recorderState = useAudioRecorderState(recorder, 100);
+  const [recordPaused, setRecordPaused] = useState(false);
+  const [recordElapsedMs, setRecordElapsedMs] = useState(0);
+  const [recordLevels, setRecordLevels] = useState<number[]>([]);
+  const webCancelRef = useRef(false);
+  // Voice notes show up in the list right away and settle once the upload is done.
+  const [pendingVoice, setPendingVoice] = useState<{ key: string; asset: UploadAsset; status: "uploading" | "failed"; createdAt: string }[]>([]);
+  const recordStartingRef = useRef(false);
   const webRecorderRef = useRef<MediaRecorder | null>(null);
   const webStreamRef = useRef<MediaStream | null>(null);
   const webChunksRef = useRef<Blob[]>([]);
+
+  // Timer and waveform for the recording bar. Levels come from expo-audio metering
+  // (dB, about -60 to 0). Without metering the bars stay low, not faked.
+  useEffect(() => {
+    if (!recording) {
+      setRecordPaused(false);
+      setRecordElapsedMs(0);
+      setRecordLevels([]);
+      return undefined;
+    }
+    const startedAt = Date.now();
+    let accumulated = 0;
+    let lastTick = startedAt;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (!recordPausedRef.current) accumulated += now - lastTick;
+      lastTick = now;
+      setRecordElapsedMs(accumulated);
+    }, 200);
+    return () => clearInterval(timer);
+  }, [recording]);
+  const recordPausedRef = useRef(false);
+  recordPausedRef.current = recordPaused;
+  useEffect(() => {
+    if (!recording || recordPaused) return;
+    const metering = typeof recorderState.metering === "number" ? recorderState.metering : -60;
+    const level = Math.max(0.06, Math.min(1, (metering + 60) / 60));
+    setRecordLevels((current) => [...current.slice(-39), level]);
+  }, [recorderState.metering, recorderState.durationMillis, recording, recordPaused]);
+
+  const toggleRecordPause = () => {
+    try {
+      if (Platform.OS === "web") {
+        const mediaRecorder = webRecorderRef.current;
+        if (!mediaRecorder) return;
+        if (recordPaused) mediaRecorder.resume(); else mediaRecorder.pause();
+      } else if (recordPaused) {
+        recorder.record();
+      } else {
+        recorder.pause();
+      }
+      setRecordPaused((current) => !current);
+    } catch {
+      /* keep recording state unchanged */
+    }
+  };
+
+  const cancelRecording = async () => {
+    if (Platform.OS === "web") {
+      webCancelRef.current = true;
+      webRecorderRef.current?.stop();
+      return;
+    }
+    try {
+      await recorder.stop();
+    } catch {
+      /* already stopped */
+    }
+    setRecording(false);
+  };
 
   const handleMessageListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
@@ -810,7 +920,32 @@ function ConversationView({
     }
   };
 
+  const runPendingVoice = async (key: string, asset: UploadAsset) => {
+    if (!bookingId) return;
+    setPendingVoice((current) => current.map((item) => (item.key === key ? { ...item, status: "uploading" } : item)));
+    try {
+      const uploaded = await uploadToChat(asset, bookingId);
+      try {
+        await insertMessage({ content: "", kind: "voice", asset: uploaded });
+      } catch (error) {
+        await supabase?.storage.from("chat-files").remove([uploaded.path]).catch(() => undefined);
+        throw error;
+      }
+      setPendingVoice((current) => current.filter((item) => item.key !== key));
+    } catch {
+      setPendingVoice((current) => current.map((item) => (item.key === key ? { ...item, status: "failed" } : item)));
+    }
+  };
+
   const uploadAndSend = async (asset: UploadAsset) => {
+    if (bookingId && (asset.mimeType ?? "").startsWith("audio/")) {
+      const key = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      shouldStickToBottomRef.current = true;
+      setPendingVoice((current) => [...current, { key, asset, status: "uploading", createdAt: new Date().toISOString() }]);
+      setMenuOpen(false);
+      void runPendingVoice(key, asset);
+      return;
+    }
     if (busy || !bookingId) return;
     setBusy(true);
     setMenuOpen(false);
@@ -906,6 +1041,10 @@ function ConversationView({
           webRecorderRef.current = null;
           webChunksRef.current = [];
           setRecording(false);
+          if (webCancelRef.current) {
+            webCancelRef.current = false;
+            return;
+          }
           if (blob.size < 200) {
         Alert.alert(t("التسجيل قصير جداً", "Recording is too short"), t("سجّل رسالة أطول ثم حاول مرة أخرى.", "Record a longer message and try again."));
             return;
@@ -944,7 +1083,8 @@ function ConversationView({
       }
       return;
     }
-    if (busy || !bookingId) return;
+    if (busy || !bookingId || recordStartingRef.current) return;
+    recordStartingRef.current = true;
     try {
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
@@ -957,7 +1097,15 @@ function ConversationView({
       setMenuOpen(false);
       setRecording(true);
     } catch {
+      // A second tap during start-up can fail while the first start is already recording.
+      if (recorder.isRecording) {
+        setMenuOpen(false);
+        setRecording(true);
+        return;
+      }
       Alert.alert(t("تعذر بدء التسجيل", "Could not start recording"), t("تحقق من إذن الميكروفون ثم حاول مرة أخرى.", "Check microphone permission and try again."));
+    } finally {
+      recordStartingRef.current = false;
     }
   };
 
@@ -1005,10 +1153,37 @@ function ConversationView({
         <FlatList
           ref={listRef}
           style={styles.messageListFrame}
-          data={messages}
+          data={pendingVoice.length ? ([...messages, ...pendingVoice.map((item) => ({ id: item.key, sender_id: userId, created_at: item.createdAt, __pending: item.status }))] as typeof messages) : messages}
           keyExtractor={(item, index) => String(item.id || `${item.created_at}-${index}`)}
           renderItem={({ item }) => {
             const outgoing = String(item.sender_id) === userId;
+            const pendingStatus = (item as { __pending?: "uploading" | "failed" }).__pending;
+            if (pendingStatus) {
+              const pendingKey = String(item.id);
+              return (
+                <View style={[styles.messageRow, { alignItems: "flex-end" }]}>
+                  <View style={[styles.messageBubble, { backgroundColor: colors.primary, borderColor: colors.primary, opacity: pendingStatus === "uploading" ? 0.65 : 1 }]}>
+                    <Text style={[styles.messageSender, { color: colors.tint }]}>{t("أنت", "You")}</Text>
+                    <View style={{ flexDirection: isRTL ? "row-reverse" : "row", alignItems: "center", gap: 8, minWidth: 160 }}>
+                      {pendingStatus === "uploading" ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Icon name="alert-circle" size={18} color={colors.primaryForeground} />}
+                      <Text style={[styles.messageText, { color: colors.primaryForeground, writingDirection: direction }]}>
+                        {pendingStatus === "uploading" ? t("جارٍ إرسال الرسالة الصوتية…", "Sending voice message…") : t("تعذر إرسال الرسالة الصوتية", "Voice message failed")}
+                      </Text>
+                    </View>
+                    {pendingStatus === "failed" ? (
+                      <View style={{ flexDirection: isRTL ? "row-reverse" : "row", gap: 14, marginTop: 8 }}>
+                        <Pressable onPress={() => { const entry = pendingVoice.find((p) => p.key === pendingKey); if (entry) void runPendingVoice(pendingKey, entry.asset); }}>
+                          <Text style={[styles.messageDate, { color: colors.primaryForeground, fontFamily: "Inter_700Bold" }]}>{t("إعادة المحاولة", "Retry")}</Text>
+                        </Pressable>
+                        <Pressable onPress={() => setPendingVoice((current) => current.filter((p) => p.key !== pendingKey))}>
+                          <Text style={[styles.messageDate, { color: colors.tint }]}>{t("حذف", "Delete")}</Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            }
             return (
               <View style={[styles.messageRow, { alignItems: outgoing ? "flex-end" : "flex-start" }]}>
                 <View style={[styles.messageBubble, { backgroundColor: outgoing ? colors.primary : colors.card, borderColor: outgoing ? colors.primary : colors.border }]}>
@@ -1074,6 +1249,11 @@ function ConversationView({
           onPickImage={() => { if (menuOpen) void pickImage(); else toggleMenu(); }}
           onPickPdf={() => void pickPdf()}
           onRecord={() => void record()}
+          onCancelRecord={() => void cancelRecording()}
+          onTogglePause={toggleRecordPause}
+          recordPaused={recordPaused}
+          recordElapsedMs={recordElapsedMs}
+          recordLevels={recordLevels}
           menuOpen={menuOpen}
           recording={recording}
           busy={busy}
@@ -1120,7 +1300,7 @@ export default function MessagesScreen() {
     const requestId = ++threadHistoryRequestRef.current;
     const key = participantHistoryKey(participant);
     setThreadHistory((current) => current.key === key
-      ? { ...current, status: "loading" }
+      ? { ...current, status: current.status === "ready" && current.messages.length ? "ready" : "loading" }
       : { key, status: "loading", messages: [] });
 
     try {
@@ -1772,6 +1952,16 @@ const styles = StyleSheet.create({
   menuIcon: { width: 28, height: 28, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   menuText: { fontSize: 9, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
   recordingBar: { minHeight: 57, borderWidth: 1, borderRadius: 18, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 8 },
+  recorderPanel: { borderWidth: 1, borderRadius: 22, paddingHorizontal: 14, paddingVertical: 10, gap: 10 },
+  recorderWaveRow: { alignItems: "center", gap: 10 },
+  recorderTimer: { fontSize: 14, fontFamily: "Inter_600SemiBold", minWidth: 40, textAlign: "center" },
+  recorderWave: { flex: 1, height: 34, alignItems: "center", justifyContent: "flex-start", gap: 2, overflow: "hidden" },
+  recorderBar: { width: 3, borderRadius: 2 },
+  recorderActions: { alignItems: "center", justifyContent: "space-between", gap: 10 },
+  recorderSend: { width: 54, height: 54, borderRadius: 27, alignItems: "center", justifyContent: "center" },
+  recorderPause: { flex: 1, height: 48, borderRadius: 24, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  recorderPauseText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  recorderTrash: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   recordDot: { width: 9, height: 9, borderRadius: 5 },
   recordingText: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 11, fontFamily: "Inter_600SemiBold" },
   stopRecord: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
