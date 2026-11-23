@@ -2,6 +2,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { sendCallPushNotification, type CallPushEvent, type CallPushEventType } from "./callPush";
 import { logger } from "./logger";
+import { prepareAdminPushImage } from "./pushImageDerivative";
 import { findNotificationImageUrl } from "./notificationImage";
 import { sendUserPushNotification, type UserPushPayload } from "./userPush";
 
@@ -493,14 +494,19 @@ async function currentPlatformNotification(
     ? findSupportTicketId(row?.notification_row) ?? findSupportTicketId(payload)
     : null;
 
+  const originalImage = findNotificationImageUrl(row?.notification_row);
+  const imageUrl = type === "admin_broadcast"
+    ? await prepareAdminPushImage(originalImage)
+    : originalImage;
+  if (type === "admin_broadcast" && originalImage) {
+    logger.info({ notificationId, imagePrepared: Boolean(imageUrl) }, "Admin push image derivative checked");
+  }
   return {
     title,
     body,
     type,
     ...(supportTicketId ? { supportTicketId } : {}),
-    ...(row?.notification_row
-      ? { imageUrl: findNotificationImageUrl(row.notification_row) ?? undefined }
-      : {}),
+    ...(imageUrl ? { imageUrl } : {}),
   };
 }
 
