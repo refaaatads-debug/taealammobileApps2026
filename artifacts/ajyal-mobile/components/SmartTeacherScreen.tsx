@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   BackHandler,
+  Keyboard,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -165,6 +166,12 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   }, [handleTutorBack]));
 
   const [tab, setTab] = useState<Tab>("text");
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -544,11 +551,14 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
   }
 
   return (
+    <KeyboardAvoidingView style={styles.keyboardRoot} behavior="padding" keyboardVerticalOffset={0} enabled={isTextChat}>
     <Screen
+      animateContent={!isTextChat}
       scroll={!isTextChat}
       contentStyle={isTextChat ? [styles.textScreenContent, { paddingBottom: Math.max(insets.bottom, 8) }] : undefined}
     >
       <Header
+        hideHeaderRow={isTextChat && keyboardVisible}
         onBack={handleTutorBack}
         eyebrow={isHomeworkMode ? "أداة عملية للتعلّم" : "مساعدة فورية أثناء التعلم"}
         title={isHomeworkMode ? "مساعد الواجبات البصري" : "مساعد التعلّم الذكي"}
@@ -556,7 +566,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
         onAvatar={() => router.push("/profile")}
       />
 
-      <View style={[styles.hero, { backgroundColor: colors.primary }]}>
+      {!(isTextChat && keyboardVisible) && <View style={[styles.hero, { backgroundColor: colors.primary }]}>
         <View style={[styles.heroIcon, { backgroundColor: colors.navySoft }]}>
           <Icon name="zap" size={25} color={colors.primary} />
         </View>
@@ -565,7 +575,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
           <Text style={[styles.heroTitle, { color: colors.primaryForeground }]}>{isHomeworkMode ? "حل واجبك بصورة واضحة" : "تعلّم بصوتك ونصك"}</Text>
           <Text style={[styles.heroBody, { color: colors.tint }]}>{isHomeworkMode ? "صوّر السؤال أو ارفعه، ثم احصل على خطوات الحل والقاعدة والنصيحة." : "اسأل مدرسك الذكي أو تحدث معه بالعربية بصوت طبيعي."}</Text>
         </View>
-      </View>
+      </View>}
 
       {!aiEnabled ? (
         <EmptyState icon="slash" title="المساعد غير متاح حالياً" body="سيعود مساعد التعلم عند تفعيله من إعدادات المنصة." />
@@ -595,8 +605,8 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
           </View>
 
           {!LIVE_VOICE_ENABLED || tab === "text" ? (
-            <KeyboardAvoidingView style={[styles.panel, isTextChat && styles.textPanel]} behavior="padding" keyboardVerticalOffset={0}>
-              <View style={[styles.panelHeader, { borderColor: colors.border }]}>
+            <View style={[styles.panel, isTextChat && styles.textPanel]}>
+              {!keyboardVisible && <View style={[styles.panelHeader, { borderColor: colors.border }]}>
                 <View style={[styles.panelHeaderIcon, { backgroundColor: colors.navySoft }]}>
                   <Icon name="message-circle" size={18} color={colors.primary} />
                 </View>
@@ -604,7 +614,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
                   <Text style={[styles.panelTitle, { color: colors.foreground }]}>محادثة نصية مع المدرس المساعد</Text>
                   <Text style={[styles.panelSubtitle, { color: colors.mutedForeground }]}>سأشرح لك بالعربية وأنطق الإجابة بصوت طبيعي.</Text>
                 </View>
-              </View>
+              </View>}
 
               <ScrollView
                 style={styles.messageScroller}
@@ -681,7 +691,7 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
                   />
                 </View>
               </View>
-            </KeyboardAvoidingView>
+            </View>
           ) : (
             <View style={[styles.voicePanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <VoiceModeScreen
@@ -858,10 +868,12 @@ export default function SmartTeacherScreen({ mode = "full" }: { mode?: "full" | 
 
       {error ? <Text style={[styles.error, { color: colors.destructive }]}>{error}</Text> : null}
     </Screen>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  keyboardRoot: { flex: 1, minHeight: 0 },
   hero: { minHeight: 148, borderRadius: 23, padding: 17, flexDirection: "row", alignItems: "center", marginBottom: 15 },
   textScreenContent: { paddingHorizontal: 18 },
   heroIcon: { width: 58, height: 58, borderRadius: 19, alignItems: "center", justifyContent: "center", marginLeft: 4 },
