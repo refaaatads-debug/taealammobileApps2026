@@ -515,7 +515,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
               </FormCard>
             </ProfileSection>
 
-          {!teacher && !testHarness && user?.id ? <ProfileInPersonSection number="٠٢" role="student" userId={user.id} /> : null}
+          {!teacher && !testHarness && user?.id ? <ProfileInPersonSection key={`student-address-${user.id}`} number="٠٢" role="student" userId={user.id} /> : null}
           {teacher ? <>
             <ProfileSection number="٠٢" title={t("ملفك التعليمي", "Your teaching profile")} hint={t("عرّف الطلاب بخبرتك ومواعيدك", "Introduce students to your experience and availability")} icon="book-open">
               <FormCard>
@@ -529,7 +529,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
               </FormCard>
             </ProfileSection>
 
-            {!testHarness && user?.id ? <ProfileInPersonSection number="٠٣" role="teacher" userId={user.id} /> : null}
+            {!testHarness && user?.id ? <ProfileInPersonSection key={`teacher-address-${user.id}`} number="٠٣" role="teacher" userId={user.id} /> : null}
             <ProfileSection number="٠٤" title={t("البيانات البنكية", "Bank details")} hint={t("لتسهيل معالجة طلبات السحب", "For withdrawal processing")} icon="credit-card">
               <FormCard>
                <Field testID="teacher-bank-name" label={t("اسم البنك", "Bank name")} value={bankName} onChangeText={setBankName} />

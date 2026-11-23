@@ -6,6 +6,7 @@ import type { GooglePlaceDetails } from "@/lib/googlePlaces";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import { useColors } from "@/hooks/useColors";
 import { getAddressDeleteFailureMessage, getLocationSaveFailureMessage } from "@/lib/profileAddressErrors";
+import { savedAddressSummary, savedAddressCountText } from "@/lib/savedAddressSummary";
 import { supabase } from "@/lib/supabase";
 
 type City = { id: string; name_ar: string };
@@ -37,6 +38,34 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
+  const [summary, setSummary] = useState<{count:number;cityNames:string} | null>(null);
+  const [summaryError, setSummaryError] = useState(false);
+  const [summaryAttempt, setSummaryAttempt] = useState(0);
+
+  useEffect(() => {
+    if (role !== "student") return;
+    let cancelled = false;
+    setSummary(null); setSummaryError(false);
+    void (async () => {
+      try {
+        if (!supabase || !userId) throw new Error("not_signed_in");
+        const result = await supabase.from("user_addresses" as any).select("city_id,is_primary").eq("owner_id",userId);
+        if (result.error) throw result.error;
+        const rows = (result.data ?? []) as {city_id:string;is_primary?:boolean}[];
+        const ids = [...new Set(rows.map(row=>row.city_id).filter(Boolean))];
+        const cityResult = ids.length ? await supabase.from("cities" as any).select("id,name_ar").in("id",ids) : {data:[],error:null};
+        if (cityResult.error) throw cityResult.error;
+        if (!cancelled) setSummary(savedAddressSummary(rows,(cityResult.data ?? []) as City[]));
+      } catch { if (!cancelled) setSummaryError(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [userId, role, summaryAttempt]);
+
+  useEffect(() => {
+    if (role === "student" && sectionDataLoaded) {
+      setSummary(savedAddressSummary(addresses,cities)); setSummaryError(false);
+    }
+  }, [role, sectionDataLoaded, addresses, cities]);
 
   const checkTeacherEligibility = useCallback(async () => {
     if (role !== "teacher") return;
@@ -298,6 +327,18 @@ export default function ProfileInPersonSection({ number, role, userId }: { numbe
         {role === "teacher" && <View style={[styles.approvalPill, { backgroundColor: approval === "approved" ? colors.tealSoft : colors.muted }]}><Text style={[styles.approvalText, { color: approval === "approved" ? colors.teal : colors.mutedForeground }]}>{approvalLabel}</Text></View>}
         <Icon name={expanded ? "chevron-up" : "chevron-down"} size={18} color={colors.mutedForeground} />
       </Pressable>
+      {role === "student" && !expanded ? <View style={styles.summaryPanel}>
+        <Pressable accessibilityRole="button" onPress={() => {
+          if (summaryError) setSummaryAttempt(value=>value+1);
+          else setExpanded(true);
+        }} style={({pressed})=>[styles.summaryBox,{backgroundColor:colors.tealSoft,borderColor:colors.border,opacity:pressed?0.8:1}]}>
+          <Text style={[styles.summaryCity,{color:colors.teal,writingDirection:direction,textAlign:direction === "rtl" ? "right" : "left"}]}>
+            {summaryError ? t("تعذر تحميل العناوين", "Could not load addresses") : summary ? summary.count ? summary.cityNames || t("العناوين المحفوظة", "Saved addresses") : t("لا توجد عناوين محفوظة", "No saved addresses") : t("جارٍ تحميل العناوين...", "Loading addresses...")}
+          </Text>
+          {summary && !summaryError && summary.count > 0 ? <Text style={[styles.description,{color:colors.mutedForeground,writingDirection:direction,textAlign:direction === "rtl" ? "right" : "left"}]}>{savedAddressCountText(summary.count,direction === "rtl" ? "ar" : "en")}</Text> : null}
+          <Text style={[styles.summaryLink,{color:colors.primary,writingDirection:direction,textAlign:direction === "rtl" ? "right" : "left"}]}>{summaryError ? t("إعادة المحاولة", "Try again") : t("عرض العناوين وتعديلها", "View and edit addresses")}</Text>
+        </Pressable>
+      </View> : null}
       {expanded ? <View style={styles.body}>
       {loading ? <ActivityIndicator color={colors.teal} style={styles.loader} /> : <>
         {role === "teacher" && <>
@@ -446,6 +487,10 @@ const styles = StyleSheet.create({
   approvalText: { fontSize: 9, fontFamily: "Inter_700Bold" },
   title: { fontSize: 13, lineHeight: 19, fontFamily: "Inter_700Bold" },
   description: { fontSize: 10, lineHeight: 15, fontFamily: "Inter_400Regular", marginTop: 3 },
+  summaryPanel: { paddingHorizontal:12, paddingBottom:12 },
+  summaryBox: { borderWidth:1, borderRadius:14, padding:12, minHeight:72 },
+  summaryCity: { fontSize:12, lineHeight:19, fontFamily:"Inter_700Bold" },
+  summaryLink: { fontSize:11, lineHeight:18, fontFamily:"Inter_600SemiBold", marginTop:8 },
   body: { paddingHorizontal: 12, paddingTop: 11, paddingBottom: 13, borderTopWidth: StyleSheet.hairlineWidth },
   loader: { padding: 24 },
   label: { fontSize: 11, lineHeight: 15, fontFamily: "Inter_700Bold", marginBottom: 5 },
