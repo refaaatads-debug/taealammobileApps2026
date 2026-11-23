@@ -1,6 +1,15 @@
 const IMAGE_FIELD_PATTERN = /(image|photo|picture|banner|thumbnail)/i;
 const URL_FIELD_PATTERN = /^(url|uri|href|src|signedurl|publicurl|downloadurl)$/i;
 const MAX_NESTING_DEPTH = 5;
+const ADMIN_ATTACHMENT_PATTERN = /^https:\/\/ajyalalmaerifa\.com\/storage\/v1\/object\/public\/site-assets\/notifications\/[a-z0-9_.-]+\.(?:png|jpe?g|webp)(?:\?[^#]*)?(?:#.*)?$/i;
+
+/** Only admin-uploaded raster images are promoted from generic file attachments. */
+export function adminNotificationAttachmentImage(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const url = value.trim();
+  if (url.length > 4096 || !ADMIN_ATTACHMENT_PATTERN.test(url)) return null;
+  return httpsImageUrl(url);
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value === "string") {
@@ -71,6 +80,11 @@ function findUrlInImageValue(value: unknown, depth: number): string | null {
 export function findNotificationImageUrl(value: unknown): string | null {
   const record = asRecord(value);
   if (!record) return null;
+
+  if (record.type === "admin_broadcast") {
+    const attachment = adminNotificationAttachmentImage(record.file_url);
+    if (attachment) return attachment;
+  }
 
   for (const [key, fieldValue] of Object.entries(record)) {
     if (IMAGE_FIELD_PATTERN.test(key)) {
