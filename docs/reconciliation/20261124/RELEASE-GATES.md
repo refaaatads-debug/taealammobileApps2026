@@ -1,3 +1,5 @@
+Update 09:07: source-only hardening prepared in separate commits. Account read errors now fail closed locally, sensitive attachment views use authenticated five-minute signed URLs without public fallback, and API push images exclude private/signed links. Clean local suite now web318/API73, typechecks and builds pass. No real staging, bucket/policy change or deploy. See STAGING-PRIVACY-PROPOSAL.md in companion web PR34 for current USD0-first plan and remaining cutover gates. Earlier findings below describe the unchanged live system, not the newly prepared source.
+
 # Independent release gates, 24 November 2026
 
 Clean Git archive from 2f9e445, no shared dependency symlinks. pnpm 10.26.1 frozen install with scripts disabled passed. 72 synthetic/local tests pass. API build, referenced db/zod/client library TypeScript builds and API no-emit check pass. Build project references before the API check, otherwise TS6305 is expected. Native sharp generated a synthetic WebP successfully.
