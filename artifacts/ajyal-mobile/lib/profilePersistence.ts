@@ -1,3 +1,5 @@
+import { privateStoragePath, PRIVATE_FILE_TTL_SECONDS } from "./privateFiles.ts";
+
 export type ProfileRole = "student" | "teacher";
 
 export type ProfileFormValues = {
@@ -311,15 +313,8 @@ export async function uploadTeacherCertificate(
 }
 
 export function getCertificateStoragePath(fileUrl: string): string | null {
-  const match = fileUrl.match(/\/storage\/v1\/object\/(?:public|sign|authenticated)\/support-files\/(.+?)(?:\?|$)/);
-  if (match) {
-    try {
-      return decodeURIComponent(match[1]);
-    } catch {
-      return null;
-    }
-  }
-  return /^https?:\/\//i.test(fileUrl) ? null : fileUrl;
+  const path = privateStoragePath(fileUrl, "support-files", process.env.EXPO_PUBLIC_SUPABASE_URL ?? "https://ajyalalmaerifa.com");
+  return path?.startsWith("certificates/") ? path : null;
 }
 
 export async function getCertificateOpenUrl(
@@ -327,7 +322,7 @@ export async function getCertificateOpenUrl(
   fileUrl: string,
 ): Promise<string> {
   const path = getCertificateStoragePath(fileUrl);
-  if (!path) return fileUrl;
+  if (!path) throw new Error("Unsupported certificate storage URL.");
   if (!client) throw new Error("Certificate storage is unavailable.");
 
   const result = await createSignedCertificateUrl(client, path);
@@ -414,7 +409,7 @@ async function createSignedCertificateUrl(
   path: string,
 ) {
   return withTransientNetworkRetry(async () => {
-    const result = await client.storage.from("support-files").createSignedUrl(path, 60 * 60);
+    const result = await client.storage.from("support-files").createSignedUrl(path, PRIVATE_FILE_TTL_SECONDS);
     if (result.error) throw result.error;
     return result;
   });

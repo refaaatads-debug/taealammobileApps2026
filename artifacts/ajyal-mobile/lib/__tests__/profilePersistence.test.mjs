@@ -228,7 +228,7 @@ test("certificate upload retries a transient HTTP/2 reset without duplicating th
 test("a missing certificate image can be restored only to its existing owner-scoped path", async () => {
   const session = createProfileTestSession("teacher");
   const path = `certificates/${session.user.id}/123.png`;
-  const fileUrl = `https://storage-isolated.test/storage/v1/object/sign/support-files/${path}?token=expired`;
+  const fileUrl = `https://ajyalalmaerifa.com/storage/v1/object/sign/support-files/${path}?token=expired`;
   const tables = emptyTeacherTables(session);
   tables.teacher_certificates.push({
     id: "certificate-to-restore",

@@ -6,7 +6,8 @@ import { EmptyState, Header, Icon, Screen, SectionHeading } from "@/components/A
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { useAjyal } from "@/hooks/useAjyal";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseUrl } from "@/lib/supabase";
+import { signPrivateFile } from "@/lib/privateFiles";
 import { customFetch } from "@workspace/api-client-react";
 import { getSaudiMonthKey, getTeacherMonthlyEarningsSplit, getTeacherWithdrawalAmountError, groupTeacherEarningsByMonthAndType } from "@/lib/teacherFinance";
 
@@ -55,19 +56,10 @@ function earningStatusLabel(statuses: Set<string>): string {
   return labels[status] ?? status;
 }
 
-function storagePath(value: string): string | null {
-  const match = value.match(/\/storage\/v1\/object\/(?:public|sign|authenticated)\/support-files\/(.+?)(?:\?|$)/);
-  if (match) return decodeURIComponent(match[1]);
-  return /^https?:\/\//i.test(value) ? null : value;
-}
-
 async function openWithdrawalAttachment(value: string, fileName: string) {
   try {
-    const path = storagePath(value);
-    const signedUrl = path && supabase
-      ? (await supabase.storage.from("support-files").createSignedUrl(path, 60 * 60)).data?.signedUrl
-      : null;
-    await Linking.openURL(signedUrl ?? value);
+    const signedUrl = await signPrivateFile(supabase, value, "support-files", supabaseUrl);
+    await Linking.openURL(signedUrl);
   } catch (error) {
     Alert.alert("تعذر فتح المرفق", errorMessage(error, `تعذر فتح ${fileName}.`));
   }
