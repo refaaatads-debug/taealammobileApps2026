@@ -1,10 +1,12 @@
+> Update08:45: shared deliveryMode contract now preserved in OpenAPI, all four generated validators and client Session type. New local-source contract regression test passes. Current Zod4/Express5.3/dependency security overrides and pinned generator retained, not downgraded to older VPS source declarations. API/shared-library typechecks pass. No application to VPS or main/replit-dev merge.
+
 # VPS API source reconciliation, 24 November 2026
 
 DRAFT review only, based on current replit-dev `cdd3ab74531b01ea8ad1cd7bc8e3541b67141e9c`. No merge/deployment requested. App files unchanged.
 
 ## Imported
 
-Current running API checkout is `5ad318049d22a7ddb653e4aca69f7b937376636a` on `api-deploy-9b2`, with local push-image modifications. Its runtime application source reconciles cleanly with current replit-dev. Imported trusted admin attachment resolver, small public JPEG derivatives, bounded cache and image route, original attachment retained, outbox integration, exact sharp dependency/lockfile additions from existing PR33 and its tests. Six old-base changed API paths already matched current source. A complete tracked-file hash comparison also found two newer GitHub route fixes, deliberately retained: safeReturnTo redirect validation in auth.ts, and normalized booking-request status in learning.ts. Therefore the whole API tree is not byte-identical to live.
+Captured current running API checkout is `5ad318049d22a7ddb653e4aca69f7b937376636a` on `api-deploy-9b2`, with local push-image modifications. Its runtime application source reconciles cleanly with current replit-dev. Imported trusted admin attachment resolver, small public JPEG derivatives, bounded cache and image route, original attachment retained, outbox integration, exact sharp dependency/lockfile additions from existing PR33 and its tests. Six old-base changed API paths already matched current source. A complete tracked-file hash comparison also found two newer GitHub route fixes, deliberately retained: safeReturnTo redirect validation in auth.ts, and normalized booking-request status in learning.ts. Therefore the whole API tree is not byte-identical to live.
 
 `api-live-hashes.json` records all 11 captured changed/new VPS files. All nine application-source files match exactly; the captured pushOutbox test is extended by one additional PR32 regression test, and remaining captured test matches. This is source equality, not proof a rebuilt bundle matches current dist byte-for-byte.
 
@@ -16,7 +18,7 @@ This draft consolidates source of PR32 then PR33 against the current release bas
 
 ## Checks
 
-- 71 API unit tests pass, including attachment allowlist, narrow dedupe, no image on ordinary pushes, size/format/concurrency/cache/path guards, original-byte preservation and existing contracts.
+- 72 API unit tests pass, including attachment allowlist, narrow dedupe, no image on ordinary pushes, size/format/concurrency/cache/path guards, original-byte preservation and existing contracts.
 - API TypeScript check passes.
 - API build succeeds locally. No local build output committed or uploaded to VPS.
 - Existing app source/native settings remain byte-identical to replit-dev.
