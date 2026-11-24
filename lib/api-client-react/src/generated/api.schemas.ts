@@ -296,6 +296,7 @@ export interface Session {
   time: string;
   scheduledAt: string;
   duration: string;
+  deliveryMode?: "online" | "in_person";
   tone: SessionTone;
   status: SessionStatus;
   /** @nullable */

@@ -1,6 +1,15 @@
 const IMAGE_FIELD_PATTERN = /(image|photo|picture|banner|thumbnail)/i;
 const URL_FIELD_PATTERN = /^(url|uri|href|src|signedurl|publicurl|downloadurl)$/i;
 const MAX_NESTING_DEPTH = 5;
+const ADMIN_ATTACHMENT_PATTERN = /^https:\/\/ajyalalmaerifa\.com\/storage\/v1\/object\/public\/site-assets\/notifications\/[a-z0-9_.-]+\.(?:png|jpe?g|webp)(?:\?[^#]*)?(?:#.*)?$/i;
+
+/** Only admin-uploaded raster images are promoted from generic file attachments. */
+export function adminNotificationAttachmentImage(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const url = value.trim();
+  if (url.length > 4096 || !ADMIN_ATTACHMENT_PATTERN.test(url)) return null;
+  return httpsImageUrl(url);
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value === "string") {
@@ -27,6 +36,10 @@ function httpsImageUrl(value: unknown): string | null {
   try {
     const url = new URL(candidate);
     if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return null;
+    // Private chat/support media and bearer signed links must never become public
+    // push derivatives or be forwarded to notification delivery services.
+    if (/\/storage\/v1\/object\/(?:public|sign|authenticated)\/(?:chat-files|support-files)\//i.test(url.pathname)
+      || /\/storage\/v1\/object\/sign\//i.test(url.pathname)) return null;
     return candidate;
   } catch {
     return null;
@@ -71,6 +84,11 @@ function findUrlInImageValue(value: unknown, depth: number): string | null {
 export function findNotificationImageUrl(value: unknown): string | null {
   const record = asRecord(value);
   if (!record) return null;
+
+  if (record.type === "admin_broadcast") {
+    const attachment = adminNotificationAttachmentImage(record.file_url);
+    if (attachment) return attachment;
+  }
 
   for (const [key, fieldValue] of Object.entries(record)) {
     if (IMAGE_FIELD_PATTERN.test(key)) {

@@ -36,3 +36,21 @@ test("automated booking and session notifications use the compatible default cha
   }
   assert.equal(notificationPresentation("chat_message").channelId, MESSAGE_NOTIFICATION_CHANNEL);
 });
+
+const adminImage = "https://ajyalalmaerifa.com/storage/v1/object/public/site-assets/notifications/123_IMG.JPG?download=1";
+test("admin image attachments use exact public storage and supported extensions", () => {
+  assert.equal(findNotificationImageUrl({type:"admin_broadcast",file_url:adminImage}), adminImage);
+  for (const file_url of [adminImage.replace("https:","http:"),adminImage.replace("ajyalalmaerifa.com","ajyalalmaerifa.com.evil.test"),adminImage.replace("123_IMG.JPG","document.pdf"),adminImage.replace("site-assets","private"),adminImage.replace("123_IMG.JPG","nested/image.jpg"),"invalid",adminImage.replace("123_IMG.JPG","../image.jpg"),adminImage.replace("123_IMG.JPG","file.svg")]) {
+    assert.equal(findNotificationImageUrl({type:"admin_broadcast",file_url}), null, file_url);
+  }
+  assert.equal(findNotificationImageUrl({type:"booking_request",file_url:adminImage}),null);
+});
+
+test('private attachment URLs and signed bearer links are excluded from push images', () => {
+  for (const bucket of ['chat-files', 'support-files']) {
+    for (const mode of ['public', 'sign', 'authenticated']) {
+      assert.equal(findNotificationImageUrl({image_url:`https://ajyalalmaerifa.com/storage/v1/object/${mode}/${bucket}/owner/image.jpg?token=secret`}),null);
+    }
+  }
+  assert.equal(findNotificationImageUrl({image_url:'https://ajyalalmaerifa.com/storage/v1/object/sign/site-assets/private.jpg?token=secret'}),null);
+});

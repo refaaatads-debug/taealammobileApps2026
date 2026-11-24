@@ -1104,6 +1104,9 @@ components:
         time: { type: string }
         scheduledAt: { type: string, format: date-time }
         duration: { type: string }
+        deliveryMode:
+          type: string
+          enum: [online, in_person]
         tone:
           type: string
           enum: [teal, gold, navy]
