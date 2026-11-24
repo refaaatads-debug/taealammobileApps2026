@@ -36,6 +36,10 @@ function httpsImageUrl(value: unknown): string | null {
   try {
     const url = new URL(candidate);
     if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return null;
+    // Private chat/support media and bearer signed links must never become public
+    // push derivatives or be forwarded to notification delivery services.
+    if (/\/storage\/v1\/object\/(?:public|sign|authenticated)\/(?:chat-files|support-files)\//i.test(url.pathname)
+      || /\/storage\/v1\/object\/sign\//i.test(url.pathname)) return null;
     return candidate;
   } catch {
     return null;

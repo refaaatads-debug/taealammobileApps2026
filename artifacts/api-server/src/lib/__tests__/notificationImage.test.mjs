@@ -45,3 +45,12 @@ test("admin image attachments use exact public storage and supported extensions"
   }
   assert.equal(findNotificationImageUrl({type:"booking_request",file_url:adminImage}),null);
 });
+
+test('private attachment URLs and signed bearer links are excluded from push images', () => {
+  for (const bucket of ['chat-files', 'support-files']) {
+    for (const mode of ['public', 'sign', 'authenticated']) {
+      assert.equal(findNotificationImageUrl({image_url:`https://ajyalalmaerifa.com/storage/v1/object/${mode}/${bucket}/owner/image.jpg?token=secret`}),null);
+    }
+  }
+  assert.equal(findNotificationImageUrl({image_url:'https://ajyalalmaerifa.com/storage/v1/object/sign/site-assets/private.jpg?token=secret'}),null);
+});
