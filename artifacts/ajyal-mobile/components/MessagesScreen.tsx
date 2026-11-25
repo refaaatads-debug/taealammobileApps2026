@@ -409,10 +409,34 @@ function VoiceMessage({
   outgoing: boolean;
 }) {
   const colors = useColors();
-  const player = useAudioPlayer(fileState === "ready" ? url : null, { updateInterval: 250 });
+  // Probe the file once before creating the player: deleted storage objects
+  // return 500 and the player otherwise retries every failed load several
+  // times, flooding the network and logs during live sessions. One Range probe
+  // per message, then either a working player or a static unavailable note.
+  const [probe, setProbe] = useState<"pending" | "ok" | "bad">("pending");
+  useEffect(() => {
+    let active = true;
+    setProbe("pending");
+    if (fileState === "ready" && url) {
+      fetch(url, { headers: { Range: "bytes=0-0" } })
+        .then((r) => { if (active) setProbe(r.ok || r.status === 206 ? "ok" : "bad"); })
+        .catch(() => { if (active) setProbe("bad"); });
+    }
+    return () => { active = false; };
+  }, [fileState, url]);
+  const player = useAudioPlayer(probe === "ok" ? url : null, { updateInterval: 250 });
   const audioStatus = useAudioPlayerStatus(player);
-  if (fileState !== "ready" || !url) {
-    if (fileState === "loading") {
+  if (fileState === "ready" && url && probe === "bad") {
+    return (
+      <View style={styles.voiceMessage}>
+        <Text style={[styles.fileSubtitle, { color: outgoing ? colors.tint : colors.mutedForeground }]}>
+          التسجيل الصوتي غير متاح (ربما حُذف من التخزين)
+        </Text>
+      </View>
+    );
+  }
+  if (fileState !== "ready" || !url || probe !== "ok") {
+    if (fileState === "loading" || (fileState === "ready" && probe === "pending")) {
       return (
         <View style={styles.voiceMessage} accessibilityRole="progressbar">
           <ActivityIndicator size="small" color={colors.teal} />

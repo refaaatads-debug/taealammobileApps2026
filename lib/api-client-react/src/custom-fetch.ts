@@ -7,6 +7,7 @@ export type ErrorType<T = unknown> = ApiError<T>;
 export type BodyType<T> = T;
 
 export type AuthTokenGetter = () => Promise<string | null> | string | null;
+export type AuthRecoveryHandler = () => Promise<boolean> | boolean;
 
 const NO_BODY_STATUS = new Set([204, 205, 304]);
 const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
@@ -38,6 +39,7 @@ function createRequestSignal(externalSignal: AbortSignal | null | undefined) {
 
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
+let _authRecoveryHandler: AuthRecoveryHandler | null = null;
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -63,6 +65,15 @@ export function setBaseUrl(url: string | null): void {
  */
 export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
   _authTokenGetter = getter;
+}
+
+/**
+ * Register a recovery hook for expired/revoked bearer tokens. When an
+ * authenticated request receives 401, the hook may refresh the local session.
+ * Returning true retries the same request once with the newly supplied token.
+ */
+export function setAuthRecoveryHandler(handler: AuthRecoveryHandler | null): void {
+  _authRecoveryHandler = handler;
 }
 
 function isRequest(input: RequestInfo | URL): input is Request {
@@ -372,10 +383,11 @@ export async function customFetch<T = unknown>(
 
   // Attach bearer token when an auth getter is configured and no
   // Authorization header has been explicitly provided.
+  let bearerToken: string | null = null;
   if (_authTokenGetter && !headers.has("authorization")) {
-    const token = await _authTokenGetter();
-    if (token) {
-      headers.set("authorization", `Bearer ${token}`);
+    bearerToken = await _authTokenGetter();
+    if (bearerToken) {
+      headers.set("authorization", `Bearer ${bearerToken}`);
     }
   }
 
@@ -384,6 +396,24 @@ export async function customFetch<T = unknown>(
   const requestSignal = createRequestSignal(init.signal);
   try {
     let response = await fetch(input, { ...init, method, headers, signal: requestSignal.signal });
+  if (response.status === 401 && bearerToken && _authRecoveryHandler) {
+    const recovered = await _authRecoveryHandler();
+    if (recovered) {
+      const retryHeaders = new Headers(headers);
+      const retryToken = await _authTokenGetter?.();
+      if (retryToken) {
+        retryHeaders.set("authorization", `Bearer ${retryToken}`);
+      }
+      response = await fetch(input, {
+        ...init,
+        method,
+        headers: retryHeaders,
+        cache: "no-store",
+        signal: requestSignal.signal,
+      });
+    }
+  }
+
   if (response.status === 304) {
     // API responses are authenticated and must include their body. A browser
     // cache can turn a valid API response into 304, which has no JSON body for

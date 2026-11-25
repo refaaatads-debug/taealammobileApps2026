@@ -378,11 +378,14 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
       const subscriptionIds = subscriptions.map((row) => text(row, "id")).filter(Boolean) as string[];
       const subscriptionById = new Map(subscriptions.map((row) => [String(row.id), row]));
       const planById = new Map(((plansResult.data ?? []) as Row[]).map((row) => [String(row.id), row]));
+      // Match the web package-usage calculation: a completed booking counts
+      // against the student's used minutes even when settlement detached it
+      // from the original subscription row (subscription_id = NULL).
       const bookingsResult = await supabase
         .from("bookings")
         .select("id, teacher_id, subject_id, subjects(name), scheduled_at, subscription_id, status, delivery_mode, duration_minutes, instruction_duration_minutes, balance_cost_minutes, in_person_package_minutes")
         .eq("student_id", user.id)
-        .in("subscription_id", subscriptionIds.length ? subscriptionIds : ["00000000-0000-0000-0000-000000000000"])
+        .eq("status", "completed")
         .order("scheduled_at", { ascending: false })
         .limit(500);
       if (bookingsResult.error) throw bookingsResult.error;
