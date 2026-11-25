@@ -2,7 +2,7 @@
   "expo": {
     "name": "ajyalalmaerifa",
     "slug": "ajyal-mobile",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "default",
     "icon": "./assets/images/ajyal-icon.png",
     "scheme": "ajyalalmaerifa",
@@ -10,17 +10,17 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.ajyalalmaerifa.app",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية.",
-        "NSPhotoLibraryUsageDescription": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
+        "NSPhotoLibraryUsageDescription": "يستخدم التطبيق الصور فقط عند اختيار صورة لإرسالها كحل أو مرفق."
       },
       "bitcode": false
     },
     "android": {
       "package": "com.ajyalalmaerifa.app",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 192,
+      "versionCode": 193,
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.RECORD_AUDIO",
@@ -84,7 +84,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
+          "photosPermission": "يستخدم التطبيق الصور فقط عند اختيار صورة لإرسالها كحل أو مرفق.",
+          "cameraPermission": "يستخدم التطبيق الكاميرا فقط عند تصوير واجب أو سؤال لإرساله. الجلسات صوت ومشاركة شاشة بدون كاميرا."
         }
       ],
       "expo-screen-orientation",

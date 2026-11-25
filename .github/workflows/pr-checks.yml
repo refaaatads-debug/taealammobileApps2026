@@ -3,7 +3,7 @@ name: PR checks
 # Runs on pull requests only. Does not build the APK and does not touch production.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, replit-dev]
 
 concurrency:
   group: pr-checks-${{ github.event.pull_request.number }}
