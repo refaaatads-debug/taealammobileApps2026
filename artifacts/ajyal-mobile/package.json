@@ -20,6 +20,7 @@
     "eas-build-pre-install": "node scripts/validateEasEnvironment.cjs",
     "test:eas-env": "node --test lib/__tests__/easEnvironment.test.cjs",
     "test:session-media": "node --experimental-strip-types --test lib/__tests__/sessionMediaPolicy.test.mjs lib/__tests__/sessionTransport.test.mjs lib/__tests__/sessionLifecycle.test.mjs",
+    "test:session-rejoin": "node --experimental-strip-types --test lib/__tests__/sessionAgoraRejoin.test.mjs lib/__tests__/asyncTimeout.test.mjs",
     "test:availability": "node --experimental-strip-types --test lib/__tests__/teacherAvailability.test.mjs",
     "test:plugins": "node --test plugins/__tests__/*.test.cjs",
     "test:private-files": "node --experimental-strip-types --test lib/__tests__/privateFiles.test.mjs lib/__tests__/profilePersistence.test.mjs",

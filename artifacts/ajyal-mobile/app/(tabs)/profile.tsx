@@ -9,6 +9,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { withTimeout } from "@/lib/asyncTimeout";
 import { PRIVATE_FILE_REFRESH_MS } from "@/lib/privateFiles";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import ProfileInPersonSection from "@/components/ProfileInPersonSection";
@@ -43,6 +44,9 @@ type ProfileTestHarness = {
   client: ProfileDataClient;
 };
 const STAGES = ["رياض الأطفال", "الابتدائية", "المتوسطة", "الثانوية", "قدرات", "تحصيلي"];
+// A hung account-details load (e.g. a revoked session that never settles)
+// must surface the retry UI instead of an endless spinner.
+const PROFILE_LOAD_TIMEOUT_MS = 15_000;
 const WEEK_DAYS = [
   { key: "sunday", ar: "الأحد", en: "Sunday" },
   { key: "monday", ar: "الإثنين", en: "Monday" },
@@ -220,10 +224,14 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
     }
     setLoading(true);
     try {
-      const data = await loadProfileData(
-        profileClient as unknown as ProfileDataClient,
-        userId,
-        role as ProfileRole,
+      const data = await withTimeout(
+        loadProfileData(
+          profileClient as unknown as ProfileDataClient,
+          userId,
+          role as ProfileRole,
+        ),
+        PROFILE_LOAD_TIMEOUT_MS,
+        "profile-load-timeout",
       );
       setFullName(data.fullName);
       setPhone(data.phone);
