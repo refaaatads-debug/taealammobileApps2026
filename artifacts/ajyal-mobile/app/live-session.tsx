@@ -694,6 +694,21 @@ export default function LiveSessionScreen() {
     return () => clearInterval(interval);
   }, [bookingId, refreshLifecycle]);
 
+  // Liveness heartbeat for the server-side sweeper: if both clients die without
+  // ending the session, the server closes it from the last heartbeat and bills
+  // exactly up to the last sign of life. Beats every 30s while this room is
+  // open; the RPC no-ops when there is no open session yet.
+  useEffect(() => {
+    if (!bookingId || !supabase) return;
+    const client = supabase;
+    const beat = () => {
+      void (client.rpc as any)('heartbeat_session', { p_booking_id: bookingId }).then(() => undefined, () => undefined);
+    };
+    beat();
+    const interval = setInterval(beat, 30_000);
+    return () => clearInterval(interval);
+  }, [bookingId, supabase]);
+
   const finishCall = async () => {
     if (ending) return;
     setEnding(true);
