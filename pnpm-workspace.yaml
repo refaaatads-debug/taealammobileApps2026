@@ -70,6 +70,7 @@ autoInstallPeers: false
 
 allowBuilds:
   esbuild: true
+  '@sentry/cli': false
 
 overrides:
   # replit uses linux-x64 only, we can exclude all other platforms
