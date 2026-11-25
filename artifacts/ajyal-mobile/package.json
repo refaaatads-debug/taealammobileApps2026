@@ -69,6 +69,7 @@
   "dependencies": {
     "@config-plugins/react-native-webrtc": "15.0.2",
     "@expo-google-fonts/cairo": "^0.4.2",
+    "@sentry/react-native": "^8.36.0",
     "@supabase/supabase-js": "^2.114.0",
     "expo-asset": "57.0.17",
     "expo-audio": "57.0.5",
