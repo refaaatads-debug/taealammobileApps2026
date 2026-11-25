@@ -179,7 +179,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     if (mode === "signup" && !result.data.session) {
       deferSignedInUser.current = false;
-      throw new Error("تم إنشاء الحساب. تحقق من بريدك الإلكتروني لتفعيل الدخول.");
+      throw new Error(
+        role === "teacher"
+          ? "تم إنشاء حسابك كمعلم. الخطوة 1: أكّد بريدك من الرسالة التي وصلتك. الخطوة 2: انتظر موافقة الإدارة على حسابك."
+          : "تم إنشاء الحساب. افتح رسالة التأكيد في بريدك واضغط الرابط، ثم سجّل الدخول.",
+      );
     }
     if (result.data.user) {
       try {
