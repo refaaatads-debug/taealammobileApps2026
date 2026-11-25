@@ -939,7 +939,7 @@ function ToggleRow({ testID, icon, label, value, onValueChange }: { testID?: str
   return <View style={[styles.toggle, { borderBottomColor: colors.border, flexDirection: direction === "rtl" ? "row" : "row-reverse" }]}><Switch testID={testID} value={value} onValueChange={onValueChange} trackColor={{ false: colors.muted, true: colors.teal }} thumbColor={colors.card} /><Text style={[styles.toggleText, { color: colors.foreground, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]}>{label}</Text><View style={[styles.toggleIcon, { backgroundColor: iconBackground }]}><Icon name={icon} size={16} color={iconColor} /></View></View>;
 }
 
-function LinkRow({ icon, label, onPress, destructive = false, testID }: { icon: "help-circle" | "message-circle" | "shield" | "file-text" | "log-out"; label: string; onPress: () => void; destructive?: boolean; testID?: string }) {
+function LinkRow({ icon, label, onPress, destructive = false, testID }: { icon: "help-circle" | "message-circle" | "shield" | "file-text" | "log-out" | "trash-2"; label: string; onPress: () => void; destructive?: boolean; testID?: string }) {
   const colors = useColors();
   const { direction } = useAppPreferences();
   const iconColor = destructive ? colors.destructive : icon === "help-circle" ? colors.primary : icon === "message-circle" ? colors.teal : colors.accentForeground;
