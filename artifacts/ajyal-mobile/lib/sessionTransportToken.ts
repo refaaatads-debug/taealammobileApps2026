@@ -9,7 +9,8 @@ function responseStatus(error: unknown): number | null {
 export async function invokeSessionTransportToken(bookingId: string): Promise<unknown> {
   if (!supabase) throw new Error('Supabase is not configured');
 
-  const invoke = () => supabase.functions.invoke('session-transport-token', {
+  const client = supabase;
+  const invoke = () => client.functions.invoke('session-transport-token', {
     body: { bookingId },
   });
 
