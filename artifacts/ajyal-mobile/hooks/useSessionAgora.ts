@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { MOBILE_AGORA_SESSION_PUBLISH_OPTIONS } from '@/lib/sessionMediaPolicy';
 import { mapAgoraConnectionEvent } from '@/lib/sessionAgoraConnectionState';
 import { parseSessionTransport, type AgoraTransport } from '@/lib/sessionTransport';
+import { invokeSessionTransportToken } from '@/lib/sessionTransportToken';
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'failed';
 
@@ -223,10 +224,7 @@ export function useSessionAgora({
         setMediaWarning('وصل صوت الطرف الآخر؛ اضغط زر تفعيل الصوت إذا لم تسمعه.');
       },
       onTokenWillExpire: async () => {
-        const { data, error: tokenError } = await supabase!.functions.invoke('session-transport-token', {
-          body: { bookingId },
-        });
-        if (tokenError) throw tokenError;
+        const data = await invokeSessionTransportToken(bookingId!);
         const renewed = parseSessionTransport(data);
         if (renewed.uid !== userId) throw new Error('رد تجديد رمز Agora غير صالح.');
         return renewed.token;
@@ -320,10 +318,7 @@ export function useSessionAgora({
       onTokenPrivilegeWillExpire: async () => {
         try {
           if (!supabase || !bookingId) return;
-          const { data, error: tokenError } = await supabase.functions.invoke('session-transport-token', {
-            body: { bookingId },
-          });
-          if (tokenError) throw tokenError;
+          const data = await invokeSessionTransportToken(bookingId);
           const renewed = parseSessionTransport(data);
           if (renewed.uid !== userId) throw new Error('رد تجديد رمز Agora غير صالح.');
           engine.renewToken(renewed.token);
@@ -398,10 +393,7 @@ export function useSessionAgora({
     setError(null);
     setMediaWarning(null);
     try {
-      const { data, error: transportError } = await supabase.functions.invoke('session-transport-token', {
-        body: { bookingId },
-      });
-      if (transportError) throw transportError;
+      const data = await invokeSessionTransportToken(bookingId);
       if (generation !== generationRef.current) return;
       const transport = parseSessionTransport(data);
       if (transport.expiresAt <= Math.floor(Date.now() / 1000)) {
