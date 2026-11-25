@@ -13,8 +13,8 @@
       "buildNumber": "1",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية.",
-        "NSCameraUsageDescription": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
-        "NSPhotoLibraryUsageDescription": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
+        "NSCameraUsageDescription": "يستخدم التطبيق الكاميرا فقط عند تصوير واجب أو سؤال لإرساله. الجلسات صوت ومشاركة شاشة بدون كاميرا.",
+        "NSPhotoLibraryUsageDescription": "يستخدم التطبيق الصور فقط عند اختيار صورة لإرسالها كحل أو مرفق."
       },
       "bitcode": false
     },
@@ -59,7 +59,7 @@
       [
         "@config-plugins/react-native-webrtc",
         {
-          "cameraPermission": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
+          "cameraPermission": "يستخدم التطبيق الكاميرا فقط عند تصوير واجب أو سؤال لإرساله. الجلسات صوت ومشاركة شاشة بدون كاميرا.",
           "microphonePermission": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية."
         }
       ],
@@ -79,7 +79,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
+          "photosPermission": "يستخدم التطبيق الصور فقط عند اختيار صورة لإرسالها كحل أو مرفق."
         }
       ],
       "expo-screen-orientation",
