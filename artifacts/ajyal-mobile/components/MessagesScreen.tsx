@@ -34,7 +34,9 @@ import { useChatReceipts } from "@/lib/chatReceipts";
 import { usePeerOnline } from "@/lib/presence";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseUrl } from "@/lib/supabase";
+import { signPrivateFile } from "@/lib/privateFiles";
+import { usePrivateFileUrl } from "@/lib/usePrivateFileUrl";
 import { EmptyState, Header, Icon, Screen } from "@/components/AjyalUI";
 import { customFetch } from "@workspace/api-client-react";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
@@ -197,23 +199,8 @@ type UploadAsset = {
   file?: File;
 };
 
-function chatStoragePath(url: string) {
-  const match = url.match(/\/storage\/v1\/object\/(?:public|sign|authenticated)\/chat-files\/(.+?)(?:\?|$)/);
-  if (match) return decodeURIComponent(match[1]);
-  // Production stores the object path itself in chat_messages.file_url.
-  return url.startsWith("http://") || url.startsWith("https://") ? null : url;
-}
-
 async function resolveChatFileUrl(url: string) {
-  if (!url) return null;
-  if (!supabase) return /^https?:\/\//i.test(url) ? url : null;
-  const path = chatStoragePath(url);
-  if (!path) return url;
-  const result = await supabase.storage.from("chat-files").createSignedUrl(path, 60 * 60);
-  if (result.error || !result.data?.signedUrl) {
-    throw result.error ?? new Error("تعذر إنشاء رابط آمن للمرفق");
-  }
-  return result.data.signedUrl;
+  return signPrivateFile(supabase, url, "chat-files", supabaseUrl);
 }
 
 async function openChatFile(url: string, fileName: string) {
@@ -358,43 +345,9 @@ async function uploadToChat(asset: UploadAsset, bookingId: string) {
     upsert: false,
   });
   if (upload.error) throw upload.error;
-  // chat-files is private in production. Persist the path and resolve a
+  // Persist only the object path, regardless of the current bucket setting. Resolve a
   // short-lived signed URL only when the message is rendered/opened.
   return { url: path, name: asset.name, type: asset.mimeType, path };
-}
-
-function useResolvedChatFileUrl(url: string) {
-  const [retryCount, setRetryCount] = useState(0);
-  const [resolved, setResolved] = useState<{
-    status: "loading" | "ready" | "error";
-    url: string | null;
-  }>(() => (
-    chatStoragePath(url)
-      ? { status: "loading", url: null }
-      : { status: url ? "ready" : "error", url: url || null }
-  ));
-  useEffect(() => {
-    let active = true;
-    if (!url || !chatStoragePath(url)) {
-      setResolved({ status: url ? "ready" : "error", url: url || null });
-      return () => {
-        active = false;
-      };
-    }
-    setResolved({ status: "loading", url: null });
-    void resolveChatFileUrl(url).then((nextUrl) => {
-      if (active) setResolved({ status: "ready", url: nextUrl });
-    }).catch(() => {
-      if (active) setResolved({ status: "error", url: null });
-    });
-    return () => {
-      active = false;
-    };
-  }, [url, retryCount]);
-  return {
-    ...resolved,
-    retry: () => setRetryCount((count) => count + 1),
-  };
 }
 
 function VoiceMessage({
@@ -471,7 +424,7 @@ function MessageAttachment({ message, outgoing }: { message: Row; outgoing: bool
   const url = text(message, "file_url");
   const fileType = text(message, "file_type");
   const fileName = text(message, "file_name") || "المرفق";
-  const resolved = useResolvedChatFileUrl(url);
+  const resolved = usePrivateFileUrl(url, "chat-files");
   if (!url) return null;
   if (fileType.startsWith("audio/")) {
     return (

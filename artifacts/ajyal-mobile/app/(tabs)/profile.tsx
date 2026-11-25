@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, AppState, Image, Modal, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import CertificatePdfDocument from "@/components/CertificatePdfDocument";
 import { router } from "expo-router";
@@ -9,6 +9,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { PRIVATE_FILE_REFRESH_MS } from "@/lib/privateFiles";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 import ProfileInPersonSection from "@/components/ProfileInPersonSection";
 import {
@@ -29,6 +30,8 @@ type CertificateViewerState = {
   id: string;
   name: string;
   fileName: string;
+  ownerId: string | undefined;
+  expiresAt: number;
   kind: "image" | "pdf" | "unsupported";
   url: string | null;
 };
@@ -177,7 +180,29 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   const [certificateOpenError, setCertificateOpenError] = useState<{ id: string; message: string; canRestore?: boolean } | null>(null);
   const [openingCertificateId, setOpeningCertificateId] = useState<string | null>(null);
   const [restoringCertificateId, setRestoringCertificateId] = useState<string | null>(null);
-  const [certificateViewer, setCertificateViewer] = useState<CertificateViewerState | null>(null);
+  const [certificateViewerState, setCertificateViewer] = useState<CertificateViewerState | null>(null);
+  const certificateRequest = useRef(0);
+  const certificateOwner = useRef(userId);
+  certificateOwner.current = userId;
+  useEffect(() => () => { certificateRequest.current += 1; }, []);
+  const certificateViewer = certificateViewerState && certificateViewerState.ownerId === userId
+    && Date.now() < certificateViewerState.expiresAt ? certificateViewerState : null;
+  useEffect(() => {
+    certificateRequest.current += 1;
+    setCertificateViewer(null);
+    if (!supabase || testHarness) return;
+    const { data } = supabase.auth.onAuthStateChange(() => { certificateRequest.current += 1; setCertificateViewer(null); });
+    return () => data.subscription.unsubscribe();
+  }, [userId, testHarness]);
+  useEffect(() => {
+    if (!certificateViewerState) return;
+    // Drop bearer URLs before expiry. Reopening always signs again.
+    const timer = setTimeout(() => setCertificateViewer(null), Math.max(0, certificateViewerState.expiresAt - Date.now()));
+    const listener = AppState.addEventListener("change", (state) => {
+      if (state === "active") setCertificateViewer(null);
+    });
+    return () => { clearTimeout(timer); listener.remove(); };
+  }, [certificateViewerState]);
   const [certificatePdfLoading, setCertificatePdfLoading] = useState(false);
   const [certificatePdfError, setCertificatePdfError] = useState(false);
   const [certificatePdfAttempt, setCertificatePdfAttempt] = useState(0);
@@ -382,6 +407,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
 
   const restoreCertificate = async (id: string, fileUrl: string, fileName: string, displayName: string) => {
     if (restoringCertificateId) return;
+    const request = ++certificateRequest.current;
     setRestoringCertificateId(id);
     try {
       const picked = await DocumentPicker.getDocumentAsync({
@@ -406,9 +432,10 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
         asset.mimeType,
         bytes,
       );
+      const signedAt = Date.now();
       const url = await getCertificateOpenUrl(profileClient as unknown as ProfileDataClient, fileUrl);
       setCertificateOpenError(null);
-      setCertificateViewer({ id, name: displayName, fileName, kind: "image", url });
+      if (certificateOwner.current === userId && request === certificateRequest.current) setCertificateViewer({ id, name: displayName, fileName, kind: "image", url, ownerId: userId, expiresAt: signedAt + PRIVATE_FILE_REFRESH_MS });
     } catch (error) {
       setCertificateOpenError({
         id,
@@ -423,9 +450,11 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
   const openCertificate = async (id: string, fileUrl: string, fileName: string, displayName: string) => {
     if (openingCertificateId) return;
     setCertificateOpenError(null);
+    const request = ++certificateRequest.current;
     setOpeningCertificateId(id);
     try {
       const kind = certificateContentKind(fileName || fileUrl);
+      const signedAt = Date.now();
       const url = kind === "image" || kind === "pdf"
         ? await getCertificateOpenUrl(profileClient as unknown as ProfileDataClient | null, fileUrl)
         : null;
@@ -434,7 +463,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
         setCertificatePdfError(false);
         setCertificatePdfAttempt(0);
       }
-      setCertificateViewer({ id, name: displayName, fileName, kind, url });
+      if (certificateOwner.current === userId && request === certificateRequest.current) setCertificateViewer({ id, name: displayName, fileName, kind, url, ownerId: userId, expiresAt: signedAt + PRIVATE_FILE_REFRESH_MS });
     } catch (error) {
       const detail = message(error, t("تعذر فتح الشهادة. أعد المحاولة.", "Could not open the certificate. Please try again."));
       const canRestore = /object not found|file not found|no such object/i.test(detail);
@@ -691,7 +720,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
       visible={certificateViewer !== null}
       animationType="fade"
       presentationStyle="fullScreen"
-      onRequestClose={() => setCertificateViewer(null)}
+      onRequestClose={() => { certificateRequest.current += 1; setCertificateViewer(null); }}
       testID="certificate-viewer"
     >
       <View
@@ -710,7 +739,7 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
             testID="close-certificate-viewer"
             accessibilityRole="button"
             accessibilityLabel={t("إغلاق عارض الشهادة", "Close certificate viewer")}
-            onPress={() => setCertificateViewer(null)}
+            onPress={() => { certificateRequest.current += 1; setCertificateViewer(null); }}
             hitSlop={8}
             style={styles.viewerClose}
           >
@@ -764,9 +793,12 @@ export default function ProfileScreen({ testHarness }: { testHarness?: ProfileTe
                   testID="retry-certificate-pdf"
                   accessibilityRole="button"
                   onPress={() => {
-                    setCertificatePdfError(false);
-                    setCertificatePdfLoading(true);
-                    setCertificatePdfAttempt((attempt) => attempt + 1);
+                    if (!certificateViewer) return;
+                    const certificate = certificates.find((item) => item.id === certificateViewer.id);
+                    setCertificateViewer(null);
+                    if (certificate && typeof certificate.file_url === "string") {
+                      void openCertificate(certificateViewer.id, certificate.file_url, certificateViewer.fileName, certificateViewer.name);
+                    }
                   }}
                   style={[styles.viewerPdfRetry, { backgroundColor: colors.primary }]}
                 >
