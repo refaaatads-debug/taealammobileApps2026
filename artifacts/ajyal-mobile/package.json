@@ -79,6 +79,7 @@
     "@config-plugins/react-native-pdf": "14.0.2",
     "@expo-google-fonts/cairo": "^0.4.2",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@sentry/react-native": "^8.36.0",
     "@supabase/supabase-js": "^2.114.0",
     "@tanstack/react-query": "catalog:",
     "agora-rtc-sdk-ng": "^4.24.9",

@@ -1,3 +1,4 @@
+import '@/lib/sentry';
 import React, { useEffect } from 'react';
 import { Image, Platform, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
