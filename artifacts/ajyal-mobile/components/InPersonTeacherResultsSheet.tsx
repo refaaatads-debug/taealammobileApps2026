@@ -17,6 +17,7 @@ export type InPersonTeacherResult = {
 type Props = {
   visible: boolean;
   teachers: InPersonTeacherResult[];
+  promotedTeacherIds?: string[];
   selectedTeacherIds: string[];
   subjectLabel: string;
   cityLabel: string;
@@ -32,6 +33,7 @@ type Props = {
 export default function InPersonTeacherResultsSheet({
   visible,
   teachers,
+  promotedTeacherIds = [],
   selectedTeacherIds,
   subjectLabel,
   cityLabel,
@@ -137,6 +139,7 @@ export default function InPersonTeacherResultsSheet({
                     </View>
                     <View style={styles.teacherCopy}>
                       <Text numberOfLines={1} style={[styles.teacherName, textStyle]}>{teacher.full_name}</Text>
+                      {promotedTeacherIds.includes(teacher.teacher_id) ? <Text style={[styles.metaText, { color: colors.teal, fontWeight: "700" }]}>{t("إعلان", "Ad")}</Text> : null}
                       <View style={styles.teacherMeta}>
                         <Icon name="map-pin" size={12} color={colors.mutedForeground} />
                         <Text style={[styles.metaText, mutedStyle]}>{Number.isFinite(distance) ? distance.toLocaleString(locale, { maximumFractionDigits: 1 }) : "—"} {t("كم منك", "km away")}</Text>

@@ -13,6 +13,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { rtlStyles } from "@/lib/rtlStyles";
 import { supabase } from "@/lib/supabase";
+import { fetchPromotedTeacherIds, promotedFirst } from "@/lib/teacherPromotions";
 import { firstAvailableInPersonSchedule, formatLocalDateTimeInput, getInPersonAppointmentTimes, inPersonRequestStatusLabel, parseFutureInPersonDateTime } from "@/lib/inPersonScheduling";
 import { getInPersonBookingSnapshot } from "@/lib/inPersonBookingSnapshot";
 import { selectSavedAddress } from "@/lib/inPersonAddressSelection";
@@ -73,6 +74,7 @@ export default function InPersonScreen() {
   const [scheduledAt, setScheduledAt] = useState(firstAvailableInPersonSchedule);
   const [scheduleDate = "", scheduleTime = ""] = scheduledAt.split("T");
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [promotedTeacherIds, setPromotedTeacherIds] = useState<string[]>([]);
   const [searchPerformed, setSearchPerformed] = useState(false);
   const [selectedTeachers, setSelectedTeachers] = useState<string[]>([]);
   const [teacherResultsVisible, setTeacherResultsVisible] = useState(false);
@@ -271,7 +273,10 @@ export default function InPersonScreen() {
       }
       // The platform search applies the selected subject and stage to every eligible teacher;
       // do not filter its results again through the smaller general-directory response.
-      setTeachers(records(result.data) as Teacher[]);
+      const promoted = await fetchPromotedTeacherIds("in_person");
+      if (!isCurrentInPersonTeacherSearch(searchRequestId, searchRequestIdRef.current)) return;
+      setPromotedTeacherIds(promoted);
+      setTeachers(promotedFirst(records(result.data) as Teacher[], (teacher) => teacher.teacher_id, promoted));
       setSearchPerformed(true);
     } catch (cause) {
       if (!isCurrentInPersonTeacherSearch(searchRequestId, searchRequestIdRef.current)) return;
@@ -673,6 +678,7 @@ export default function InPersonScreen() {
       <InPersonTeacherResultsSheet
         visible={teacherResultsVisible}
         teachers={teachers}
+        promotedTeacherIds={promotedTeacherIds}
         selectedTeacherIds={selectedTeachers}
         subjectLabel={selectedSubject?.name ?? ""}
         cityLabel={selectedCity ? cityLabel(selectedCity) : ""}
