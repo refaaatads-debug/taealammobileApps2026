@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useColors } from '@/hooks/useColors';
 import { useInternalCall } from '@/contexts/InternalCallContext';
@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { shouldRedirectFromLiveSession } from '@/lib/liveSessionRoute';
 import { isSessionEnded, type SessionLifecycleSnapshot } from '@/lib/sessionLifecycle';
 import { createSessionEndBroadcast, isSessionEndBroadcastFromPeer, waitForSessionEndConfirmation } from '@/lib/sessionEnd';
+import { withTimeout } from '@/lib/asyncTimeout';
 import { createRateLimitedQueue, type RateLimitedQueue } from '@/lib/sessionThrottle';
 import { getMobileSessionExitCopy } from '@/lib/mobileSessionPolicy';
 import {
@@ -675,17 +676,38 @@ export default function LiveSessionScreen() {
     };
   }, [bookingId, refreshLifecycle]);
 
+  useFocusEffect(
+    useCallback(() => {
+      void refreshLifecycle().catch(() => undefined);
+    }, [refreshLifecycle]),
+  );
+
   // Realtime is the fast path, but a mobile connection can miss a channel
   // event while the app is backgrounded or reconnecting. Poll the authoritative
-  // booking/session state while this room is open so the join action appears
-  // without requiring the student to leave and reopen the screen.
+  // booking/session state while this room is open so teacher start/end changes
+  // appear without requiring the student to leave and reopen the screen.
   useEffect(() => {
     if (!bookingId) return;
     const interval = setInterval(() => {
       void refreshLifecycle().catch(() => undefined);
-    }, 15_000);
+    }, 5_000);
     return () => clearInterval(interval);
   }, [bookingId, refreshLifecycle]);
+
+  // Liveness heartbeat for the server-side sweeper: if both clients die without
+  // ending the session, the server closes it from the last heartbeat and bills
+  // exactly up to the last sign of life. Beats every 30s while this room is
+  // open; the RPC no-ops when there is no open session yet.
+  useEffect(() => {
+    if (!bookingId || !supabase) return;
+    const client = supabase;
+    const beat = () => {
+      void (client.rpc as any)('heartbeat_session', { p_booking_id: bookingId }).then(() => undefined, () => undefined);
+    };
+    beat();
+    const interval = setInterval(beat, 30_000);
+    return () => clearInterval(interval);
+  }, [bookingId, supabase]);
 
   const finishCall = async () => {
     if (ending) return;
@@ -694,7 +716,18 @@ export default function LiveSessionScreen() {
     try {
       if (!bookingId || !supabase) throw new Error('تعذر التحقق من حالة الحصة.');
       if (!profile?.id) throw new Error('تعذر التحقق من هوية صاحب طلب الإنهاء.');
-      const { error: endError } = await supabase.rpc("end_live_session" as any, { p_booking_id: bookingId } as any);
+      let endError: unknown = null;
+      try {
+        const rpcResult = await withTimeout(
+          supabase.rpc("end_live_session" as any, { p_booking_id: bookingId } as any),
+          10_000,
+          'استغرق تسجيل نهاية الحصة وقتاً طويلاً. تحقق من الاتصال ثم أعد المحاولة.',
+        );
+        endError = rpcResult.error;
+      } catch (timeoutError) {
+        const latestLifecycle = await refreshLifecycle().catch(() => null);
+        if (!latestLifecycle || !isSessionEnded(latestLifecycle)) throw timeoutError;
+      }
       if (endError) {
         const nowIso = new Date().toISOString();
         await Promise.allSettled([
@@ -710,15 +743,13 @@ export default function LiveSessionScreen() {
         elapsed: elapsedSeconds,
         userId: profile.id,
       });
-      let realtimeTimer: ReturnType<typeof setTimeout> | undefined;
-      const realtimeSent = await Promise.race([
-        sendSessionEndBroadcast(elapsedSeconds),
-        new Promise<boolean>((resolve) => {
-          realtimeTimer = setTimeout(() => resolve(false), 1_500);
-        }),
-      ]);
-      if (realtimeTimer) clearTimeout(realtimeTimer);
-      if (!realtimeSent) console.warn('تم إنهاء الحصة في قاعدة البيانات؛ تعذر إرسال إشارة Realtime.');
+      void sendSessionEndBroadcast(elapsedSeconds)
+        .then((sent) => {
+          if (!sent) console.warn('تم إنهاء الحصة في قاعدة البيانات؛ تعذر إرسال إشارة Realtime.');
+        })
+        .catch(() => {
+          console.warn('تم إنهاء الحصة في قاعدة البيانات؛ تعذر إرسال إشارة Realtime.');
+        });
 
       void queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: 'upcoming' }) });
       void queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: 'past' }) });

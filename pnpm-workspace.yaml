@@ -6,6 +6,7 @@ packages:
 
 allowBuilds:
   esbuild: true
+  '@sentry/cli': false
 
 autoInstallPeers: false
 

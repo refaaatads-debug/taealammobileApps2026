@@ -1,3 +1,4 @@
+import '@/lib/sentry';
 import React, { useEffect } from 'react';
 import { Image, Platform, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -16,8 +17,9 @@ import { loadAsync } from 'expo-font';
 import { Stack, router, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { AjyalProvider, useAjyal } from '@/hooks/useAjyal';
-import { setAuthTokenGetter, setBaseUrl } from '@workspace/api-client-react';
+import { setAuthRecoveryHandler, setAuthTokenGetter, setBaseUrl } from '@workspace/api-client-react';
 import { AuthProvider, getAuthToken, useAuth } from '@/lib/auth';
+import { recoverSupabaseSessionAfter401 } from '@/lib/authSessionRecovery';
 import { profileUiTestMode, supabase } from '@/lib/supabase';
 import { useColors } from '@/hooks/useColors';
 import { InternalCallProvider } from '@/contexts/InternalCallContext';
@@ -63,6 +65,7 @@ const appFontsReady = loadAsync(APP_FONT_MAP)
 const apiDomain = process.env.EXPO_PUBLIC_API_DOMAIN || "api.ajyalalmaerifa.com";
 if (apiDomain) setBaseUrl(`https://${apiDomain}`);
 setAuthTokenGetter(getAuthToken);
+setAuthRecoveryHandler(recoverSupabaseSessionAfter401);
 
 const PUBLIC_PATHS = new Set([
   '/privacy',

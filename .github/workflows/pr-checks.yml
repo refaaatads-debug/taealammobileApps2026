@@ -1,0 +1,40 @@
+name: PR checks
+
+# Runs on pull requests only. Does not build the APK and does not touch production.
+on:
+  pull_request:
+    branches: [main, replit-dev]
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Typecheck and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Tests
+        working-directory: artifacts/ajyal-mobile
+        # Curated suites (the branch keeps its own per-area test scripts).
+        run: |
+          for s in test:eas-env test:session-media test:session-rejoin test:availability test:plugins test:private-files test:profile test:in-person test:voice test:calls test:auth-storage test:balance test:assignments; do
+            pnpm run "$s" || exit 1
+          done

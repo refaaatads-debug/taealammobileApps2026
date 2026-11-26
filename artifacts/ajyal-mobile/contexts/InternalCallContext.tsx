@@ -3,7 +3,6 @@ import { recordPushDebug } from '@/lib/pushDebug';
 import { AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 import { requestRecordingPermissionsAsync, setAudioModeAsync, useAudioPlayer } from 'expo-audio';
-import * as ImagePicker from 'expo-image-picker';
 import * as Speech from 'expo-speech';
 import * as ExpoLinking from 'expo-linking';
 import * as TaskManager from 'expo-task-manager';
@@ -464,9 +463,9 @@ async function requestAppPermissions(): Promise<void> {
 
   appPermissionsPromise = (async () => {
     // Ask one permission at a time so native permission dialogs do not overlap.
+    // Sessions are audio + screen share only. Camera and photos are requested
+    // when the user taps a photo feature (smart teacher, assignments, chat).
     await requestRecordingPermissionsAsync().catch(() => undefined);
-    await ImagePicker.requestCameraPermissionsAsync().catch(() => undefined);
-    await ImagePicker.requestMediaLibraryPermissionsAsync().catch(() => undefined);
   })().catch(() => undefined);
 
   return appPermissionsPromise;

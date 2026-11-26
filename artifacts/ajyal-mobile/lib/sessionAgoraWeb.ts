@@ -1,3 +1,4 @@
+import { AGORA_DISCONNECTED_WATCHDOG_MS } from './sessionAgoraRejoin';
 import type { AgoraTransport } from './sessionTransport';
 
 export type AgoraWebCallbacks = {
@@ -10,6 +11,9 @@ export type AgoraWebCallbacks = {
   onTokenWillExpire?: () => Promise<string>;
   onTokenError?: (error: unknown) => void;
   onReconnecting?: (reconnecting: boolean) => void;
+  // Fired when the SDK stays DISCONNECTED past the watchdog window; the
+  // caller should rejoin with a fresh token.
+  onHardDisconnect?: () => void;
 };
 
 export async function joinAgoraWebSession(
@@ -72,10 +76,29 @@ export async function joinAgoraWebSession(
   });
   const onAutoplayFailed = () => callbacks.onAutoplayBlocked?.();
   rtc.on('autoplay-failed', onAutoplayFailed);
+  let hardDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearHardDisconnectWatchdog = () => {
+    if (hardDisconnectTimer) {
+      clearTimeout(hardDisconnectTimer);
+      hardDisconnectTimer = null;
+    }
+  };
   client.on('connection-state-change', (state: string) => {
     if (state === 'RECONNECTING' || state === 'CONNECTING') callbacks.onReconnecting?.(true);
-    else if (state === 'CONNECTED') callbacks.onReconnecting?.(false);
-    else if (state === 'DISCONNECTED') callbacks.onReconnecting?.(true);
+    else if (state === 'CONNECTED') {
+      clearHardDisconnectWatchdog();
+      callbacks.onReconnecting?.(false);
+    } else if (state === 'DISCONNECTED') {
+      callbacks.onReconnecting?.(true);
+      // The web SDK keeps retrying on its own; only escalate to a full
+      // rejoin when the disconnect persists.
+      if (!hardDisconnectTimer) {
+        hardDisconnectTimer = setTimeout(() => {
+          hardDisconnectTimer = null;
+          callbacks.onHardDisconnect?.();
+        }, AGORA_DISCONNECTED_WATCHDOG_MS);
+      }
+    }
   });
   client.on('token-privilege-will-expire', async () => {
     try {
@@ -89,6 +112,7 @@ export async function joinAgoraWebSession(
   try {
     await client.join(transport.appId, transport.channel, transport.token, transport.uid);
   } catch (error) {
+    clearHardDisconnectWatchdog();
     rtc.off?.('autoplay-failed', onAutoplayFailed);
     await client.leave?.().catch?.(() => undefined);
     throw error;
@@ -120,6 +144,7 @@ export async function joinAgoraWebSession(
       remoteAudioTrack?.play?.();
     },
     async leave() {
+      clearHardDisconnectWatchdog();
       rtc.off?.('autoplay-failed', onAutoplayFailed);
       remoteAudioTrack?.stop?.();
       remoteVideoTrack?.stop?.();

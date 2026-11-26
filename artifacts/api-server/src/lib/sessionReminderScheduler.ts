@@ -3,9 +3,27 @@ import { sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { persistPlatformNotificationOnce } from "./platformNotifications";
 import { isPushOutboxAvailable } from "./pushOutbox";
+import { readWaitingAcceptanceExpiryMinutes } from "./waitingAcceptanceExpiry";
 
 const POLL_INTERVAL_MS = 15_000;
 const SESSION_NOTIFICATION_LOOKBACK_MINUTES = 30;
+
+export async function expireStaleWaitingAcceptanceBookings(minutes = readWaitingAcceptanceExpiryMinutes()): Promise<number> {
+  if (!minutes) return 0;
+  const result = await db.execute(sql`
+    UPDATE public.bookings
+    SET status = 'cancelled', session_status = 'expired', updated_at = now()
+    WHERE session_status = 'waiting_acceptance'
+      AND status NOT IN ('completed', 'cancelled')
+      AND COALESCE(created_at, scheduled_at) < now() - make_interval(mins => ${minutes})
+      AND NOT EXISTS (
+        SELECT 1 FROM public.sessions s
+        WHERE s.booking_id = bookings.id AND s.started_at IS NOT NULL
+      )
+    RETURNING id
+  `);
+  return rowsFrom<{ id: string }>(result).length;
+}
 
 let schedulerStarted = false;
 let schedulerPolling = false;
@@ -162,10 +180,14 @@ async function pollUpcomingSessionReminders(): Promise<void> {
   if (schedulerPolling) return;
   schedulerPolling = true;
   try {
-    const [queuedReminderCount, lifecycleNotificationCount] = await Promise.all([
+    const [queuedReminderCount, lifecycleNotificationCount, expiredWaitingCount] = await Promise.all([
       enqueueUpcomingSessionReminders(),
       enqueueSessionLifecycleNotifications(),
+      expireStaleWaitingAcceptanceBookings(),
     ]);
+    if (expiredWaitingCount > 0) {
+      logger.info({ expiredWaitingCount }, "Stale waiting_acceptance bookings expired");
+    }
     if (queuedReminderCount > 0 || lifecycleNotificationCount > 0) {
       logger.info({
         queuedReminderCount,

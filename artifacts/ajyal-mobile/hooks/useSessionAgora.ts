@@ -3,9 +3,12 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
 import { supabase } from '@/lib/supabase';
+import { AGORA_DISCONNECTED_WATCHDOG_MS, agoraRejoinDelayMs, agoraRejoinExhausted } from '@/lib/sessionAgoraRejoin';
 import { MOBILE_AGORA_SESSION_PUBLISH_OPTIONS } from '@/lib/sessionMediaPolicy';
 import { mapAgoraConnectionEvent } from '@/lib/sessionAgoraConnectionState';
+import { logSessionEvent } from '@/lib/sessionTelemetry';
 import { parseSessionTransport, type AgoraTransport } from '@/lib/sessionTransport';
+import { invokeSessionTransportToken } from '@/lib/sessionTransportToken';
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'failed';
 
@@ -73,6 +76,12 @@ export function useSessionAgora({
   const sessionDeviceIdRef = useRef<string | null>(null);
   const heartbeatStartedRef = useRef(false);
   const heartbeatGenerationRef = useRef(0);
+  const rejoinAttemptsRef = useRef(0);
+  const rejoinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rejoinInFlightRef = useRef(false);
+  const nativeDisconnectWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleAgoraRejoinRef = useRef<(reason: string) => void>(() => undefined);
+  const mutedRef = useRef(false);
   const speakerEnabledRef = useRef(true);
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
   const [muted, setMuted] = useState(false);
@@ -104,6 +113,36 @@ export function useSessionAgora({
     });
     return true;
   }, [bookingId, userId]);
+
+  const reportSessionEvent = useCallback((eventType: string, metadata?: Record<string, unknown>) => {
+    void logSessionEvent({
+      userId,
+      bookingId,
+      eventType,
+      deviceId: sessionDeviceIdRef.current,
+      metadata,
+    });
+  }, [bookingId, userId]);
+
+  const clearRejoinTimer = useCallback(() => {
+    if (rejoinTimerRef.current) {
+      clearTimeout(rejoinTimerRef.current);
+      rejoinTimerRef.current = null;
+    }
+  }, []);
+
+  const clearNativeDisconnectWatchdog = useCallback(() => {
+    if (nativeDisconnectWatchdogRef.current) {
+      clearTimeout(nativeDisconnectWatchdogRef.current);
+      nativeDisconnectWatchdogRef.current = null;
+    }
+  }, []);
+
+  const resetRejoinState = useCallback(() => {
+    rejoinAttemptsRef.current = 0;
+    rejoinInFlightRef.current = false;
+    clearRejoinTimer();
+  }, [clearRejoinTimer]);
 
   const writeSessionHeartbeat = useCallback(async (isConnected: boolean) => {
     if (!supabase || !bookingId || !userId) return;
@@ -191,7 +230,7 @@ export function useSessionAgora({
 
   const startAgoraWeb = useCallback(async (transport: AgoraTransport) => {
     const { joinAgoraWebSession } = await import('@/lib/sessionAgoraWeb');
-    subscribeSessionData();
+    if (!channelRef.current) subscribeSessionData();
     const session = await joinAgoraWebSession(transport, {
       onRemoteUserJoined: (uid) => {
         agoraRemoteUidRef.current = uid;
@@ -223,10 +262,7 @@ export function useSessionAgora({
         setMediaWarning('وصل صوت الطرف الآخر؛ اضغط زر تفعيل الصوت إذا لم تسمعه.');
       },
       onTokenWillExpire: async () => {
-        const { data, error: tokenError } = await supabase!.functions.invoke('session-transport-token', {
-          body: { bookingId },
-        });
-        if (tokenError) throw tokenError;
+        const data = await invokeSessionTransportToken(bookingId!);
         const renewed = parseSessionTransport(data);
         if (renewed.uid !== userId) throw new Error('رد تجديد رمز Agora غير صالح.');
         return renewed.token;
@@ -236,12 +272,20 @@ export function useSessionAgora({
         setError(reason instanceof Error ? reason.message : 'تعذر تجديد رمز Agora.');
       },
       onReconnecting: (reconnecting) => {
-        if (reconnecting) setConnectionState('connecting');
+        if (reconnecting) {
+          setConnectionState('connecting');
+          return;
+        }
+        if (rejoinInFlightRef.current || rejoinAttemptsRef.current > 0) {
+          reportSessionEvent('session_agora_rejoin_success', { platform: Platform.OS });
+          resetRejoinState();
+        }
       },
+      onHardDisconnect: () => scheduleAgoraRejoinRef.current('web_disconnected_watchdog'),
     });
     agoraWebSessionRef.current = session;
     if (session.microphoneWarning) setMediaWarning(session.microphoneWarning);
-  }, [bookingId, onRemoteJoin, onRemoteLeave, subscribeSessionData, userId]);
+  }, [bookingId, onRemoteJoin, onRemoteLeave, reportSessionEvent, resetRejoinState, subscribeSessionData, userId]);
 
   const startAgoraNative = useCallback(async (transport: AgoraTransport) => {
     if (transport.uid !== userId) throw new Error('معرّف مستخدم Agora لا يطابق الحساب الحالي.');
@@ -289,6 +333,36 @@ export function useSessionAgora({
     engine.setEnableSpeakerphone(speakerEnabledRef.current);
     engine.registerEventHandler({
       onJoinChannelSuccess: () => setConnectionState(mapAgoraConnectionEvent('joined-channel')),
+      onConnectionStateChanged: (_connection: unknown, state: number, reason: number) => {
+        if (state === agora.ConnectionStateType.ConnectionStateConnected) {
+          clearNativeDisconnectWatchdog();
+          if (rejoinInFlightRef.current || rejoinAttemptsRef.current > 0) {
+            reportSessionEvent('session_agora_rejoin_success', { platform: Platform.OS });
+            resetRejoinState();
+          }
+          setConnectionState(mapAgoraConnectionEvent('joined-channel'));
+        } else if (
+          state === agora.ConnectionStateType.ConnectionStateConnecting
+          || state === agora.ConnectionStateType.ConnectionStateReconnecting
+        ) {
+          setConnectionState('connecting');
+        } else if (state === agora.ConnectionStateType.ConnectionStateDisconnected) {
+          setConnectionState('disconnected');
+          clearNativeDisconnectWatchdog();
+          nativeDisconnectWatchdogRef.current = setTimeout(() => {
+            nativeDisconnectWatchdogRef.current = null;
+            scheduleAgoraRejoinRef.current('native_disconnected_watchdog');
+          }, AGORA_DISCONNECTED_WATCHDOG_MS);
+        } else if (state === agora.ConnectionStateType.ConnectionStateFailed) {
+          clearNativeDisconnectWatchdog();
+          reportSessionEvent('session_agora_connection_failed', { reasonCode: reason });
+          scheduleAgoraRejoinRef.current('connection_failed');
+        }
+      },
+      onConnectionLost: () => {
+        reportSessionEvent('session_agora_connection_lost', {});
+        scheduleAgoraRejoinRef.current('connection_lost');
+      },
       onUserJoined: (_connection: unknown, uid: number) => {
         agoraRemoteUidRef.current = uid;
         setAgoraRemoteUid(uid);
@@ -320,10 +394,7 @@ export function useSessionAgora({
       onTokenPrivilegeWillExpire: async () => {
         try {
           if (!supabase || !bookingId) return;
-          const { data, error: tokenError } = await supabase.functions.invoke('session-transport-token', {
-            body: { bookingId },
-          });
-          if (tokenError) throw tokenError;
+          const data = await invokeSessionTransportToken(bookingId);
           const renewed = parseSessionTransport(data);
           if (renewed.uid !== userId) throw new Error('رد تجديد رمز Agora غير صالح.');
           engine.renewToken(renewed.token);
@@ -337,7 +408,7 @@ export function useSessionAgora({
       },
     });
 
-    subscribeSessionData(bluetoothRouteWarning);
+    if (!channelRef.current) subscribeSessionData(bluetoothRouteWarning);
     void startSessionHeartbeat().catch(() => setError('تعذر تحديث حالة الحصة.'));
     const joinResult = engine.joinChannelWithUserAccount(
       transport.token,
@@ -346,16 +417,94 @@ export function useSessionAgora({
       MOBILE_AGORA_SESSION_PUBLISH_OPTIONS,
     );
     if (joinResult < 0) throw new Error(`تعذر الانضمام إلى Agora (رمز ${joinResult}).`);
-  }, [bookingId, onRemoteJoin, onRemoteLeave, startSessionHeartbeat, subscribeSessionData, userId]);
+  }, [bookingId, clearNativeDisconnectWatchdog, onRemoteJoin, onRemoteLeave, reportSessionEvent, resetRejoinState, startSessionHeartbeat, subscribeSessionData, userId]);
 
   const startAgora = useCallback(async (transport: AgoraTransport) => {
     if (Platform.OS === 'web') await startAgoraWeb(transport);
     else await startAgoraNative(transport);
   }, [startAgoraNative, startAgoraWeb]);
 
+  const performAgoraRejoin = useCallback(async (reason: string, attempt: number) => {
+    if (!startedRef.current || !bookingId || !userId) {
+      rejoinInFlightRef.current = false;
+      return;
+    }
+    const generation = generationRef.current;
+    setConnectionState('connecting');
+    reportSessionEvent('session_agora_rejoin_attempt', { attempt: attempt + 1, reason, platform: Platform.OS });
+    try {
+      const data = await invokeSessionTransportToken(bookingId);
+      if (generation !== generationRef.current || !startedRef.current) return;
+      const transport = parseSessionTransport(data);
+      if (transport.uid !== userId) throw new Error('رد تجديد رمز Agora غير صالح.');
+      if (transport.expiresAt <= Math.floor(Date.now() / 1000)) {
+        throw new Error('انتهت صلاحية رمز الحصة؛ أعد المحاولة.');
+      }
+      if (Platform.OS === 'web') {
+        await agoraWebSessionRef.current?.leave().catch(() => undefined);
+        agoraWebSessionRef.current = null;
+        await startAgoraWeb(transport);
+        if (mutedRef.current) {
+          try {
+            await agoraWebSessionRef.current?.microphoneTrack?.setEnabled(false);
+          } catch {
+            // The fresh microphone track stays enabled; the next mute toggle fixes it.
+          }
+        }
+      } else {
+        const engine = agoraEngineRef.current;
+        if (!engine) throw new Error('محرك Agora غير متاح لإعادة الانضمام.');
+        engine.leaveChannel();
+        const joinResult = engine.joinChannelWithUserAccount(
+          transport.token,
+          transport.channel,
+          transport.uid,
+          MOBILE_AGORA_SESSION_PUBLISH_OPTIONS,
+        );
+        if (joinResult < 0) throw new Error(`تعذرت إعادة الانضمام إلى Agora (رمز ${joinResult}).`);
+        if (mutedRef.current) engine.muteLocalAudioStream(true);
+      }
+    } catch (rejoinError) {
+      rejoinInFlightRef.current = false;
+      reportSessionEvent('session_agora_rejoin_failed', {
+        attempt: attempt + 1,
+        reason,
+        message: rejoinError instanceof Error ? rejoinError.message : String(rejoinError),
+      });
+      scheduleAgoraRejoinRef.current(reason);
+    }
+  }, [bookingId, reportSessionEvent, startAgoraWeb, userId]);
+
+  const scheduleAgoraRejoin = useCallback((reason: string) => {
+    if (!startedRef.current) return;
+    if (rejoinInFlightRef.current || rejoinTimerRef.current) return;
+    if (agoraRejoinExhausted(rejoinAttemptsRef.current)) {
+      setConnectionState('failed');
+      setError('تعذرت إعادة الاتصال بالحصة بعد عدة محاولات. أعد فتح الحصة.');
+      reportSessionEvent('session_agora_rejoin_exhausted', { reason, attempts: rejoinAttemptsRef.current });
+      return;
+    }
+    const attempt = rejoinAttemptsRef.current;
+    rejoinAttemptsRef.current = attempt + 1;
+    const delay = agoraRejoinDelayMs(attempt);
+    reportSessionEvent('session_agora_rejoin_scheduled', { attempt: attempt + 1, reason, delayMs: delay });
+    rejoinTimerRef.current = setTimeout(() => {
+      rejoinTimerRef.current = null;
+      if (!startedRef.current) return;
+      rejoinInFlightRef.current = true;
+      void performAgoraRejoin(reason, attempt);
+    }, delay);
+  }, [performAgoraRejoin, reportSessionEvent]);
+
+  scheduleAgoraRejoinRef.current = scheduleAgoraRejoin;
+
   const stop = useCallback(async () => {
     generationRef.current += 1;
     startedRef.current = false;
+    clearRejoinTimer();
+    clearNativeDisconnectWatchdog();
+    rejoinAttemptsRef.current = 0;
+    rejoinInFlightRef.current = false;
     await stopSessionHeartbeat();
     if (channelRef.current) {
       if (dataReadyRef.current) sendDataMessage({ type: 'leave', userId });
@@ -388,20 +537,18 @@ export function useSessionAgora({
     setDataChannelState('closed');
     setMediaWarning(null);
     setTransportProvider('unknown');
-  }, [sendDataMessage, stopSessionHeartbeat, userId]);
+  }, [clearNativeDisconnectWatchdog, clearRejoinTimer, sendDataMessage, stopSessionHeartbeat, userId]);
 
   const start = useCallback(async () => {
     if (startedRef.current || !bookingId || !userId || !supabase) return;
     const generation = ++generationRef.current;
     startedRef.current = true;
+    resetRejoinState();
     setConnectionState('connecting');
     setError(null);
     setMediaWarning(null);
     try {
-      const { data, error: transportError } = await supabase.functions.invoke('session-transport-token', {
-        body: { bookingId },
-      });
-      if (transportError) throw transportError;
+      const data = await invokeSessionTransportToken(bookingId);
       if (generation !== generationRef.current) return;
       const transport = parseSessionTransport(data);
       if (transport.expiresAt <= Math.floor(Date.now() / 1000)) {
@@ -417,7 +564,7 @@ export function useSessionAgora({
       setConnectionState('failed');
       setError(reason instanceof Error ? reason.message : 'تعذر بدء الصوت المباشر عبر Agora.');
     }
-  }, [bookingId, startAgora, stop, userId]);
+  }, [bookingId, resetRejoinState, startAgora, stop, userId]);
 
   useEffect(() => {
     if (enabled) void start();
@@ -429,6 +576,7 @@ export function useSessionAgora({
 
   const toggleMute = useCallback(() => {
     const nextMuted = !muted;
+    mutedRef.current = nextMuted;
     if (agoraWebSessionRef.current?.microphoneTrack) {
       void agoraWebSessionRef.current.microphoneTrack.setEnabled(!nextMuted);
     } else {

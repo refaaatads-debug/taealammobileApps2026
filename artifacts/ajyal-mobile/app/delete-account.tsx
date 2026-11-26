@@ -15,13 +15,13 @@ export default function DeleteAccountScreen() {
   const [state, setState] = useState<"loading" | "idle" | "sending" | "pending" | "error">("loading");
 
   useEffect(() => {
-    if (!user?.id) { setState("idle"); return; }
+    if (!user?.id || !supabase) { setState("idle"); return; }
     supabase.from("account_deletion_requests").select("id").eq("user_id", user.id).eq("status", "pending").limit(1)
       .then(({ data }) => setState(data && data.length ? "pending" : "idle"), () => setState("idle"));
   }, [user?.id]);
 
   const send = async () => {
-    if (!user?.id) return;
+    if (!user?.id || !supabase) return;
     setState("sending");
     const { error } = await supabase.from("account_deletion_requests").insert({ user_id: user.id, email: user.email ?? null, reason: reason.trim() || null });
     setState(error ? "error" : "pending");
