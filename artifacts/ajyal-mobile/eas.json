@@ -17,7 +17,8 @@
         "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com",
         "EXPO_PUBLIC_APNS_ENV": "production"
       },
-      "channel": "production"
+      "channel": "production",
+      "autoIncrement": true
     },
     "preview": {
       "environment": "preview",
@@ -31,7 +32,8 @@
         "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com",
         "EXPO_PUBLIC_APNS_ENV": "production"
       },
-      "channel": "production"
+      "channel": "preview",
+      "autoIncrement": true
     }
   },
   "cli": {
