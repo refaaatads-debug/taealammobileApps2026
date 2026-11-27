@@ -20,7 +20,10 @@ export function isSessionTimerPeerReady(input: {
   transportProvider: "agora" | "unknown" | null;
   remoteUid: string | number | null;
 }): boolean {
-  if (input.connectionState !== "connected") return false;
+  // The teacher's elapsed time must not depend on the teacher's audio: with the mic muted the
+  // web client stays "connecting" (it only becomes "connected" when remote audio plays).
+  // A known remote Agora user in "connecting" or "connected" is enough.
+  if (input.connectionState !== "connected" && input.connectionState !== "connecting") return false;
   return input.transportProvider === "agora" && input.remoteUid !== null;
 }
 
