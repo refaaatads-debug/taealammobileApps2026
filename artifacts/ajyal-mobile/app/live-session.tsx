@@ -98,6 +98,7 @@ export default function LiveSessionScreen() {
   const [whiteboardCanDraw, setWhiteboardCanDraw] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [timerSyncReceived, setTimerSyncReceived] = useState(false);
+  const [teacherSyncSeen, setTeacherSyncSeen] = useState(false);
   const [displayScale, setDisplayScale] = useState(1);
   const [handRaised, setHandRaised] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -336,6 +337,8 @@ export default function LiveSessionScreen() {
       const timerSync = parseSessionTimerSync(message);
       if (timerSync) {
         latestTimerSyncRef.current = timerSync;
+        // The teacher's own message proves the teacher is here, whatever the mic state.
+        setTeacherSyncSeen(true);
         if (timerPeerReadyRef.current) {
           setElapsedSeconds(timerSync.elapsed);
           setTimerSyncReceived(true);
@@ -446,7 +449,11 @@ export default function LiveSessionScreen() {
     connectionState: rtc.connectionState,
     transportProvider: rtc.transportProvider,
     remoteUid: rtc.agoraRemoteUid,
+    teacherSyncSeen,
   });
+  useEffect(() => {
+    if (rtc.connectionState === 'disconnected' || rtc.connectionState === 'failed') setTeacherSyncSeen(false);
+  }, [rtc.connectionState]);
   useEffect(() => {
     timerPeerReadyRef.current = timerPeerReady;
     if (!timerPeerReady) {
