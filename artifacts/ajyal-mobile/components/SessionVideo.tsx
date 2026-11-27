@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 type SessionVideoProps = {
@@ -30,24 +30,26 @@ export function SessionVideo({
   agoraWebAudioBlocked = false,
   onResumeAgoraAudio,
 }: SessionVideoProps) {
-  const agoraWebVideoRef = useRef<any>(null);
+  // Element kept in state (callback ref) so play() re-runs whenever the div is created or replaced,
+  // not only when the track object changes. Fixes the inline view staying black until fullscreen remounts it.
+  const [agoraWebVideoEl, setAgoraWebVideoEl] = useState<any>(null);
   const hasAgoraVideo = Platform.OS !== 'web' && agoraSurfaceView && agoraRemoteUid !== null;
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || !agoraWebRemoteVideoTrack || !agoraWebVideoRef.current) return;
+    if (Platform.OS !== 'web' || !agoraWebRemoteVideoTrack || !agoraWebVideoEl) return;
     try {
-      agoraWebRemoteVideoTrack.play(agoraWebVideoRef.current);
+      agoraWebRemoteVideoTrack.play(agoraWebVideoEl);
     } catch {
       // Video can be republished after the component mounts; the next track update retries.
     }
     return () => agoraWebRemoteVideoTrack.stop?.();
-  }, [agoraWebRemoteVideoTrack]);
+  }, [agoraWebRemoteVideoTrack, agoraWebVideoEl]);
 
   if (Platform.OS === 'web' && (agoraWebRemoteAudioTrack || agoraWebRemoteVideoTrack)) {
     return (
       <View style={[styles.frame, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { transform: [{ scale }] }]}>
         {React.createElement('div', {
-          ref: agoraWebVideoRef,
+          ref: setAgoraWebVideoEl,
           style: { width: '100%', height: '100%', objectFit: fit, backgroundColor: '#112D4E' },
         })}
         {agoraWebAudioBlocked ? (
