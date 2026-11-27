@@ -286,7 +286,12 @@ export function useSessionAgora({
     engine.setClientRole(agora.ClientRoleType.ClientRoleBroadcaster);
     engine.setEnableSpeakerphone(speakerEnabledRef.current);
     engine.registerEventHandler({
-      onJoinChannelSuccess: () => setConnectionState(mapAgoraConnectionEvent('joined-channel')),
+      onJoinChannelSuccess: () => {
+        // Agora resets the audio route when the channel is joined; re-apply the chosen route
+        // (speaker by default) so the teacher's voice is not stuck on the quiet earpiece.
+        try { engine.setEnableSpeakerphone(speakerEnabledRef.current); } catch { /* route stays as is */ }
+        setConnectionState(mapAgoraConnectionEvent('joined-channel'));
+      },
       onUserJoined: (_connection: unknown, uid: number) => {
         agoraRemoteUidRef.current = uid;
         setAgoraRemoteUid(uid);
