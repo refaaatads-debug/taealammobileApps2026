@@ -19,6 +19,16 @@ test("requires both connected transport and remote Agora participant before show
     connectionState: "connecting",
     transportProvider: "agora",
     remoteUid: "teacher-1",
+  }), true);
+  assert.equal(isSessionTimerPeerReady({
+    connectionState: "connecting",
+    transportProvider: "agora",
+    remoteUid: null,
+  }), false);
+  assert.equal(isSessionTimerPeerReady({
+    connectionState: "disconnected",
+    transportProvider: "agora",
+    remoteUid: "teacher-1",
   }), false);
   assert.equal(isSessionTimerPeerReady({
     connectionState: "connected",
