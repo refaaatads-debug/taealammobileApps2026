@@ -5,7 +5,7 @@ import { requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio'
 import { supabase } from '@/lib/supabase';
 import { AGORA_DISCONNECTED_WATCHDOG_MS, agoraRejoinDelayMs, agoraRejoinExhausted } from '@/lib/sessionAgoraRejoin';
 import { MOBILE_AGORA_SESSION_PUBLISH_OPTIONS } from '@/lib/sessionMediaPolicy';
-import { mapAgoraConnectionEvent } from '@/lib/sessionAgoraConnectionState';
+import { mapAgoraConnectionEvent, stateAfterOwnLinkConnected } from '@/lib/sessionAgoraConnectionState';
 import { logSessionEvent } from '@/lib/sessionTelemetry';
 import { parseSessionTransport, type AgoraTransport } from '@/lib/sessionTransport';
 import { invokeSessionTransportToken } from '@/lib/sessionTransportToken';
@@ -332,7 +332,7 @@ export function useSessionAgora({
     engine.setClientRole(agora.ClientRoleType.ClientRoleBroadcaster);
     engine.setEnableSpeakerphone(speakerEnabledRef.current);
     engine.registerEventHandler({
-      onJoinChannelSuccess: () => setConnectionState(mapAgoraConnectionEvent('joined-channel')),
+      onJoinChannelSuccess: () => setConnectionState(stateAfterOwnLinkConnected(agoraRemoteUidRef.current !== null)),
       onConnectionStateChanged: (_connection: unknown, state: number, reason: number) => {
         if (state === agora.ConnectionStateType.ConnectionStateConnected) {
           clearNativeDisconnectWatchdog();
@@ -340,7 +340,7 @@ export function useSessionAgora({
             reportSessionEvent('session_agora_rejoin_success', { platform: Platform.OS });
             resetRejoinState();
           }
-          setConnectionState(mapAgoraConnectionEvent('joined-channel'));
+          setConnectionState(stateAfterOwnLinkConnected(agoraRemoteUidRef.current !== null));
         } else if (
           state === agora.ConnectionStateType.ConnectionStateConnecting
           || state === agora.ConnectionStateType.ConnectionStateReconnecting
@@ -371,18 +371,9 @@ export function useSessionAgora({
       },
       onRemoteAudioStateChanged: (_connection: unknown, uid: number, state: number) => {
         if (agoraRemoteUidRef.current !== uid) return;
-        if (state === agora.RemoteAudioState.RemoteAudioStateDecoding) {
-          setConnectionState(mapAgoraConnectionEvent('remote-audio-playing'));
-        } else if (state === agora.RemoteAudioState.RemoteAudioStateStarting) {
-          setConnectionState(mapAgoraConnectionEvent('remote-audio-starting'));
-        } else if (state === agora.RemoteAudioState.RemoteAudioStateFailed) {
-          setConnectionState(mapAgoraConnectionEvent('error'));
+        // Audio state never changes the connection state (a muted teacher is still present).
+        if (state === agora.RemoteAudioState.RemoteAudioStateFailed) {
           setError('انضم الطرف الآخر، لكن تعذر تشغيل صوته.');
-        } else if (
-          state === agora.RemoteAudioState.RemoteAudioStateStopped
-          || state === agora.RemoteAudioState.RemoteAudioStateFrozen
-        ) {
-          setConnectionState(mapAgoraConnectionEvent('remote-audio-interrupted'));
         }
       },
       onUserOffline: (_connection: unknown, uid: number) => {

@@ -19,7 +19,7 @@ test("requires both connected transport and remote Agora participant before show
     connectionState: "connecting",
     transportProvider: "agora",
     remoteUid: "teacher-1",
-  }), false);
+  }), true);
   assert.equal(isSessionTimerPeerReady({
     connectionState: "connected",
     transportProvider: "agora",
@@ -52,4 +52,13 @@ test("uses the platform's persisted duration at end, never wall-clock started_at
     endedAt: null,
     durationSeconds: 315,
   }), null);
+});
+
+test("teacher timer-sync proves the teacher is present even without an Agora remote user", () => {
+  const base = { connectionState: "connected", transportProvider: "agora", remoteUid: null };
+  assert.equal(isSessionTimerPeerReady({ ...base, teacherSyncSeen: true }), true);
+  assert.equal(isSessionTimerPeerReady({ ...base, teacherSyncSeen: false }), false);
+  assert.equal(isSessionTimerPeerReady({ ...base, connectionState: "disconnected", teacherSyncSeen: true }), false);
+  assert.equal(isSessionTimerPeerReady({ ...base, connectionState: "connecting", remoteUid: 7 }), true);
+  assert.equal(isSessionTimerPeerReady({ ...base, transportProvider: null, teacherSyncSeen: true }), false);
 });
