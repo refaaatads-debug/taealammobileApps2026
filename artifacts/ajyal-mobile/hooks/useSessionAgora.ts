@@ -334,6 +334,7 @@ export function useSessionAgora({
     engine.registerEventHandler({
       onJoinChannelSuccess: () => setConnectionState(mapAgoraConnectionEvent('joined-channel')),
       onConnectionStateChanged: (_connection: unknown, state: number, reason: number) => {
+        reportSessionEvent('agora_connection_state_changed', { state, reasonCode: reason, platform: Platform.OS });
         if (state === agora.ConnectionStateType.ConnectionStateConnected) {
           clearNativeDisconnectWatchdog();
           if (rejoinInFlightRef.current || rejoinAttemptsRef.current > 0) {
@@ -364,12 +365,14 @@ export function useSessionAgora({
         scheduleAgoraRejoinRef.current('connection_lost');
       },
       onUserJoined: (_connection: unknown, uid: number) => {
+        reportSessionEvent('agora_user_joined', { uid, platform: Platform.OS });
         agoraRemoteUidRef.current = uid;
         setAgoraRemoteUid(uid);
         setConnectionState(mapAgoraConnectionEvent('remote-joined'));
         onRemoteJoin?.();
       },
       onRemoteAudioStateChanged: (_connection: unknown, uid: number, state: number) => {
+        reportSessionEvent('agora_remote_audio_state', { uid, state, platform: Platform.OS });
         if (agoraRemoteUidRef.current !== uid) return;
         if (state === agora.RemoteAudioState.RemoteAudioStateDecoding) {
           setConnectionState(mapAgoraConnectionEvent('remote-audio-playing'));
@@ -385,7 +388,8 @@ export function useSessionAgora({
           setConnectionState(mapAgoraConnectionEvent('remote-audio-interrupted'));
         }
       },
-      onUserOffline: (_connection: unknown, uid: number) => {
+      onUserOffline: (_connection: unknown, uid: number, reason?: number) => {
+        reportSessionEvent('agora_user_left', { uid, reasonCode: reason ?? null, platform: Platform.OS });
         if (agoraRemoteUidRef.current === uid) agoraRemoteUidRef.current = null;
         setAgoraRemoteUid((current) => current === uid ? null : current);
         setConnectionState(mapAgoraConnectionEvent('remote-left'));
@@ -399,6 +403,7 @@ export function useSessionAgora({
           if (renewed.uid !== userId) throw new Error('رد تجديد رمز Agora غير صالح.');
           engine.renewToken(renewed.token);
         } catch (reason) {
+          reportSessionEvent('agora_token_renewal_failed', { platform: Platform.OS });
           setError(reason instanceof Error ? reason.message : 'تعذر تجديد رمز Agora.');
         }
       },
