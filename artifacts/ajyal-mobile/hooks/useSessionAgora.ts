@@ -274,7 +274,10 @@ export function useSessionAgora({
     const agora = await import('react-native-agora');
     const engine = agora.createAgoraRtcEngine();
     agoraEngineRef.current = engine;
-    setAgoraSurfaceView(() => agora.RtcSurfaceView);
+    // Android: a SurfaceView ignores parent clipping (rounded corners / overflow hidden) and
+    // scrolling, so the inline card showed black while the fullscreen Modal worked. A TextureView
+    // renders like a normal view inside those parents. iOS keeps the default view.
+    setAgoraSurfaceView(() => (Platform.OS === 'android' && (agora as any).RtcTextureView ? (agora as any).RtcTextureView : agora.RtcSurfaceView));
     engine.initialize({
       appId: transport.appId,
       channelProfile: agora.ChannelProfileType.ChannelProfileCommunication,
