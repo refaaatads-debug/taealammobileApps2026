@@ -19,9 +19,15 @@ export function isSessionTimerPeerReady(input: {
   connectionState: string;
   transportProvider: "agora" | "unknown" | null;
   remoteUid: string | number | null;
+  // True once a timer-sync from the teacher arrived through the realtime channel.
+  // That message proves the teacher is in the session even when Agora has not reported a
+  // remote user yet (a web teacher with the mic never opened is not reported by Agora).
+  teacherSyncSeen?: boolean;
 }): boolean {
-  if (input.connectionState !== "connected") return false;
-  return input.transportProvider === "agora" && input.remoteUid !== null;
+  // Our own transport must be up (connecting covers a brief reconnect).
+  if (input.connectionState !== "connected" && input.connectionState !== "connecting") return false;
+  if (input.transportProvider !== "agora") return false;
+  return input.remoteUid !== null || input.teacherSyncSeen === true;
 }
 
 export function getFinalSessionElapsed(snapshot: {
