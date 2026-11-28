@@ -319,6 +319,38 @@ function ValueRow({ label, value }: { label: string; value: string }) {
   return <View style={[styles.valueRow, { borderBottomColor: colors.border }]}><Text style={[styles.value, { color: colors.foreground }]}>{value}</Text><Text style={[styles.label, { color: colors.mutedForeground }]}>{label}</Text></View>;
 }
 
+function ValueGrid({ items }: { items: { label: string; value: string }[] }) {
+  const colors = useColors();
+  const { direction } = useAppPreferences();
+  return (
+    <View style={[styles.valueGrid, { flexDirection: direction === "rtl" ? "row-reverse" : "row" }]}>
+      {items.map((item) => (
+        <View key={item.label} style={[styles.valueGridCell, { backgroundColor: colors.background, alignItems: direction === "rtl" ? "flex-end" : "flex-start" }]}>
+          <Text style={[styles.valueGridLabel, { color: colors.mutedForeground, writingDirection: direction }]} numberOfLines={1}>{item.label}</Text>
+          <Text style={[styles.valueGridValue, { color: colors.foreground, writingDirection: direction }]} numberOfLines={2}>{item.value}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function CompactTitleBar({ eyebrow, title }: { eyebrow: string; title: string }) {
+  const colors = useColors();
+  const { direction } = useAppPreferences();
+  const isRTL = direction === "rtl";
+  return (
+    <View style={[styles.compactBar, { backgroundColor: colors.primary, flexDirection: isRTL ? "row-reverse" : "row" }]}>
+      <Pressable testID="back-button" hitSlop={8} onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(tabs)"); }} style={({ pressed }) => [styles.compactBack, { backgroundColor: colors.card }, pressed && { opacity: 0.7 }]}>
+        <Icon name={isRTL ? "arrow-right" : "arrow-left"} size={18} color={colors.primary} />
+      </Pressable>
+      <View style={[styles.compactCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
+        <Text style={[styles.compactEyebrow, { color: colors.tint, writingDirection: direction }]} numberOfLines={1}>{eyebrow}</Text>
+        <Text style={[styles.compactTitle, { color: colors.primaryForeground, writingDirection: direction }]} numberOfLines={1}>{title}</Text>
+      </View>
+    </View>
+  );
+}
+
 function PlanCard({ plan, onChoose, disabled }: { plan: Row; onChoose: () => void; disabled?: boolean }) {
   const colors = useColors();
   const { t, direction, formatNumber } = useAppPreferences();
@@ -591,14 +623,10 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
 
   return (
     <Screen>
-      <SectionHeader eyebrow={detail ? t("تفاصيل خطتك", "Plan details") : t("خطتك التعليمية", "Your learning plan")} title={detail ? t("رصيد الباقة", "Plan balance") : t("الباقات والاشتراكات", "Plans and subscriptions")} avatarText={user?.email?.slice(0, 1)} />
-      <View style={[styles.hero, { backgroundColor: colors.primary }]}>
-        <View style={[styles.heroIcon, { backgroundColor: colors.goldSoft }]}><Icon name="award" size={22} color={colors.accentForeground} /></View>
-         <View style={styles.heroCopy}><Text style={[styles.heroEyebrow, { color: colors.tint, writingDirection: direction }]}>{t("بيانات من حساب المنصة", "Data from your platform account")}</Text><Text style={[styles.heroTitle, { color: colors.primaryForeground, writingDirection: direction }]}>{detail ? t("خطتك الحالية", "Your current plan") : t("اختر ما يناسب هدفك", "Choose what fits your goal")}</Text><Text style={[styles.heroBody, { color: colors.tint, writingDirection: direction }]}>{t("المعلومات المعروضة متزامنة من Supabase مباشرة.", "This information syncs directly from Supabase.")}</Text></View>
-      </View>
+      <CompactTitleBar eyebrow={detail ? t("تفاصيل خطتك", "Plan details") : t("خطتك التعليمية", "Your learning plan")} title={detail ? t("خطتك الحالية", "Your current plan") : t("اختر ما يناسب هدفك", "Choose what fits your goal")} />
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
          <View style={[styles.cardTop, direction === "rtl" && { flexDirection: "row-reverse" }]}><Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: direction }]}>{activePlan ? text(activePlan, "name", "name_en", "name_ar") ?? t("الاشتراك الحالي", "Current plan") : query.data ? t("لا يوجد اشتراك فعال", "No active plan") : t("جارٍ تحميل بيانات الاشتراك…", "Loading subscription…")}</Text>{overallStatus ? <Text style={[styles.badge, statusStyle(overallStatus, colors)]}>{t(overallStatus, overallStatus === "فعال" ? "Active" : overallStatus === "منتهي" ? "Ended" : overallStatus === "موقوف" ? "Paused" : "Not subscribed")}</Text> : <Text style={[styles.badge, { color: colors.mutedForeground, backgroundColor: colors.background }]}>{t("جارٍ التحميل…", "Loading…")}</Text>}</View>
-          {activeRows.length ? <><ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(aggregateRemainingSessions)} ${t("جلسة", "sessions")}`} /><ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(aggregateRemainingMinutes)} ${t("دقيقة", "min")}`} /><ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(active, "starts_at", "created_at"), locale)} /><ValueRow label={t("صلاحية الدقائق", "Minute validity")} value={t("مفتوحة ما دام الرصيد متاحًا", "Open while balance remains")} /></> : query.data ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("يمكنك اختيار إحدى الباقات المتاحة للبدء في حجز الجلسات.", "Choose one of the available plans to start booking sessions.")}</Text> : null}
+          {activeRows.length ? <ValueGrid items={[{ label: t("الجلسات المتبقية", "Sessions remaining"), value: `${formatNumber(aggregateRemainingSessions)} ${t("جلسة", "sessions")}` }, { label: t("الدقائق المتبقية", "Minutes remaining"), value: `${formatNumber(aggregateRemainingMinutes)} ${t("دقيقة", "min")}` }, { label: t("تاريخ البداية", "Start date"), value: dateLabel(text(active, "starts_at", "created_at"), locale) }, { label: t("صلاحية الدقائق", "Minute validity"), value: t("مفتوحة ما دام الرصيد متاحًا", "Open while balance remains") }]} /> : query.data ? <Text style={[styles.cardBody, { color: colors.mutedForeground, writingDirection: direction }]}>{t("يمكنك اختيار إحدى الباقات المتاحة للبدء في حجز الجلسات.", "Choose one of the available plans to start booking sessions.")}</Text> : null}
       </View>
       {detail && query.data && activeRows.length ? (
         <View style={[styles.usageCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -643,7 +671,7 @@ function SubscriptionsScreen({ detail }: { detail: boolean }) {
         </View>
       ) : null}
       <SectionHeading title={detail ? t("السجل المرتبط", "Linked history") : t("الباقات المتاحة", "Available plans")} />
-      <StateBlock loading={query.loading} error={query.error} empty={detail ? !query.data?.subscriptions.length : !query.data?.plans.length} onRetry={query.reload} />
+      {query.loading ? <View style={styles.stateCompact}><ActivityIndicator color={colors.teal} /><Text style={[styles.stateText, { color: colors.mutedForeground, writingDirection: direction }]}>{t("جارٍ مزامنة بيانات المنصة…", "Syncing platform data…")}</Text></View> : <StateBlock loading={false} error={query.error} empty={detail ? !query.data?.subscriptions.length : !query.data?.plans.length} onRetry={query.reload} />}
       {!query.loading && !query.error && !detail ? query.data?.plans.map((plan) => <PlanCard key={String(plan.id)} plan={plan} disabled={checkoutBusy} onChoose={() => { void checkout(plan); }} />) : null}
       {!query.loading && !query.error && detail ? (
         <View style={styles.subscriptionSections}>
@@ -739,10 +767,7 @@ function SubscriptionRow({ subscription, plan, locale, t, formatNumber }: {
       <Text style={[styles.cardTitle, { color: colors.foreground, writingDirection: locale === "ar-SA" ? "rtl" : "ltr" }]}>{plan ? text(plan, "name", "name_en", "name_ar") ?? t("اشتراك", "Subscription") : t("اشتراك", "Subscription")}</Text>
       <Text style={[styles.badge, statusStyle(status, colors)]}>{t(status, status === "فعال" ? "Active" : status === "منتهي" ? "Ended" : status === "موقوف" ? "Paused" : "Not subscribed")}</Text>
     </View>
-    <ValueRow label={t("الجلسات المتبقية", "Sessions remaining")} value={`${formatNumber(number(subscription, "sessions_remaining") ?? 0)} ${t("جلسة", "sessions")}`} />
-    <ValueRow label={t("الدقائق المتبقية", "Minutes remaining")} value={`${formatNumber(number(subscription, "remaining_minutes") ?? 0)} ${t("دقيقة", "min")}`} />
-    <ValueRow label={t("تاريخ البداية", "Start date")} value={dateLabel(text(subscription, "starts_at", "created_at"), locale)} />
-    <ValueRow label={t("صلاحية الدقائق", "Minute validity")} value={t("مفتوحة ما دام الرصيد متاحًا", "Open while balance remains")} />
+    <ValueGrid items={[{ label: t("الجلسات المتبقية", "Sessions remaining"), value: `${formatNumber(number(subscription, "sessions_remaining") ?? 0)} ${t("جلسة", "sessions")}` }, { label: t("الدقائق المتبقية", "Minutes remaining"), value: `${formatNumber(number(subscription, "remaining_minutes") ?? 0)} ${t("دقيقة", "min")}` }, { label: t("تاريخ البداية", "Start date"), value: dateLabel(text(subscription, "starts_at", "created_at"), locale) }, { label: t("صلاحية الدقائق", "Minute validity"), value: t("مفتوحة ما دام الرصيد متاحًا", "Open while balance remains") }]} />
   </View>;
 }
 
@@ -1379,6 +1404,16 @@ export function ConnectedSectionScreen({ section }: { section: ConnectedSection 
 }
 
 const styles = StyleSheet.create({
+  stateCompact: { minHeight: 52, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
+  valueGrid: { flexWrap: "wrap", gap: 6, marginTop: 8 },
+  valueGridCell: { width: "48.8%", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 7, gap: 2 },
+  valueGridLabel: { fontSize: 9, fontFamily: "Inter_400Regular" },
+  valueGridValue: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  compactBar: { minHeight: 56, borderRadius: 18, paddingHorizontal: 10, paddingVertical: 8, alignItems: "center", gap: 10, marginBottom: 10 },
+  compactBack: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  compactCopy: { flex: 1, minWidth: 0 },
+  compactEyebrow: { fontSize: 9, fontFamily: "Inter_500Medium" },
+  compactTitle: { fontSize: 16, lineHeight: 22, fontFamily: "Inter_700Bold" },
   state: { minHeight: 150, alignItems: "center", justifyContent: "center", gap: 10 },
   stateText: { fontSize: 11, fontFamily: "Inter_500Medium", writingDirection: "rtl" },
   hero: { minHeight: 158, borderRadius: 23, padding: 17, flexDirection: "row", alignItems: "center", marginBottom: 25 },
