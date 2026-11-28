@@ -8,6 +8,7 @@ import { useAjyal } from '@/hooks/useAjyal';
 import { useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { dayIsAvailable, normalizeDays, parseClock } from '@/lib/teacherAvailability';
 import { supabase } from '@/lib/supabase';
+import { fetchPromotedTeacherIds, promotedFirst } from '@/lib/teacherPromotions';
 import { OptionDropdown } from '@/components/OptionDropdown';
 import { TEACHING_STAGES } from '@/constants/education';
 
@@ -54,6 +55,8 @@ export default function FindTeacherScreen() {
     { query: { queryKey: getListTeachersQueryKey(search.trim() ? { search: search.trim() } : undefined), staleTime: 30_000 } },
   );
   const teachers = query.data ?? [];
+  const [promotedIds, setPromotedIds] = useState<string[]>([]);
+  useEffect(() => { void fetchPromotedTeacherIds('online').then(setPromotedIds); }, []);
   useEffect(() => {
     let active = true;
     const loadSubjects = async () => {
@@ -92,8 +95,10 @@ export default function FindTeacherScreen() {
       (stage === 'الكل' || teacher.teachingStages?.includes(stage))
       && (subject === 'الكل' || teacher.subjects?.includes(subject))
     ));
-    return [...filtered].sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0));
-  }, [sortBy, stage, subject, teachers]);
+    const sorted = [...filtered].sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0));
+    // Admin-promoted teachers ("إعلان") appear first.
+    return promotedFirst(sorted, (teacher) => teacher.id, promotedIds);
+  }, [sortBy, stage, subject, teachers, promotedIds]);
 
   return (
     <Screen>
@@ -207,6 +212,7 @@ export default function FindTeacherScreen() {
               </View>
               <View style={styles.teacherCopy}>
                  <Text style={[styles.teacherName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{teacher.displayName}</Text>
+                 {promotedIds.includes(teacher.id) ? <Text style={[styles.teacherMeta, { color: colors.teal, fontWeight: '700', writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('إعلان', 'Ad')}</Text> : null}
                  <Text style={[styles.teacherMeta, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>
                     {teacher.rating == null ? t('معلم معتمد', 'Approved teacher') : `★ ${teacher.rating.toFixed(1)}`}
                     {teacher.totalSessions == null ? '' : ` · ${formatNumber(teacher.totalSessions)} ${t('حصة', 'sessions')}`}

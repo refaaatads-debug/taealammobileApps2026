@@ -1,10 +1,14 @@
+import '@/lib/sentry';
 import React, { useEffect } from 'react';
-import { Image, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { clearPersistedQueryCache, queryClient, setPersistUser, startQueryPersistence, wireFocusManager } from '@/lib/queryClient';
+import { startRealtimeKeeper } from '@/lib/realtimeKeeper';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useOwnPresence } from '@/lib/presence';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -13,33 +17,35 @@ import { loadAsync } from 'expo-font';
 import { Stack, router, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { AjyalProvider, useAjyal } from '@/hooks/useAjyal';
-import { setAuthTokenGetter, setBaseUrl } from '@workspace/api-client-react';
+import { setAuthRecoveryHandler, setAuthTokenGetter, setBaseUrl } from '@workspace/api-client-react';
 import { AuthProvider, getAuthToken, useAuth } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
+import { recoverSupabaseSessionAfter401 } from '@/lib/authSessionRecovery';
+import { profileUiTestMode, supabase } from '@/lib/supabase';
 import { useColors } from '@/hooks/useColors';
 import { InternalCallProvider } from '@/contexts/InternalCallContext';
 import { IncomingCallOverlay } from '@/components/IncomingCallOverlay';
 import { enforceAvailableUpdate } from '@/lib/appUpdates';
+import { installGlobalErrorReporting, reportError } from '@/lib/errorReporting';
+import { startNetworkMonitor } from '@/lib/networkStatus';
+import { OfflineBanner } from '@/components/OfflineBanner';
 import { BRAND_ICON } from '@/components/AjyalUI';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { AppPreferencesProvider, useAppPreferences } from '@/contexts/AppPreferencesContext';
 import { StatusBar } from 'expo-status-bar';
 import { clearRememberedLogin } from '@/lib/rememberedLogin';
+import { shouldAutoOpenStartedSession } from '@/lib/liveSessionRoute';
 import OnboardingScreen from '@/components/OnboardingScreen';
+import PermissionsOnboarding from '@/components/PermissionsOnboarding';
 import TeacherReviewAccessScreen from '@/components/TeacherReviewAccessScreen';
+import { shouldRenderSignInForm } from '@/lib/authBootstrap';
 
 SplashScreen.preventAutoHideAsync();
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 60_000,
-      refetchOnMount: false,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-    },
-  },
-});
+wireFocusManager();
+startRealtimeKeeper();
+installGlobalErrorReporting();
+startNetworkMonitor();
+
 const APP_FONT_MAP = {
   Inter_400Regular: Cairo_400Regular,
   Inter_500Medium: Cairo_500Medium,
@@ -52,9 +58,14 @@ const appFontsReady = loadAsync(APP_FONT_MAP)
     console.warn('[fonts] Could not preload app fonts:', error);
     return false;
   });
-const apiDomain = process.env.EXPO_PUBLIC_DOMAIN;
+// The API is hosted outside Replit. EXPO_PUBLIC_DOMAIN remains the Expo
+// preview/packager domain, so it must not be used as the mobile API origin.
+// Fallback to the production API host so a build/update published without the
+// EXPO_PUBLIC_API_DOMAIN variable still reaches the API instead of using relative URLs.
+const apiDomain = process.env.EXPO_PUBLIC_API_DOMAIN || "api.ajyalalmaerifa.com";
 if (apiDomain) setBaseUrl(`https://${apiDomain}`);
 setAuthTokenGetter(getAuthToken);
+setAuthRecoveryHandler(recoverSupabaseSessionAfter401);
 
 const PUBLIC_PATHS = new Set([
   '/privacy',
@@ -64,7 +75,9 @@ const PUBLIC_PATHS = new Set([
   '/reset-password',
   '/payment-success',
 ]);
+if (profileUiTestMode) PUBLIC_PATHS.add('/profile-test');
 const ONBOARDING_COMPLETED_KEY = 'ajyal.onboarding.completed.v1';
+const PERMISSIONS_ONBOARDING_KEY = 'ajyal.permissions.onboarding.v1';
 const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
   '/profile',
   '/(tabs)/profile',
@@ -77,10 +90,12 @@ const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
 
 function RootLayoutNav() {
   const colors = useColors();
-  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, user } = useAuth();
+  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, retrySessionRestore, user } = useAuth();
   const { profile, role, roleResolved, profileError, retryProfile, logout: logoutAjyal, isLoading: profileLoading } = useAjyal();
   const { t } = useAppPreferences();
   const pathname = usePathname();
+  const pathnameRef = React.useRef(pathname);
+  pathnameRef.current = pathname;
   const { width: viewportWidth } = useWindowDimensions();
   const [authMode, setAuthMode] = React.useState<'login' | 'signup'>('login');
   const [signupRole, setSignupRole] = React.useState<'student' | 'teacher'>('student');
@@ -93,6 +108,8 @@ function RootLayoutNav() {
   const [bootstrapTimedOut, setBootstrapTimedOut] = React.useState(false);
   const [onboardingResolved, setOnboardingResolved] = React.useState(false);
   const [showOnboarding, setShowOnboarding] = React.useState(false);
+  const [permissionsOnboardingResolved, setPermissionsOnboardingResolved] = React.useState(false);
+  const [showPermissionsOnboarding, setShowPermissionsOnboarding] = React.useState(false);
   const autoOpenedSessionIds = React.useRef(new Set<string>());
   useEffect(() => {
     // Remove credentials saved by older releases. Session persistence is
@@ -119,6 +136,33 @@ function RootLayoutNav() {
     };
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      setPermissionsOnboardingResolved(true);
+      return undefined;
+    }
+    let mounted = true;
+    void AsyncStorage.getItem(PERMISSIONS_ONBOARDING_KEY)
+      .then((done) => {
+        if (!mounted) return;
+        setShowPermissionsOnboarding(done !== '1');
+        setPermissionsOnboardingResolved(true);
+      })
+      .catch(() => {
+        if (mounted) setPermissionsOnboardingResolved(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => startQueryPersistence(), []);
+  useOwnPresence(user?.id ?? null);
+  useEffect(() => {
+    setPersistUser(user?.id ?? null);
+    if (!authLoading && !user) void clearPersistedQueryCache();
+  }, [authLoading, user]);
+
   const bootstrapLoading = authLoading || (isAuthenticated && profileLoading);
   const homeReady = Boolean(
     isAuthenticated &&
@@ -135,9 +179,12 @@ function RootLayoutNav() {
       setBootstrapTimedOut(false);
       return;
     }
-    const timeout = setTimeout(() => setBootstrapTimedOut(true), 12_000);
+    // Session restore keeps the short limit. The profile and role fetch runs several
+    // sequential queries on a slow server, so it gets a longer wait before the
+    // error screen appears. The screen still clears by itself when the data lands.
+    const timeout = setTimeout(() => setBootstrapTimedOut(true), authLoading ? 12_000 : 35_000);
     return () => clearTimeout(timeout);
-  }, [bootstrapLoading]);
+  }, [bootstrapLoading, authLoading]);
   useEffect(() => {
     if (!isAuthenticated) {
       homeNavigationAttempted.current = false;
@@ -167,10 +214,10 @@ function RootLayoutNav() {
   // update first.
   useEffect(() => {
     const client = supabase;
-    if (!client || !profile?.id || role !== 'student' || pathname === '/live-session') return undefined;
+    if (!client || !homeReady || !profile?.id || role !== 'student') return undefined;
     let mounted = true;
     const openStartedBooking = (bookingId: string) => {
-      if (!mounted || pathname === '/live-session' || autoOpenedSessionIds.current.has(bookingId)) return;
+      if (!mounted || pathnameRef.current === '/live-session' || autoOpenedSessionIds.current.has(bookingId)) return;
       autoOpenedSessionIds.current.add(bookingId);
       router.replace({ pathname: '/live-session', params: { booking: bookingId } });
     };
@@ -188,17 +235,19 @@ function RootLayoutNav() {
       if (lifecycleBookingIds.length) {
         const { data: ownedLifecycleBookings } = await client
           .from('bookings')
-          .select('id')
+          .select('id, status, session_status, delivery_mode')
           .eq('student_id', profile.id)
           .in('id', lifecycleBookingIds);
         for (const row of ownedLifecycleBookings ?? []) {
-          if (typeof row.id === 'string') openStartedBooking(row.id);
+          if (typeof row.id === 'string' && shouldAutoOpenStartedSession(row.id, row.status, row.session_status, row.delivery_mode)) {
+            openStartedBooking(row.id);
+          }
         }
       }
 
       const { data } = await client
         .from('bookings')
-        .select('id, session_status, scheduled_at, created_at')
+        .select('id, status, session_status, delivery_mode, scheduled_at, created_at')
         .eq('student_id', profile.id)
         .in('session_status', ['waiting_acceptance', 'in_progress']);
       if (!mounted) return;
@@ -207,13 +256,15 @@ function RootLayoutNav() {
         if (row.session_status === 'waiting_acceptance') {
           continue;
         }
-        if (row.session_status === 'in_progress') {
+        if (shouldAutoOpenStartedSession(bookingId, row.status, row.session_status, row.delivery_mode)) {
           openStartedBooking(bookingId);
         }
       }
     };
 
     void loadActiveSessions();
+    // Safety net only: realtime below is the primary trigger.
+    const fallbackTimer = setInterval(() => void loadActiveSessions(), 45_000);
     const channel = client
       .channel(`mobile-session-start-${profile.id}`)
       .on('postgres_changes', {
@@ -224,7 +275,9 @@ function RootLayoutNav() {
       }, (payload) => {
         const updated = payload.new as {
           id?: unknown;
+          status?: unknown;
           session_status?: unknown;
+          delivery_mode?: unknown;
           scheduled_at?: unknown;
           created_at?: unknown;
         };
@@ -233,7 +286,8 @@ function RootLayoutNav() {
         if (updated.session_status === 'waiting_acceptance') {
           return;
         }
-        if (updated.session_status !== 'in_progress') {
+        if (updated.session_status !== 'in_progress'
+          || !shouldAutoOpenStartedSession(bookingId, updated.status, updated.session_status, updated.delivery_mode)) {
           return;
         }
         openStartedBooking(bookingId);
@@ -252,21 +306,25 @@ function RootLayoutNav() {
         if (!bookingId || typeof updated.started_at !== 'string' || updated.ended_at) return;
         void client
           .from('bookings')
-          .select('id')
+          .select('id, status, session_status, delivery_mode')
           .eq('id', bookingId)
           .eq('student_id', profile.id)
           .maybeSingle()
           .then(({ data }) => {
-            if (data?.id && typeof data.id === 'string') openStartedBooking(data.id);
+            if (data?.id && typeof data.id === 'string'
+              && shouldAutoOpenStartedSession(data.id, data.status, data.session_status, data.delivery_mode)) {
+              openStartedBooking(data.id);
+            }
           });
       })
       .subscribe();
 
     return () => {
       mounted = false;
+      clearInterval(fallbackTimer);
       void client.removeChannel(channel);
     };
-  }, [pathname, profile?.id, role]);
+  }, [homeReady, profile?.id, role]);
 
   const isPublicRoute = PUBLIC_PATHS.has(pathname);
   let overlay: React.ReactNode = null;
@@ -285,10 +343,18 @@ function RootLayoutNav() {
       <AccessStateScreen
         title={authLoading ? t("تعذر استعادة الجلسة", "Couldn't restore your session") : t("تعذر تحميل ملف الحساب", "Couldn't load your account")}
         body={authLoading
-          ? t("استغرق الاتصال بمنصة أجيال المعرفة وقتاً أطول من المتوقع. يمكنك العودة لتسجيل الدخول والمحاولة مرة أخرى.", "Connecting to Ajyal Knowledge is taking longer than expected. Return to sign in and try again.")
+          ? t("استغرقت استعادة الجلسة وقتاً أطول من المتوقع. أعد المحاولة؛ لن يتم تسجيل الخروج تلقائياً.", "Restoring your session is taking longer than expected. Retry; you won't be signed out automatically.")
           : t("تم تسجيل الدخول، لكن لم تصل بيانات الملف والصلاحيات من المنصة. تحقق من الاتصال ثم أعد المحاولة.", "You are signed in, but your profile and permissions did not arrive. Check your connection and try again.")}
-        actionLabel={authLoading ? t("العودة لتسجيل الدخول", "Return to sign in") : t("إعادة المحاولة", "Try again")}
-        onAction={() => void (authLoading ? logoutAjyal() : retryProfile())}
+        actionLabel={t("إعادة المحاولة", "Try again")}
+        onAction={() => {
+          if (authLoading) {
+            void retrySessionRestore().catch((error) => {
+              console.warn("[auth] Session restore retry failed:", error instanceof Error ? error.message : error);
+            });
+            return;
+          }
+          void retryProfile();
+        }}
         colors={colors}
       />
     );
@@ -315,7 +381,14 @@ function RootLayoutNav() {
       </View>
     );
   }
-  if (!isPasswordRecovery && !isAuthenticated && !isPublicRoute) {
+  if (
+    !isPasswordRecovery &&
+    shouldRenderSignInForm({
+      isLoading: authLoading,
+      isAuthenticated,
+      isPublicRoute,
+    })
+  ) {
     const isSignup = authMode === 'signup';
     const openForgotPassword = () => {
       router.push('/forgot-password');
@@ -529,6 +602,25 @@ function RootLayoutNav() {
       />
     );
   }
+  const canShowPermissionsOnboarding = permissionsOnboardingResolved
+    && showPermissionsOnboarding
+    && isAuthenticated
+    && !!profile
+    && roleResolved
+    && !profileLoading
+    && !isPasswordRecovery
+    && !isPublicRoute
+    && overlay === null;
+  if (canShowPermissionsOnboarding) {
+    overlay = (
+      <PermissionsOnboarding
+        onDone={() => {
+          setShowPermissionsOnboarding(false);
+          void AsyncStorage.setItem(PERMISSIONS_ONBOARDING_KEY, '1').catch(() => undefined);
+        }}
+      />
+    );
+  }
   return (
     <View style={styles.rootNavigator}>
       <Stack screenOptions={{ headerBackTitle: 'رجوع', animation: 'fade' }}>
@@ -540,15 +632,18 @@ function RootLayoutNav() {
         <Stack.Screen name="smart-teacher" options={{ headerShown: false }} />
         <Stack.Screen name="homework-solver" options={{ headerShown: false }} />
         <Stack.Screen name="materials" options={{ headerShown: false }} />
+        <Stack.Screen name="teacher-learning-materials" options={{ headerShown: false }} />
         <Stack.Screen name="teacher-materials" options={{ headerShown: false }} />
         <Stack.Screen name="students" options={{ headerShown: false }} />
         <Stack.Screen name="wallet" options={{ headerShown: false }} />
         <Stack.Screen name="teacher-withdrawals" options={{ headerShown: false }} />
         <Stack.Screen name="call-wallet" options={{ headerShown: false }} />
         <Stack.Screen name="chat" options={{ headerShown: false }} />
+        <Stack.Screen name="help-center" options={{ headerShown: false }} />
         <Stack.Screen name="support" options={{ headerShown: false }} />
         <Stack.Screen name="rating" options={{ headerShown: false }} />
         <Stack.Screen name="booking" options={{ headerShown: false }} />
+        <Stack.Screen name="in-person" options={{ headerShown: false }} />
         <Stack.Screen name="live-session" options={{ headerShown: false }} />
         <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
         <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
@@ -556,6 +651,7 @@ function RootLayoutNav() {
         <Stack.Screen name="payment-success" options={{ headerShown: false }} />
         <Stack.Screen name="privacy" options={{ headerShown: false }} />
         <Stack.Screen name="terms" options={{ headerShown: false }} />
+        <Stack.Screen name="delete-account" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
       </Stack>
       {overlay ? <View style={styles.overlay}>{overlay}</View> : null}
@@ -736,7 +832,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AppPreferencesProvider>
         <PreferencesStatusBar />
-        <ErrorBoundary>
+        <ErrorBoundary onError={(error, stack) => reportError(error, { componentStack: stack.slice(0, 1500) }, 'render')}>
           <QueryClientProvider client={queryClient}>
             <AuthProvider>
               <InternalCallProvider>
@@ -745,6 +841,7 @@ export default function RootLayout() {
                     <KeyboardProvider>
                       <RootLayoutNav />
                       <IncomingCallOverlay />
+                      <OfflineBanner />
                     </KeyboardProvider>
                   </GestureHandlerRootView>
                 </AjyalProvider>

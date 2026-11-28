@@ -1,5 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { startPushOutboxWorker } from "./lib/pushOutbox";
+import { startSessionReminderScheduler } from "./lib/sessionReminderScheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +24,8 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  // PUSH_OUTBOX_WORKER=external means a separate worker process (dist/worker.mjs) sends pushes.
+  // Default (unset) keeps today's behavior: the worker runs inside this process.
+  if (process.env["PUSH_OUTBOX_WORKER"] !== "external") void startPushOutboxWorker();
+  void startSessionReminderScheduler();
 });

@@ -1,0 +1,50 @@
+[
+  {
+    "id": "01-student-home",
+    "role": "student",
+    "headline": "تابع حصصك ومهامك",
+    "subtitle": "لوحة الطالب تجمع خطوتك التعليمية القادمة",
+    "screen": "home",
+    "accent": "#2E9E79"
+  },
+  {
+    "id": "02-student-search",
+    "role": "student",
+    "headline": "اعثر على معلم يناسبك",
+    "subtitle": "ابحث حسب المادة والمرحلة التعليمية",
+    "screen": "search",
+    "accent": "#173E8C"
+  },
+  {
+    "id": "03-student-lesson",
+    "role": "student",
+    "headline": "شارك في حصتك عن بُعد",
+    "subtitle": "انضم إلى المعلم واستخدم أدوات الجلسة",
+    "screen": "lesson",
+    "accent": "#2E9E79"
+  },
+  {
+    "id": "04-teacher-home",
+    "role": "teacher",
+    "headline": "أدر يومك التعليمي",
+    "subtitle": "الحصص والطلاب والمهام في مساحة المعلم",
+    "screen": "teacherHome",
+    "accent": "#2E9E79"
+  },
+  {
+    "id": "05-teacher-students",
+    "role": "teacher",
+    "headline": "تابع طلابك وتواصل معهم",
+    "subtitle": "قائمة الطلاب المرتبطين بحجوزاتك",
+    "screen": "teacherStudents",
+    "accent": "#173E8C"
+  },
+  {
+    "id": "06-teacher-assignments",
+    "role": "teacher",
+    "headline": "راجع مهام الطلاب",
+    "subtitle": "تابع التسليمات من مساحة المعلم",
+    "screen": "assignments",
+    "accent": "#173E8C"
+  }
+]

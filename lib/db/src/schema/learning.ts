@@ -3,12 +3,14 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgPolicy,
   pgTable,
   text,
   timestamp,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { usersTable } from "./auth";
 
@@ -123,3 +125,20 @@ export type Booking = typeof bookingsTable.$inferSelect;
 export type Assignment = typeof assignmentsTable.$inferSelect;
 export type Notification = typeof notificationsTable.$inferSelect;
 export type PushToken = typeof pushTokensTable.$inferSelect;
+
+export const pushDeliveryOutboxTable = pgTable("push_delivery_outbox", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  eventKey: text("event_key").notNull(),
+  eventType: text("event_type").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  processedAt: timestamp("processed_at", { withTimezone: true }),
+  failedAt: timestamp("failed_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("push_delivery_outbox_event_key_unique").on(table.eventKey),
+  index("push_delivery_outbox_ready_idx").on(table.availableAt, table.createdAt),
+]).enableRLS();

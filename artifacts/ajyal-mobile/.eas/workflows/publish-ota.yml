@@ -1,0 +1,14 @@
+name: Publish OTA (production)
+jobs:
+  publish:
+    type: update
+    environment: preview
+    env:
+      EXPO_PUBLIC_API_DOMAIN: api.ajyalalmaerifa.com
+      EXPO_PUBLIC_DOMAIN: api.ajyalalmaerifa.com
+      EXPO_PUBLIC_SUPABASE_URL: https://ajyalalmaerifa.com
+      EXPO_PUBLIC_APNS_ENV: production
+    params:
+      branch: production
+      platform: android
+      message: "RTL results sheet (PR 17); previous good: 01a20327"

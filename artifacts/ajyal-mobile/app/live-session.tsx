@@ -1,19 +1,48 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, BackHandler, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { BackHandler, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useQueryClient } from '@tanstack/react-query';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useColors } from '@/hooks/useColors';
 import { useInternalCall } from '@/contexts/InternalCallContext';
 import { useAjyal } from '@/hooks/useAjyal';
-import { useSessionWebRTC } from '@/hooks/useSessionWebRTC';
+import { useSessionAgora } from '@/hooks/useSessionAgora';
+import { customFetch } from '@workspace/api-client-react';
 import { SessionVideo } from '@/components/SessionVideo';
 import { SessionCollaboration } from '@/components/SessionCollaboration';
 import { SessionWhiteboard, normalizeWhiteboardAction, type WhiteboardAction } from '@/components/SessionWhiteboard';
-import type { SessionDataMessage } from '@/hooks/useSessionWebRTC';
-import { useGetStudentDashboard, useListMySessions } from '@workspace/api-client-react';
+import type { SessionDataMessage } from '@/hooks/useSessionAgora';
+import {
+  readPlatformWhiteboardPermission,
+  readPlatformWhiteboardVisibility,
+  resolveWhiteboardStateVisibility,
+} from '@/lib/sessionWhiteboardProtocol';
+import { filterClearedWhiteboardActions, whiteboardActionSignature } from '@/lib/sessionWhiteboardState';
+import { getListBookingRequestsQueryKey, getListMySessionsQueryKey, useGetStudentDashboard, useListMySessions } from '@workspace/api-client-react';
 import { Header, Icon, Screen } from '@/components/AjyalUI';
 import { supabase } from '@/lib/supabase';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { shouldRedirectFromLiveSession } from '@/lib/liveSessionRoute';
+import { isSessionEnded, type SessionLifecycleSnapshot } from '@/lib/sessionLifecycle';
+import { createSessionEndBroadcast, isSessionEndBroadcastFromPeer, waitForSessionEndConfirmation } from '@/lib/sessionEnd';
+import { withTimeout } from '@/lib/asyncTimeout';
+import { createRateLimitedQueue, type RateLimitedQueue } from '@/lib/sessionThrottle';
+import { getMobileSessionExitCopy } from '@/lib/mobileSessionPolicy';
+import {
+  getFinalSessionElapsed,
+  isSessionTimerPeerReady,
+  parseSessionTimerSync,
+  type SessionTimerSync,
+} from '@/lib/sessionTimer';
+
+type LiveSessionLifecycle = SessionLifecycleSnapshot & {
+  startedAt: string | null;
+  sessionStatus: string | null;
+  bookingStatus: string | null;
+  deliveryMode: string | null;
+  studentId: string | null;
+  teacherId: string | null;
+};
 
 function formatElapsed(seconds: number): string {
   const safeSeconds = Math.max(0, Math.floor(seconds));
@@ -22,47 +51,80 @@ function formatElapsed(seconds: number): string {
 
 export default function LiveSessionScreen() {
   const colors = useColors();
+  const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
-  useWindowDimensions();
+  const { width: viewportWidth } = useWindowDimensions();
   const { profile, role } = useAjyal();
+  const sessionExitCopy = getMobileSessionExitCopy();
   const params = useLocalSearchParams<{ booking?: string }>();
   const { call, endCall, clearCall } = useInternalCall();
-  const sessionsQuery = useListMySessions({ view: 'upcoming' });
-  const studentDashboardQuery = useGetStudentDashboard({
-    query: { queryKey: ['student-dashboard'], enabled: role === 'student' },
-  });
+  const isStudent = role === 'student';
+  const sessionsQuery = useListMySessions(
+    { view: 'upcoming' },
+    {
+      query: {
+        queryKey: getListMySessionsQueryKey({ view: 'upcoming' }),
+        staleTime: 60_000,
+        refetchOnReconnect: false,
+        refetchOnWindowFocus: false,
+      },
+    },
+  );
   const bookingId = typeof params.booking === 'string' ? params.booking : undefined;
   const session = sessionsQuery.data?.find((item) => item.id === bookingId);
   const isActive = call?.status === 'active';
   const isCurrentCall = Boolean(bookingId && call?.roomId === bookingId);
   const isSessionCallActive = isActive && isCurrentCall;
-  const isStudent = role === 'student';
   const isActiveRef = useRef(isSessionCallActive);
   const isCurrentCallRef = useRef(isCurrentCall);
-  const [lifecycle, setLifecycle] = useState<{
-    startedAt: string | null;
-    endedAt: string | null;
-    status: string | null;
-    bookingStatus: string | null;
-    studentId: string | null;
-    teacherId: string | null;
-  }>({
+  const sessionJoinNotificationBookingRef = useRef<string | null>(null);
+  const [lifecycle, setLifecycle] = useState<LiveSessionLifecycle>({
     startedAt: null,
     endedAt: null,
-    status: null,
+    durationSeconds: null,
+    sessionStatus: null,
     bookingStatus: null,
+    deliveryMode: null,
     studentId: null,
     teacherId: null,
   });
+  const [lifecycleLoadedFor, setLifecycleLoadedFor] = useState<string | null>(null);
   const [joinRequested, setJoinRequested] = useState(false);
   const [whiteboardActions, setWhiteboardActions] = useState<WhiteboardAction[]>([]);
+  const whiteboardActionsRef = useRef<WhiteboardAction[]>([]);
+  const knownWhiteboardActionsRef = useRef<Map<string, WhiteboardAction>>(new Map());
+  const clearedWhiteboardSignaturesRef = useRef<Set<string>>(new Set());
   const [whiteboardVisible, setWhiteboardVisible] = useState(false);
   const [whiteboardCanDraw, setWhiteboardCanDraw] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [timerSyncReceived, setTimerSyncReceived] = useState(false);
   const [displayScale, setDisplayScale] = useState(1);
   const [handRaised, setHandRaised] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const timerAnchorRef = useRef<{ elapsed: number; timestamp: number; paused: boolean } | null>(null);
+  const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(false);
+  const fullscreenControlsSideInset = Math.max(
+    12,
+    insets.left + 12,
+    insets.right + 12,
+    (viewportWidth - 960) / 2,
+  );
+  const latestTimerSyncRef = useRef<SessionTimerSync | null>(null);
+  const timerPeerReadyRef = useRef(false);
+  const lifecycleRefreshInFlightRef = useRef(false);
+  const sessionStatusChannelRef = useRef<any>(null);
+  const sessionStatusChannelReadyRef = useRef(false);
+  const sessionEndHandlerRef = useRef<(payload: unknown) => void>(() => undefined);
+  useEffect(() => {
+    setFullscreenControlsVisible(isFullscreen && whiteboardVisible);
+  }, [isFullscreen, whiteboardVisible]);
+  useEffect(() => {
+    whiteboardActionsRef.current = [];
+    knownWhiteboardActionsRef.current.clear();
+    clearedWhiteboardSignaturesRef.current.clear();
+    setWhiteboardActions([]);
+    setWhiteboardVisible(false);
+    setWhiteboardCanDraw(false);
+  }, [bookingId]);
   useEffect(() => {
     if (Platform.OS === 'web') return undefined;
     const applyOrientation = async () => {
@@ -77,32 +139,72 @@ export default function LiveSessionScreen() {
       if (isFullscreen) void ScreenOrientation.unlockAsync().catch(() => undefined);
     };
   }, [isFullscreen]);
-  const refreshLifecycle = useCallback(async () => {
-    if (!supabase || !bookingId) return;
-    const [{ data: sessionRow, error: sessionError }, { data: bookingRow, error: bookingError }] = await Promise.all([
-      supabase.from('sessions').select('started_at, ended_at').eq('booking_id', bookingId).maybeSingle(),
-      supabase.from('bookings').select('status, session_status, student_id, teacher_id').eq('id', bookingId).maybeSingle(),
-    ]);
-    if (sessionError) throw sessionError;
-    if (bookingError) throw bookingError;
-    setLifecycle({
-      startedAt: typeof sessionRow?.started_at === 'string' ? sessionRow.started_at : null,
-      endedAt: typeof sessionRow?.ended_at === 'string' ? sessionRow.ended_at : null,
-      status: typeof bookingRow?.session_status === 'string' ? bookingRow.session_status : null,
-      bookingStatus: typeof bookingRow?.status === 'string' ? bookingRow.status : null,
-      studentId: typeof bookingRow?.student_id === 'string' ? bookingRow.student_id : null,
-      teacherId: typeof bookingRow?.teacher_id === 'string' ? bookingRow.teacher_id : null,
-    });
+  const refreshLifecycle = useCallback(async (): Promise<LiveSessionLifecycle | null> => {
+    if (!supabase || !bookingId) return null;
+    if (lifecycleRefreshInFlightRef.current) return null;
+    lifecycleRefreshInFlightRef.current = true;
+    try {
+      const [{ data: sessionRow, error: sessionError }, { data: bookingRow, error: bookingError }] = await Promise.all([
+        supabase.from('sessions').select('started_at, ended_at, duration_seconds').eq('booking_id', bookingId).maybeSingle(),
+        supabase.from('bookings').select('status, session_status, delivery_mode, student_id, teacher_id').eq('id', bookingId).maybeSingle(),
+      ]);
+      if (sessionError) throw sessionError;
+      if (bookingError) throw bookingError;
+      const snapshot = {
+        startedAt: typeof sessionRow?.started_at === 'string' ? sessionRow.started_at : null,
+        endedAt: typeof sessionRow?.ended_at === 'string' ? sessionRow.ended_at : null,
+        durationSeconds: typeof sessionRow?.duration_seconds === 'number' ? sessionRow.duration_seconds : null,
+        sessionStatus: typeof bookingRow?.session_status === 'string' ? bookingRow.session_status : null,
+        bookingStatus: typeof bookingRow?.status === 'string' ? bookingRow.status : null,
+        deliveryMode: typeof bookingRow?.delivery_mode === 'string' ? bookingRow.delivery_mode : null,
+        studentId: typeof bookingRow?.student_id === 'string' ? bookingRow.student_id : null,
+        teacherId: typeof bookingRow?.teacher_id === 'string' ? bookingRow.teacher_id : null,
+      };
+      setLifecycle(snapshot);
+      setLifecycleLoadedFor(bookingId);
+      return snapshot;
+    } finally {
+      lifecycleRefreshInFlightRef.current = false;
+    }
   }, [bookingId]);
+  useEffect(() => {
+    if (!shouldRedirectFromLiveSession(
+      Boolean(bookingId && lifecycleLoadedFor === bookingId),
+      bookingId,
+      lifecycle.bookingStatus,
+      lifecycle.endedAt ? 'ended' : lifecycle.sessionStatus,
+      lifecycle.deliveryMode,
+    )) return;
+    router.replace('/(tabs)/bookings');
+  }, [bookingId, lifecycle.bookingStatus, lifecycle.deliveryMode, lifecycle.endedAt, lifecycle.sessionStatus, lifecycleLoadedFor]);
   const isBookingStudent = Boolean(isStudent && profile?.id && lifecycle.studentId === profile.id);
   const canStudentJoin = Boolean(
     isBookingStudent
-      && lifecycle.status === 'in_progress'
+      && lifecycle.sessionStatus === 'in_progress'
       && !lifecycle.endedAt,
   );
   // Internal calls are a separate notification/audio system. They must never
   // authorize the session media path; the student explicitly joins the room.
   const shouldJoin = Boolean(canStudentJoin && bookingId && profile?.id && joinRequested);
+  const studentDashboardQuery = useGetStudentDashboard({
+    query: {
+      queryKey: ['student-dashboard'],
+      enabled: Boolean(isStudent && shouldJoin),
+      staleTime: 60_000,
+      refetchOnReconnect: false,
+      refetchOnWindowFocus: false,
+    },
+  });
+  const replaceWhiteboardActions = useCallback((actions: WhiteboardAction[]) => {
+    whiteboardActionsRef.current = actions;
+    setWhiteboardActions(actions);
+  }, []);
+  const appendWhiteboardAction = useCallback((action: WhiteboardAction) => {
+    const signature = whiteboardActionSignature(action);
+    knownWhiteboardActionsRef.current.set(signature, action);
+    clearedWhiteboardSignaturesRef.current.delete(signature);
+    replaceWhiteboardActions([...whiteboardActionsRef.current, action].slice(-160));
+  }, [replaceWhiteboardActions]);
   const handleDataMessage = useCallback((message: SessionDataMessage) => {
     const messageTypeCandidates = [message.type, message.event, message.kind, message.messageType]
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
@@ -114,6 +216,8 @@ export default function LiveSessionScreen() {
       .trim()
       .toLowerCase()
       .replace(/[_:]/g, '-');
+    const boardVisibility = readPlatformWhiteboardVisibility(message);
+    const platformPermission = readPlatformWhiteboardPermission(message);
     const parseRecord = (value: unknown): Record<string, unknown> | null => {
       if (typeof value === 'string') {
         try {
@@ -216,30 +320,32 @@ export default function LiveSessionScreen() {
       || messageType === 'student-can-draw'
       || messageType === 'student-whiteboard-access'
     );
-    const permissionValue = explicitPermissionValue
+    const permissionValue = platformPermission
+      ?? explicitPermissionValue
       ?? (isPermissionMessage ? readBoolean(genericPermissionKeys) : undefined);
-    if (typeof permissionValue === 'boolean' && (isPermissionMessage || explicitPermissionValue !== undefined)) {
+    if (
+      typeof permissionValue === 'boolean'
+      && (platformPermission !== null || isPermissionMessage || explicitPermissionValue !== undefined)
+    ) {
       setWhiteboardCanDraw(permissionValue);
-      if (permissionValue) setWhiteboardVisible(true);
+      if (permissionValue && !messageType.includes('state') && !messageType.includes('sync')) {
+        setWhiteboardVisible(true);
+      }
     }
-    if (messageType === 'timer-sync' && typeof message.elapsed === 'number') {
-      timerAnchorRef.current = {
-        elapsed: Math.max(0, message.elapsed),
-        timestamp: typeof message.ts === 'number' ? message.ts : Date.now(),
-        paused: message.paused === true,
-      };
-      setElapsedSeconds(Math.max(0, message.elapsed));
-    } else if (messageType === 'timer-start' && typeof message.startedAt === 'string') {
-      const startedAt = Date.parse(message.startedAt);
-      if (!Number.isNaN(startedAt)) {
-        timerAnchorRef.current = { elapsed: 0, timestamp: startedAt, paused: false };
-        setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    if (messageType === 'timer-sync') {
+      const timerSync = parseSessionTimerSync(message);
+      if (timerSync) {
+        latestTimerSyncRef.current = timerSync;
+        if (timerPeerReadyRef.current) {
+          setElapsedSeconds(timerSync.elapsed);
+          setTimerSyncReceived(true);
+        }
       }
     } else if (
       boardAction
       && (messageType.includes('whiteboard') || messageType === 'path' || messageType === 'draw')
     ) {
-      setWhiteboardActions((current) => [...current, boardAction].slice(-160));
+      appendWhiteboardAction(boardAction);
       setWhiteboardVisible(true);
     } else if (
       (messageType === 'whiteboard-state'
@@ -251,75 +357,169 @@ export default function LiveSessionScreen() {
       const actions = boardActions
         .map(normalizeWhiteboardAction)
         .filter((action): action is WhiteboardAction => Boolean(action));
-      setWhiteboardActions(actions);
-      setWhiteboardVisible(true);
+      actions.forEach((action) => knownWhiteboardActionsRef.current.set(whiteboardActionSignature(action), action));
+      replaceWhiteboardActions(filterClearedWhiteboardActions(actions, clearedWhiteboardSignaturesRef.current));
+      setWhiteboardVisible(resolveWhiteboardStateVisibility(boardVisibility));
     } else if (messageType === 'whiteboard-clear' || messageType === 'whiteboard-reset') {
-      setWhiteboardActions([]);
+      knownWhiteboardActionsRef.current.forEach((_action, signature) => clearedWhiteboardSignaturesRef.current.add(signature));
+      replaceWhiteboardActions([]);
       setWhiteboardVisible(true);
     } else if (messageType === 'whiteboard-undo') {
-      setWhiteboardActions((current) => current.slice(0, -1));
+      const current = whiteboardActionsRef.current;
+      const removed = current[current.length - 1];
+      if (removed) clearedWhiteboardSignaturesRef.current.add(whiteboardActionSignature(removed));
+      replaceWhiteboardActions(current.slice(0, -1));
       setWhiteboardVisible(true);
     } else if (
       messageType === 'whiteboard-open'
       || messageType === 'whiteboard-start'
       || messageType === 'whiteboard-show'
-      || (messageType === 'whiteboard-toggle' && enabled)
     ) {
       setWhiteboardVisible(true);
+    } else if (messageType === 'whiteboard-toggle' && boardVisibility !== null) {
+      setWhiteboardVisible(boardVisibility);
     } else if (
-      messageType === 'screen-share-start'
+      (messageType === 'screen-share-status' && enabled)
+      || messageType === 'screen-share-start'
       || messageType === 'screen-share'
       || messageType === 'screen-share-state'
       || messageType === 'screen-share-toggle'
-      || (messageType === 'whiteboard-toggle' && !enabled)
     ) {
       setWhiteboardVisible(false);
     }
-  }, []);
-  const rtc = useSessionWebRTC({
+  }, [appendWhiteboardAction, replaceWhiteboardActions]);
+  const rtc = useSessionAgora({
     bookingId,
     userId: profile?.id,
     enabled: shouldJoin && isStudent,
     onDataMessage: handleDataMessage,
   });
+  const whiteboardSendContextRef = useRef({
+    userId: profile?.id,
+    sendDataMessage: rtc.sendDataMessage,
+    dataChannelOpen: rtc.dataChannelState === 'open',
+  });
+  whiteboardSendContextRef.current = {
+    userId: profile?.id,
+    sendDataMessage: rtc.sendDataMessage,
+    dataChannelOpen: rtc.dataChannelState === 'open',
+  };
+  const pendingWhiteboardActionsRef = useRef<WhiteboardAction[]>([]);
+  const whiteboardActionQueueRef = useRef<RateLimitedQueue<WhiteboardAction> | null>(null);
+  if (!whiteboardActionQueueRef.current) {
+    whiteboardActionQueueRef.current = createRateLimitedQueue((action) => {
+      const { userId, sendDataMessage, dataChannelOpen } = whiteboardSendContextRef.current;
+      if (!dataChannelOpen) {
+        pendingWhiteboardActionsRef.current = [
+          ...pendingWhiteboardActionsRef.current.slice(-159),
+          action,
+        ];
+        return;
+      }
+      sendDataMessage({
+        type: 'whiteboard-action',
+        event: 'whiteboard-action',
+        kind: 'whiteboard-action',
+        action,
+        points: action.points,
+        color: action.color,
+        lineWidth: action.lineWidth,
+        userId,
+        timestamp: Date.now(),
+      });
+    }, 25);
+  }
+  useEffect(() => {
+    whiteboardActionQueueRef.current?.clear();
+    pendingWhiteboardActionsRef.current = [];
+    return () => {
+      whiteboardActionQueueRef.current?.clear();
+      pendingWhiteboardActionsRef.current = [];
+    };
+  }, [bookingId]);
+  useEffect(() => {
+    if (rtc.dataChannelState !== 'open') return;
+    const pending = pendingWhiteboardActionsRef.current.splice(0);
+    pending.forEach((action) => whiteboardActionQueueRef.current?.enqueue(action));
+  }, [bookingId, rtc.dataChannelState]);
+  const timerPeerReady = isSessionTimerPeerReady({
+    connectionState: rtc.connectionState,
+    transportProvider: rtc.transportProvider,
+    remoteUid: rtc.agoraRemoteUid,
+  });
+  useEffect(() => {
+    timerPeerReadyRef.current = timerPeerReady;
+    if (!timerPeerReady) {
+      setTimerSyncReceived(false);
+      return;
+    }
+    const latest = latestTimerSyncRef.current;
+    if (latest) {
+      setElapsedSeconds(latest.elapsed);
+      setTimerSyncReceived(true);
+    }
+  }, [timerPeerReady]);
+  useEffect(() => {
+    const finalElapsed = getFinalSessionElapsed(lifecycle);
+    if (finalElapsed === null) return;
+    setElapsedSeconds(finalElapsed);
+    setTimerSyncReceived(true);
+  }, [lifecycle.endedAt, lifecycle.durationSeconds]);
+  useEffect(() => {
+    if (
+      !shouldJoin
+      || rtc.connectionState !== 'connected'
+      || !bookingId
+      || !lifecycle.teacherId
+      || sessionJoinNotificationBookingRef.current === bookingId
+    ) {
+      return;
+    }
+
+    sessionJoinNotificationBookingRef.current = bookingId;
+    let cancelled = false;
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const notifyTeacher = async () => {
+      try {
+        const result = await customFetch<{ delivered: boolean }>('/api/push/notifications', {
+          method: 'POST',
+          body: JSON.stringify({
+            recipientId: lifecycle.teacherId,
+            title: 'انضم الطالب إلى الجلسة',
+            body: 'انضم الطالب إلى الجلسة. يمكنك متابعة الجلسة من لوحة التحكم.',
+            type: 'session_join',
+            route: '/bookings',
+            bookingId,
+          }),
+        });
+        if (result.delivered) return;
+        throw new Error('The session join notification was not accepted.');
+      } catch (error) {
+        if (cancelled) return;
+        attempts += 1;
+        if (attempts < 3) {
+          retryTimer = setTimeout(() => void notifyTeacher(), attempts * 1500);
+          return;
+        }
+        sessionJoinNotificationBookingRef.current = null;
+        console.warn('تعذر إرسال إشعار انضمام الطالب:', error);
+      }
+    };
+
+    void notifyTeacher();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [bookingId, lifecycle.teacherId, rtc.connectionState, shouldJoin]);
   const handleWhiteboardAction = useCallback((action: WhiteboardAction) => {
     if (!whiteboardCanDraw) return;
-    setWhiteboardActions((current) => [...current, action].slice(-160));
+    appendWhiteboardAction(action);
     setWhiteboardVisible(true);
-    rtc.sendDataMessage({
-      type: 'whiteboard-action',
-      event: 'whiteboard-action',
-      kind: 'whiteboard-action',
-      action,
-      points: action.points,
-      color: action.color,
-      lineWidth: action.lineWidth,
-      userId: profile?.id,
-      timestamp: Date.now(),
-    });
-  }, [profile?.id, rtc.sendDataMessage, whiteboardCanDraw]);
+    whiteboardActionQueueRef.current?.enqueue(action);
+  }, [appendWhiteboardAction, whiteboardCanDraw]);
 
-  useEffect(() => {
-    const startedAt = lifecycle.startedAt ? Date.parse(lifecycle.startedAt) : Number.NaN;
-    if (Number.isNaN(startedAt)) return;
-    const endedAt = lifecycle.endedAt ? Date.parse(lifecycle.endedAt) : Number.NaN;
-    const hasEnded = !Number.isNaN(endedAt);
-    const elapsed = hasEnded
-      ? Math.max(0, Math.floor((endedAt - startedAt) / 1000))
-      : Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-
-    // The Realtime/data-channel timer can refine this anchor later. Until it
-    // arrives, the session lifecycle still gives the student an accurate
-    // elapsed value and lets an ended session remain frozen.
-    if (hasEnded || !timerAnchorRef.current) {
-      timerAnchorRef.current = {
-        elapsed,
-        timestamp: hasEnded ? Date.now() : Date.now(),
-        paused: hasEnded,
-      };
-      setElapsedSeconds(elapsed);
-    }
-  }, [lifecycle.startedAt, lifecycle.endedAt]);
   useEffect(() => {
     if (rtc.dataChannelState !== 'open' || !shouldJoin) return;
     // The desktop teacher is the authoritative timer source. Requesting a
@@ -328,27 +528,95 @@ export default function LiveSessionScreen() {
     rtc.sendDataMessage({ type: 'timer-request' });
   }, [rtc.dataChannelState, rtc.sendDataMessage, shouldJoin]);
 
-  useEffect(() => {
-    if (!shouldJoin) return;
-    const interval = setInterval(() => {
-      const anchor = timerAnchorRef.current;
-      if (!anchor || anchor.paused) return;
-      const drift = Math.max(0, Math.floor((Date.now() - anchor.timestamp) / 1000));
-      setElapsedSeconds(anchor.elapsed + drift);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [shouldJoin]);
   const [ending, setEnding] = useState(false);
+  const [confirmEndVisible, setConfirmEndVisible] = useState(false);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
   const closeRoom = useCallback(async () => {
     void rtc.stop();
     if (isSessionCallActive) {
       isActiveRef.current = false;
-      await endCall().catch(() => undefined);
+      void endCall().catch(() => undefined);
     }
     if (isCurrentCall) clearCall();
     router.replace('/(tabs)/bookings');
   }, [clearCall, endCall, isCurrentCall, isSessionCallActive, rtc.stop]);
+
+  useEffect(() => {
+    sessionEndHandlerRef.current = (payload: unknown) => {
+      void (async () => {
+        const currentUserId = profile?.id;
+        const current = await refreshLifecycle().catch(() => null);
+        if (!current || !currentUserId) return;
+        const peerUserId = current.studentId === currentUserId
+          ? current.teacherId
+          : current.teacherId === currentUserId
+            ? current.studentId
+            : null;
+        if (!isSessionEndBroadcastFromPeer(payload, currentUserId, peerUserId)) return;
+
+        const confirmed = await waitForSessionEndConfirmation(
+          () => refreshLifecycle(),
+          isSessionEnded,
+          { timeoutMs: 3_000, pollIntervalMs: 250 },
+        );
+        if (!confirmed) {
+          setLifecycleError('وصل طلب إنهاء الحصة، لكن المنصة لم تؤكد انتهاءها. بقيت الجلسة مفتوحة؛ أعد المحاولة.');
+          return;
+        }
+        await closeRoom();
+      })();
+    };
+  }, [closeRoom, profile?.id, refreshLifecycle]);
+
+  useEffect(() => {
+    const client = supabase;
+    if (!bookingId || !client) return undefined;
+    sessionStatusChannelReadyRef.current = false;
+    const channel = client
+      .channel(`session-status-${bookingId}`)
+      .on('broadcast', { event: 'session-end' }, ({ payload }: { payload?: unknown }) => {
+        sessionEndHandlerRef.current(payload);
+      });
+    sessionStatusChannelRef.current = channel;
+    try {
+      channel.subscribe((status: string) => {
+        sessionStatusChannelReadyRef.current = status === 'SUBSCRIBED';
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.warn('تعذر الاشتراك في قناة إنهاء الجلسة:', status);
+        }
+      });
+    } catch (error) {
+      console.warn('تعذر تهيئة قناة إنهاء الجلسة:', error);
+    }
+    return () => {
+      sessionStatusChannelReadyRef.current = false;
+      if (sessionStatusChannelRef.current === channel) sessionStatusChannelRef.current = null;
+      void client.removeChannel(channel);
+    };
+  }, [bookingId]);
+
+  const waitForSessionStatusChannel = useCallback(async () => {
+    const deadline = Date.now() + 1_500;
+    while (!sessionStatusChannelReadyRef.current && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return sessionStatusChannelReadyRef.current;
+  }, []);
+
+  const sendSessionEndBroadcast = useCallback(async (elapsed: number) => {
+    const channel = sessionStatusChannelRef.current;
+    const payload = createSessionEndBroadcast(profile?.id, elapsed);
+    if (!channel || !payload || !(await waitForSessionStatusChannel())) return false;
+    try {
+      return await channel.send({
+        type: 'broadcast',
+        event: 'session-end',
+        payload,
+      }) === 'ok';
+    } catch {
+      return false;
+    }
+  }, [profile?.id, waitForSessionStatusChannel]);
 
   useEffect(() => {
     isActiveRef.current = isSessionCallActive;
@@ -408,30 +676,91 @@ export default function LiveSessionScreen() {
     };
   }, [bookingId, refreshLifecycle]);
 
+  useFocusEffect(
+    useCallback(() => {
+      void refreshLifecycle().catch(() => undefined);
+    }, [refreshLifecycle]),
+  );
+
   // Realtime is the fast path, but a mobile connection can miss a channel
   // event while the app is backgrounded or reconnecting. Poll the authoritative
-  // booking/session state while this room is open so the join action appears
-  // without requiring the student to leave and reopen the screen.
+  // booking/session state while this room is open so teacher start/end changes
+  // appear without requiring the student to leave and reopen the screen.
   useEffect(() => {
     if (!bookingId) return;
     const interval = setInterval(() => {
       void refreshLifecycle().catch(() => undefined);
-    }, 2500);
+    }, 5_000);
     return () => clearInterval(interval);
   }, [bookingId, refreshLifecycle]);
+
+  // Liveness heartbeat for the server-side sweeper: if both clients die without
+  // ending the session, the server closes it from the last heartbeat and bills
+  // exactly up to the last sign of life. Beats every 30s while this room is
+  // open; the RPC no-ops when there is no open session yet.
+  useEffect(() => {
+    if (!bookingId || !supabase) return;
+    const client = supabase;
+    const beat = () => {
+      void (client.rpc as any)('heartbeat_session', { p_booking_id: bookingId }).then(() => undefined, () => undefined);
+    };
+    beat();
+    const interval = setInterval(beat, 30_000);
+    return () => clearInterval(interval);
+  }, [bookingId, supabase]);
 
   const finishCall = async () => {
     if (ending) return;
     setEnding(true);
+    setLifecycleError(null);
     try {
-      await rtc.stop();
-      if (isSessionCallActive) await endCall();
+      if (!bookingId || !supabase) throw new Error('تعذر التحقق من حالة الحصة.');
+      if (!profile?.id) throw new Error('تعذر التحقق من هوية صاحب طلب الإنهاء.');
+      let endError: unknown = null;
+      try {
+        const rpcResult = await withTimeout(
+          supabase.rpc("end_live_session" as any, { p_booking_id: bookingId } as any),
+          10_000,
+          'استغرق تسجيل نهاية الحصة وقتاً طويلاً. تحقق من الاتصال ثم أعد المحاولة.',
+        );
+        endError = rpcResult.error;
+      } catch (timeoutError) {
+        const latestLifecycle = await refreshLifecycle().catch(() => null);
+        if (!latestLifecycle || !isSessionEnded(latestLifecycle)) throw timeoutError;
+      }
+      if (endError) {
+        const nowIso = new Date().toISOString();
+        await Promise.allSettled([
+          supabase.from("sessions" as any).update({ ended_at: nowIso }).or(`booking_id.eq.${bookingId},id.eq.${bookingId}`),
+          supabase.from("bookings" as any).update({ session_status: "ended", status: "completed", updated_at: nowIso }).eq("id", bookingId),
+        ]);
+      }
+
+      // Persist first so the other participant is covered even when offline;
+      // the two live channels are best-effort notifications, not completion gates.
+      rtc.sendDataMessage({
+        type: 'session-end',
+        elapsed: elapsedSeconds,
+        userId: profile.id,
+      });
+      void sendSessionEndBroadcast(elapsedSeconds)
+        .then((sent) => {
+          if (!sent) console.warn('تم إنهاء الحصة في قاعدة البيانات؛ تعذر إرسال إشارة Realtime.');
+        })
+        .catch(() => {
+          console.warn('تم إنهاء الحصة في قاعدة البيانات؛ تعذر إرسال إشارة Realtime.');
+        });
+
+      void queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: 'upcoming' }) });
+      void queryClient.invalidateQueries({ queryKey: getListMySessionsQueryKey({ view: 'past' }) });
+      void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: 'mine' }) });
+      void queryClient.invalidateQueries({ queryKey: getListBookingRequestsQueryKey({ view: 'incoming' }) });
       setJoinRequested(false);
-      await refreshLifecycle();
+      setConfirmEndVisible(false);
+      await closeRoom();
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'تعذر مغادرة الجلسة.';
+      const message = error instanceof Error ? error.message : 'تعذر إنهاء الحصة للطرفين.';
       setLifecycleError(message);
-      Alert.alert('تعذر مغادرة الجلسة', message);
     } finally {
       setEnding(false);
     }
@@ -467,7 +796,7 @@ export default function LiveSessionScreen() {
 
   const renderSessionTimer = (fullscreen = false) => (
     <Text style={[styles.elapsedText, { color: fullscreen ? colors.primaryForeground : colors.mutedForeground }]}>
-      {elapsedSeconds > 0 || lifecycle.startedAt ? `الوقت المنقضي ${formatElapsed(elapsedSeconds)}` : 'بانتظار بدء الجلسة'}
+      {timerSyncReceived && timerPeerReady ? `الوقت المنقضي ${formatElapsed(elapsedSeconds)}` : 'بانتظار اتصال الطرفين'}
     </Text>
   );
 
@@ -487,7 +816,7 @@ export default function LiveSessionScreen() {
   const renderSessionStats = (fullscreen = false) => (
     <View style={[styles.statsStrip, { backgroundColor: fullscreen ? colors.card : colors.muted, borderColor: colors.border, marginBottom: fullscreen ? 0 : 9 }]}>
       <View style={styles.statItem}>
-        <Text style={[styles.statValue, { color: colors.foreground }]}>{formatElapsed(elapsedSeconds)}</Text>
+        <Text style={[styles.statValue, { color: colors.foreground }]}>{timerSyncReceived && timerPeerReady ? formatElapsed(elapsedSeconds) : '—'}</Text>
         <Text style={[styles.statLabel, { color: colors.teal }]}>الوقت المنقضي</Text>
       </View>
       <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
@@ -505,14 +834,14 @@ export default function LiveSessionScreen() {
           <Icon name={rtc.connectionState === 'connected' || isSessionCallActive ? 'phone' : 'video'} size={26} color={colors.teal} />
         </View>
         <Text style={[styles.heroTitle, { color: colors.primaryForeground }]}>{rtc.connectionState === 'connected' ? 'الجلسة جارية الآن' : role === 'teacher' ? 'الجلسة تبدأ من الكمبيوتر' : canStudentJoin ? 'المعلم بدأ الجلسة' : 'بانتظار بدء المعلم'}</Text>
-        <Text style={[styles.heroBody, { color: colors.tint }]}>{rtc.connectionState === 'connected' ? 'الصوت متصل بالطرف الآخر عبر WebRTC.' : role === 'teacher' ? 'لا يمكن بدء جلسة المعلم من الهاتف أو الجهاز اللوحي.' : isSessionCallActive ? `أنت متصل مع ${call?.callerName ?? 'المعلم'}` : canStudentJoin ? 'اضغط على الانضمام للدخول إلى غرفة الشرح.' : session ? `${session.subject} · ${session.duration}` : 'ستظهر تفاصيل الجلسة هنا عند فتحها.'}</Text>
+          <Text style={[styles.heroBody, { color: colors.tint }]}>{rtc.connectionState === 'connected' ? 'الصوت متصل بالطرف الآخر عبر Agora.' : role === 'teacher' ? 'لا يمكن بدء جلسة المعلم من الهاتف أو الجهاز اللوحي.' : isSessionCallActive ? `أنت متصل مع ${call?.callerName ?? 'المعلم'}` : canStudentJoin ? 'اضغط على الانضمام للدخول إلى غرفة الشرح.' : session ? `${session.subject} · ${session.duration}` : 'ستظهر تفاصيل الجلسة هنا عند فتحها.'}</Text>
       </View>
 
       <View style={[styles.roomCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={[styles.statusDot, { backgroundColor: rtc.connectionState === 'connected' ? colors.teal : lifecycle.status === 'in_progress' ? colors.accent : colors.mutedForeground }]} />
+          <View style={[styles.statusDot, { backgroundColor: rtc.connectionState === 'connected' ? colors.teal : lifecycle.sessionStatus === 'in_progress' ? colors.accent : colors.mutedForeground }]} />
         <View style={styles.roomCopy}>
           <Text style={[styles.roomTitle, { color: colors.foreground }]}>{rtc.connectionState === 'connected' ? 'الاتصال الصوتي متصل' : session?.title ?? 'جلسة أجيال المعرفة'}</Text>
-          <Text style={[styles.roomBody, { color: colors.mutedForeground }]}>{rtc.connectionState === 'connected' ? 'تم إنشاء اتصال WebRTC آمن.' : lifecycle.status === 'in_progress' ? 'بدأ المعلم الجلسة من الكمبيوتر.' : session ? `${session.date} · ${session.time}` : 'تم قبول الجلسة ويمكنك العودة إليها من الحجوزات.'}</Text>
+          <Text style={[styles.roomBody, { color: colors.mutedForeground }]}>{rtc.connectionState === 'connected' ? 'تم إنشاء اتصال Agora آمن.' : lifecycle.sessionStatus === 'in_progress' ? 'بدأ المعلم الجلسة من الكمبيوتر.' : session ? `${session.date} · ${session.time}` : 'تم قبول الجلسة ويمكنك العودة إليها من الحجوزات.'}</Text>
         </View>
       </View>
 
@@ -521,8 +850,12 @@ export default function LiveSessionScreen() {
            {renderSessionStats()}
           <View style={[styles.mediaStage, { backgroundColor: colors.primary }]}>
             <SessionVideo
-              stream={rtc.remoteStream}
-              nativeView={rtc.rtcView}
+              agoraRemoteUid={rtc.agoraRemoteUid}
+              agoraSurfaceView={rtc.agoraSurfaceView}
+              agoraWebRemoteAudioTrack={rtc.agoraWebRemoteAudioTrack}
+              agoraWebRemoteVideoTrack={rtc.agoraWebRemoteVideoTrack}
+              agoraWebAudioBlocked={rtc.agoraWebAudioBlocked}
+              onResumeAgoraAudio={() => void rtc.resumeAgoraAudio()}
               label="بانتظار عرض المعلم"
               height={360}
               fit="contain"
@@ -569,13 +902,25 @@ export default function LiveSessionScreen() {
               <Icon name={rtc.muted ? 'mic-off' : 'mic'} size={17} color={rtc.muted ? colors.destructive : colors.teal} />
               <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.muted ? 'إلغاء الكتم' : 'كتم الصوت'}</Text>
             </Pressable>
+            {Platform.OS !== 'web' ? (
+              <Pressable
+                testID="toggle-session-speaker"
+                accessibilityRole="button"
+                accessibilityLabel={rtc.speakerEnabled ? 'التبديل إلى سماعة الهاتف' : 'تشغيل مكبر الصوت'}
+                onPress={() => void rtc.toggleSpeaker()}
+                style={[styles.sessionControl, { backgroundColor: rtc.speakerEnabled ? colors.tealSoft : colors.card, borderColor: rtc.speakerEnabled ? colors.teal : colors.border }]}
+              >
+                <Icon name={rtc.speakerEnabled ? 'volume-2' : 'volume-1'} size={17} color={rtc.speakerEnabled ? colors.teal : colors.foreground} />
+                <Text style={[styles.sessionControlText, { color: colors.foreground }]}>{rtc.speakerEnabled ? 'مكبر الصوت' : 'سماعة الهاتف'}</Text>
+              </Pressable>
+            ) : null}
             <Pressable testID="toggle-raise-hand" onPress={toggleRaiseHand} style={[styles.sessionControl, { backgroundColor: handRaised ? colors.goldSoft : colors.card, borderColor: handRaised ? colors.accent : colors.border }]}>
               <Icon name="flag" size={17} color={handRaised ? colors.accentForeground : colors.primary} />
               <Text style={[styles.sessionControlText, { color: handRaised ? colors.accentForeground : colors.foreground }]}>{handRaised ? 'تم رفع اليد' : 'رفع اليد'}</Text>
             </Pressable>
-            <Pressable testID="leave-live-session" disabled={ending} onPress={() => void finishCall()} style={[styles.sessionControl, styles.endControl, { backgroundColor: colors.destructive, borderColor: colors.destructive, opacity: ending ? 0.65 : 1 }]}>
+            <Pressable testID="leave-live-session" disabled={ending} onPress={() => setConfirmEndVisible(true)} style={[styles.sessionControl, styles.endControl, { backgroundColor: colors.destructive, borderColor: colors.destructive, opacity: ending ? 0.65 : 1 }]}>
               <Icon name="phone-off" size={17} color={colors.destructiveForeground} />
-              <Text style={[styles.sessionControlText, { color: colors.destructiveForeground }]}>{ending ? 'جارٍ الإنهاء' : 'إنهاء'}</Text>
+              <Text style={[styles.sessionControlText, { color: colors.destructiveForeground }]}>{ending ? 'جارٍ الإنهاء' : sessionExitCopy.action}</Text>
             </Pressable>
           </View>
         </View>
@@ -585,8 +930,12 @@ export default function LiveSessionScreen() {
         <View style={[styles.fullscreenRoot, { backgroundColor: colors.primary }]}>
           <View style={styles.fullscreenStage}>
             <SessionVideo
-              stream={rtc.remoteStream}
-              nativeView={rtc.rtcView}
+              agoraRemoteUid={rtc.agoraRemoteUid}
+              agoraSurfaceView={rtc.agoraSurfaceView}
+              agoraWebRemoteAudioTrack={rtc.agoraWebRemoteAudioTrack}
+              agoraWebRemoteVideoTrack={rtc.agoraWebRemoteVideoTrack}
+              agoraWebAudioBlocked={rtc.agoraWebAudioBlocked}
+              onResumeAgoraAudio={() => void rtc.resumeAgoraAudio()}
               label="بانتظار عرض المعلم"
               fit="cover"
               scale={displayScale}
@@ -608,8 +957,18 @@ export default function LiveSessionScreen() {
             ) : null}
           </View>
           <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-            {renderFullscreenButton(true)}
-            <View
+            {!whiteboardVisible ? (
+              <Pressable
+                testID="toggle-fullscreen-session-controls"
+                accessibilityRole="button"
+                accessibilityLabel={fullscreenControlsVisible ? 'إخفاء أزرار المكالمة' : 'إظهار أزرار المكالمة'}
+                accessibilityState={{ expanded: fullscreenControlsVisible }}
+                onPress={() => setFullscreenControlsVisible((visible) => !visible)}
+                style={[StyleSheet.absoluteFill, styles.fullscreenControlsTapArea]}
+              />
+            ) : null}
+            {fullscreenControlsVisible ? renderFullscreenButton(true) : null}
+            {fullscreenControlsVisible ? <View
               pointerEvents="none"
               style={[
                 styles.fullscreenTimer,
@@ -621,10 +980,10 @@ export default function LiveSessionScreen() {
                 },
               ]}
             >
-              <Text style={[styles.fullscreenTimerValue, { color: colors.foreground }]}>{formatElapsed(elapsedSeconds)}</Text>
+              <Text style={[styles.fullscreenTimerValue, { color: colors.foreground }]}>{timerSyncReceived && timerPeerReady ? formatElapsed(elapsedSeconds) : '—'}</Text>
               <Text style={[styles.fullscreenTimerLabel, { color: colors.teal }]}>الوقت المنقضي</Text>
-            </View>
-            <View
+            </View> : null}
+            {fullscreenControlsVisible ? <View
               style={[
                 styles.fullscreenZoomDock,
                 {
@@ -644,7 +1003,65 @@ export default function LiveSessionScreen() {
                 <Icon name="plus" size={16} color={colors.foreground} />
               </Pressable>
               </View>
-            </View>
+            </View> : null}
+            {fullscreenControlsVisible ? (
+              <View
+                style={[
+                  styles.fullscreenCallControls,
+                  {
+                    backgroundColor: colors.card + 'F2',
+                    borderColor: colors.border,
+                    bottom: Math.max(74, insets.bottom + 64),
+                    left: fullscreenControlsSideInset,
+                    right: fullscreenControlsSideInset,
+                  },
+                ]}
+              >
+                <Pressable
+                  testID="fullscreen-toggle-session-mute"
+                  accessibilityRole="button"
+                  accessibilityLabel={rtc.muted ? 'إلغاء كتم الميكروفون' : 'كتم الميكروفون'}
+                  onPress={rtc.toggleMute}
+                  style={[styles.fullscreenControl, { borderColor: colors.border }]}
+                >
+                  <Icon name={rtc.muted ? 'mic-off' : 'mic'} size={18} color={rtc.muted ? colors.destructive : colors.teal} />
+                  <Text style={[styles.fullscreenControlText, { color: colors.foreground }]}>{rtc.muted ? 'فتح الصوت' : 'كتم'}</Text>
+                </Pressable>
+                {Platform.OS !== 'web' ? (
+                  <Pressable
+                    testID="fullscreen-toggle-session-speaker"
+                    accessibilityRole="button"
+                    accessibilityLabel={rtc.speakerEnabled ? 'التبديل إلى سماعة الهاتف' : 'تشغيل مكبر الصوت'}
+                    onPress={() => void rtc.toggleSpeaker()}
+                    style={[styles.fullscreenControl, { borderColor: colors.border }]}
+                  >
+                    <Icon name={rtc.speakerEnabled ? 'volume-2' : 'volume-1'} size={18} color={rtc.speakerEnabled ? colors.teal : colors.foreground} />
+                    <Text style={[styles.fullscreenControlText, { color: colors.foreground }]}>{rtc.speakerEnabled ? 'المكبر' : 'السماعة'}</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  testID="fullscreen-leave-session"
+                  accessibilityRole="button"
+                  accessibilityLabel={sessionExitCopy.action}
+                  disabled={ending}
+                  onPress={() => setConfirmEndVisible(true)}
+                  style={[styles.fullscreenControl, { borderColor: colors.destructive, opacity: ending ? 0.65 : 1 }]}
+                >
+                  <Icon name="phone-off" size={18} color={colors.destructive} />
+                  <Text style={[styles.fullscreenControlText, { color: colors.destructive }]}>{ending ? 'جارٍ الإنهاء' : sessionExitCopy.action}</Text>
+                </Pressable>
+                <Pressable
+                  testID="close-fullscreen-session"
+                  accessibilityRole="button"
+                  accessibilityLabel="إغلاق العرض بملء الشاشة"
+                  onPress={() => setIsFullscreen(false)}
+                  style={[styles.fullscreenControl, { borderColor: colors.border }]}
+                >
+                  <Icon name="x" size={18} color={colors.foreground} />
+                  <Text style={[styles.fullscreenControlText, { color: colors.foreground }]}>إغلاق</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -696,11 +1113,61 @@ export default function LiveSessionScreen() {
           <Text style={[styles.infoText, { color: colors.destructive }]}>{lifecycleError ?? rtc.error}</Text>
         </View>
       ) : null}
+      <Modal
+        visible={confirmEndVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!ending) setConfirmEndVisible(false); }}
+      >
+        <View style={styles.confirmOverlay}>
+          <View style={[styles.confirmCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.confirmTitle, { color: colors.foreground }]}>{sessionExitCopy.title}</Text>
+            <Text style={[styles.confirmBody, { color: colors.mutedForeground }]}>
+              {sessionExitCopy.body}
+            </Text>
+            {ending ? (
+              <Text style={[styles.confirmBody, { color: colors.teal }]}>جارٍ انتظار تأكيد المنصة…</Text>
+            ) : null}
+            {lifecycleError ? (
+              <Text testID="end-session-error" style={[styles.confirmBody, { color: colors.destructive }]}>
+                {lifecycleError}
+              </Text>
+            ) : null}
+            <View style={styles.confirmActions}>
+              <Pressable
+                testID="cancel-end-session"
+                disabled={ending}
+                onPress={() => setConfirmEndVisible(false)}
+                style={[styles.confirmButton, { backgroundColor: colors.muted, opacity: ending ? 0.6 : 1 }]}
+              >
+                <Text style={[styles.confirmButtonText, { color: colors.foreground }]}>لا، متابعة الحصة</Text>
+              </Pressable>
+              <Pressable
+                testID="confirm-end-session"
+                disabled={ending}
+                onPress={() => { void finishCall(); }}
+                style={[styles.confirmButton, { backgroundColor: colors.destructive, opacity: ending ? 0.6 : 1 }]}
+              >
+                <Text style={[styles.confirmButtonText, { color: colors.destructiveForeground }]}>
+                  {ending ? 'جارٍ الإنهاء…' : 'نعم، إنهاء الحصة'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.48)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  confirmCard: { width: '100%', maxWidth: 420, borderWidth: 1, borderRadius: 20, padding: 22, gap: 14 },
+  confirmTitle: { fontSize: 19, fontFamily: 'Inter_700Bold', textAlign: 'right', writingDirection: 'rtl' },
+  confirmBody: { fontSize: 14, fontFamily: 'Inter_400Regular', lineHeight: 22, textAlign: 'right', writingDirection: 'rtl' },
+  confirmActions: { flexDirection: 'row-reverse', gap: 10, marginTop: 4 },
+  confirmButton: { flex: 1, minHeight: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
+  confirmButtonText: { fontSize: 13, fontFamily: 'Inter_700Bold', textAlign: 'center', writingDirection: 'rtl' },
   hero: { borderRadius: 24, padding: 20, alignItems: 'flex-end', minHeight: 180, justifyContent: 'center', marginBottom: 16 },
   heroIcon: { width: 58, height: 58, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 17 },
   heroTitle: { fontSize: 22, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
@@ -743,10 +1210,14 @@ const styles = StyleSheet.create({
   fullscreenButton: { position: 'absolute', left: 10, top: 10, width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', zIndex: 2 },
   fullscreenRoot: { flex: 1 },
   fullscreenStage: { width: '100%', flex: 1, minHeight: 0, justifyContent: 'center', overflow: 'hidden', backgroundColor: '#112D4E' },
-  fullscreenTimer: { position: 'absolute', minWidth: 108, borderRadius: 14, borderWidth: 1, paddingHorizontal: 13, paddingVertical: 8, alignItems: 'center', shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 5 },
+  fullscreenTimer: { position: 'absolute', minWidth: 108, borderRadius: 14, borderWidth: 1, paddingHorizontal: 13, paddingVertical: 8, alignItems: 'center', shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 5, zIndex: 2 },
   fullscreenTimerValue: { fontSize: 17, lineHeight: 21, fontFamily: 'Inter_700Bold', fontVariant: ['tabular-nums'] },
   fullscreenTimerLabel: { fontSize: 10, lineHeight: 15, marginTop: 1, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
-  fullscreenZoomDock: { position: 'absolute', borderRadius: 14, borderWidth: 1, padding: 5, shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 5 },
+  fullscreenZoomDock: { position: 'absolute', borderRadius: 14, borderWidth: 1, padding: 5, shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 5, zIndex: 2 },
+  fullscreenControlsTapArea: { zIndex: 1 },
+  fullscreenCallControls: { position: 'absolute', maxWidth: 960, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: 15, borderWidth: 1, padding: 6, shadowColor: '#000000', shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 6, zIndex: 3 },
+  fullscreenControl: { flex: 1, minHeight: 48, borderWidth: 1, borderRadius: 10, alignItems: 'center', justifyContent: 'center', gap: 3 },
+  fullscreenControlText: { fontSize: 10, fontFamily: 'Inter_600SemiBold', writingDirection: 'rtl' },
   whiteboardOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 1, justifyContent: 'center' },
   whiteboardOverlayLabel: { position: 'absolute', top: 10, right: 10, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 6, flexDirection: 'row-reverse', alignItems: 'center', gap: 6 },
   infoText: { flex: 1, textAlign: 'right', writingDirection: 'rtl', fontSize: 11, lineHeight: 19, fontFamily: 'Inter_400Regular' },

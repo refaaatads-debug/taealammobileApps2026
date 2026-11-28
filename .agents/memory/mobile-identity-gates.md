@@ -7,4 +7,4 @@ The mobile client must not open learner or teacher routes until the authenticate
 
 **Why:** The original platform derives permissions from Auth user ID → `profiles` → `user_roles`, with teacher approval and ban checks outside the profile row. Falling back to a student view can expose the wrong data path and makes teacher testing look like a booking failure.
 
-**How to apply:** Keep `/api/me` authoritative and fail visibly on missing or unreadable access state. In the mobile root gate, distinguish loading, unresolved/error, banned, pending teacher approval, unsupported role, and allowed student/teacher states.
+**How to apply:** Read identity and access state through the authenticated Supabase client under RLS. Fail visibly on missing or unreadable access state; never default an unresolved account into the student area. In the mobile root gate, distinguish loading, unresolved/error, banned, pending teacher approval, unsupported role, and allowed student/teacher states.

@@ -1,0 +1,28 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
+.ajyal-current {
+  --ajyal-text: #151c28;
+  --ajyal-tint: #2e9e79;
+  --ajyal-background: #ffffff;
+  --ajyal-foreground: #151c28;
+  --ajyal-card: #ffffff;
+  --ajyal-primary: #173e8c;
+  --ajyal-primary-foreground: #ffffff;
+  --ajyal-secondary: #2e9e79;
+  --ajyal-secondary-foreground: #ffffff;
+  --ajyal-muted: #f4f6f8;
+  --ajyal-muted-foreground: #657487;
+  --ajyal-accent: #e2f2ec;
+  --ajyal-accent-foreground: #206f54;
+  --ajyal-destructive: #ea3e3e;
+  --ajyal-destructive-foreground: #ffffff;
+  --ajyal-border: #e4e9ef;
+  --ajyal-input: #dde4eb;
+  --ajyal-teal: #2e9e79;
+  --ajyal-teal-soft: #ecf8f3;
+  --ajyal-navy-soft: #f1f5fb;
+  --ajyal-gold-soft: #fff8e8;
+  --ajyal-gold: #a77916;
+  --ajyal-success: #21c45d;
+  font-family: Inter, Arial, sans-serif;
+}

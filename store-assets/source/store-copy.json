@@ -1,0 +1,40 @@
+{
+  "category": {
+    "ar": "التعليم",
+    "en": "Education"
+  },
+  "googlePlay": {
+    "ar": {
+      "name": "أجيال المعرفة",
+      "shortDescription": "ابحث عن معلم، اطلب حصة، وتابع مواعيدك ومهامك من مكان واحد.",
+      "fullDescription": "أجيال المعرفة تطبيق تعليمي يساعد الطلاب والمعلمين على متابعة رحلة التعلم.\n\nللطالب:\n• ابحث عن المعلمين حسب المادة والمرحلة التعليمية.\n• أرسل طلب حصة عن بُعد أو حضورية.\n• تابع الطلبات والحجوزات ومواعيد الحصص.\n• انضم إلى الجلسة التعليمية عن بُعد واستخدم أدواتها المتاحة.\n• راجع المهام وأرسل الحلول وتابع ملاحظات المعلم.\n\nللمعلم:\n• راجع طلبات الطلاب والحجوزات المرتبطة بك.\n• تابع المهام والتسليمات وملاحظات المراجعة.\n• تواصل مع الطلاب ضمن سياق الخدمة.\n\nتختلف الخيارات المتاحة بحسب نوع الحساب وحالة الحجز والخدمات المفعّلة. تتطلب بعض ميزات الجلسة إذن الميكروفون أو الكاميرا، ويمكن إدخال موقع الحصة الحضورية من شاشة الطلب."
+    },
+    "en": {
+      "name": "Ajyal Knowledge",
+      "shortDescription": "Find a teacher, request a lesson, and follow bookings and assignments.",
+      "fullDescription": "Ajyal Knowledge helps students and teachers manage learning activities in one app.\n\nFor students:\n• Find teachers by subject and educational stage.\n• Send requests for online or in-person lessons.\n• Follow requests, bookings, and lesson schedules.\n• Join an online learning session and use its available tools.\n• Review assignments, submit answers, and follow teacher feedback.\n\nFor teachers:\n• Review student requests and related bookings.\n• Follow assignments, submissions, and review notes.\n• Communicate with students in the context of the service.\n\nAvailable options depend on account type, booking status, and enabled services. Some session features require microphone or camera permission. An in-person lesson location can be entered from the request screen."
+    }
+  },
+  "appStore": {
+    "ar": {
+      "name": "أجيال المعرفة",
+      "subtitle": "حصص ومتابعة تعليمية",
+      "promotionalText": "ابحث عن معلم، رتّب حصصك، وتابع مهامك التعليمية في تطبيق واحد.",
+      "keywords": "تعليم,معلم,دروس,حجز,واجبات,طلاب,حصص,تعلم",
+      "description": "أجيال المعرفة تطبيق تعليمي يجمع أدوات الطالب والمعلم لمتابعة الدروس والمهام.\n\nللطالب، يتيح التطبيق البحث عن المعلمين حسب المادة والمرحلة، وإرسال طلب حصة عن بُعد أو حضورية، ومراجعة حالة الطلب والمواعيد. ويمكن للطالب الانضمام إلى الجلسة التعليمية عن بُعد واستخدام الأدوات المتاحة فيها.\n\nكما يمكن للطالب مراجعة المهام وإرسال الحلول ومتابعة ملاحظات المعلم. ويستطيع المعلم مراجعة طلبات الطلاب والحجوزات والتسليمات المرتبطة بمهامه.\n\nتختلف الخيارات بحسب نوع الحساب وحالة الحجز والخدمات المفعّلة. تتطلب بعض ميزات الجلسة إذن الميكروفون أو الكاميرا. ويمكن إدخال موقع الحصة الحضورية من شاشة الطلب.",
+      "whatsNew": ""
+    },
+    "en": {
+      "name": "Ajyal Knowledge",
+      "subtitle": "Lessons and learning tools",
+      "promotionalText": "Find a teacher, organize lessons, and keep up with learning tasks.",
+      "keywords": "learning,teacher,lessons,tutoring,booking,assignments,students,class",
+      "description": "Ajyal Knowledge brings student and teacher tools together to support lesson and assignment follow-up.\n\nStudents can find teachers by subject and educational stage, send requests for online or in-person lessons, and review request status and schedules. Students can join online learning sessions and use the tools available in each session.\n\nStudents can also review assignments, submit answers, and follow teacher feedback. Teachers can review student requests, related bookings, and assignment submissions.\n\nAvailable options depend on account type, booking status, and enabled services. Some session features require microphone or camera permission. An in-person lesson location can be entered from the request screen.",
+      "whatsNew": ""
+    }
+  },
+  "releaseNotes": {
+    "ar": "متروك فارغًا حتى تتوفر ملاحظات موثقة للتغييرات المشمولة في الإصدار.",
+    "en": "Leave blank until verified changes for this release are documented."
+  }
+}

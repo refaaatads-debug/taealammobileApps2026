@@ -2,7 +2,7 @@
   "expo": {
     "name": "ajyalalmaerifa",
     "slug": "ajyal-mobile",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "default",
     "icon": "./assets/images/ajyal-icon.png",
     "scheme": "ajyalalmaerifa",
@@ -10,28 +10,28 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.ajyalalmaerifa.app",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية.",
-        "NSCameraUsageDescription": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
-        "NSPhotoLibraryUsageDescription": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
+        "NSPhotoLibraryUsageDescription": "يستخدم التطبيق الصور فقط عند اختيار صورة لإرسالها كحل أو مرفق."
       },
       "bitcode": false
     },
     "android": {
       "package": "com.ajyalalmaerifa.app",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 1,
+      "versionCode": 193,
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.RECORD_AUDIO",
-        "android.permission.CAMERA",
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.INTERNET",
         "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
         "android.permission.WAKE_LOCK",
-        "android.permission.BLUETOOTH"
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_CONNECT"
       ]
     },
     "web": {
@@ -39,7 +39,8 @@
       "favicon": "./assets/images/ajyal-icon.png"
     },
     "updates": {
-      "checkAutomatically": "ON_ERROR_RECOVERY",
+      "url": "https://u.expo.dev/4f6614d5-2a55-410c-8c71-f9430594fbfd",
+      "checkAutomatically": "ON_LOAD",
       "fallbackToCacheTimeout": 0
     },
     "runtimeVersion": {
@@ -47,7 +48,7 @@
     },
     "extra": {
       "updatePolicy": {
-        "mandatory": true,
+        "mandatory": false,
         "minimumSupportedVersion": "1.0.0"
       },
       "eas": {
@@ -56,13 +57,17 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withIncomingCallNative",
+      "./plugins/withAjyalNativeCalls",
+      "./plugins/withGoogleMapsKeys",
       [
-        "@config-plugins/react-native-webrtc",
+        "expo-location",
         {
-          "cameraPermission": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
-          "microphonePermission": "يحتاج التطبيق إلى الميكروفون لإجراء الجلسات التعليمية."
+          "locationWhenInUsePermission": "يستخدم تطبيق أجيال المعرفة موقعك عند طلبك لتحديد موقعك الحالي على الخريطة."
         }
       ],
+      "@config-plugins/react-native-blob-util",
+      "@config-plugins/react-native-pdf",
       [
         "expo-notifications",
         {
@@ -79,7 +84,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
+          "photosPermission": "يستخدم التطبيق الصور فقط عند اختيار صورة لإرسالها كحل أو مرفق.",
+          "cameraPermission": "يستخدم التطبيق الكاميرا فقط عند تصوير واجب أو سؤال لإرساله. الجلسات صوت ومشاركة شاشة بدون كاميرا."
         }
       ],
       "expo-screen-orientation",
@@ -93,7 +99,36 @@
       ],
       "expo-asset",
       "expo-audio",
-      "expo-video"
+      "expo-video",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": false,
+            "enableShrinkResourcesInReleaseBuilds": false,
+            "buildArchs": [
+              "arm64-v8a"
+            ],
+            "packagingOptions": {
+              "pickFirst": [
+                "**/libc++_shared.so",
+                "**/libaosl.so"
+              ],
+              "exclude": [
+                "**/libagora_lip_sync_extension.so",
+                "**/libagora_clear_vision_extension.so",
+                "**/libagora_segmentation_extension.so",
+                "**/libagora_face_capture_extension.so",
+                "**/libagora_face_detection_extension.so",
+                "**/libagora_audio_beauty_extension.so",
+                "**/libagora_content_inspect_extension.so",
+                "**/libagora_video_quality_analyzer_extension.so",
+                "**/libagora_video_av1_encoder_extension.so"
+              ]
+            }
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

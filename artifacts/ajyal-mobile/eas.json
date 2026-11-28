@@ -1,13 +1,24 @@
 {
   "build": {
+    "development": {
+      "extends": "preview",
+      "environment": "preview",
+      "developmentClient": true,
+      "distribution": "internal",
+      "pnpm": "12.9.1"
+    },
     "production": {
       "environment": "production",
       "distribution": "store",
       "pnpm": "10.26.1",
       "env": {
+        "EXPO_PUBLIC_API_DOMAIN": "api.ajyalalmaerifa.com",
         "EXPO_PUBLIC_DOMAIN": "api.ajyalalmaerifa.com",
-        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com"
-      }
+        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com",
+        "EXPO_PUBLIC_APNS_ENV": "production"
+      },
+      "channel": "production",
+      "autoIncrement": true
     },
     "preview": {
       "environment": "preview",
@@ -16,9 +27,16 @@
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_API_DOMAIN": "api.ajyalalmaerifa.com",
         "EXPO_PUBLIC_DOMAIN": "api.ajyalalmaerifa.com",
-        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com"
-      }
+        "EXPO_PUBLIC_SUPABASE_URL": "https://ajyalalmaerifa.com",
+        "EXPO_PUBLIC_APNS_ENV": "production"
+      },
+      "channel": "preview",
+      "autoIncrement": true
     }
+  },
+  "cli": {
+    "appVersionSource": "remote"
   }
 }

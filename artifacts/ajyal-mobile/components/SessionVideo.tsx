@@ -1,85 +1,78 @@
 import React, { useEffect, useRef } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 type SessionVideoProps = {
-  stream: any;
-  nativeView?: any;
   label: string;
   compact?: boolean;
   height?: number;
   fit?: 'contain' | 'cover';
   scale?: number;
   fill?: boolean;
+  agoraRemoteUid?: string | number | null;
+  agoraSurfaceView?: any;
+  agoraWebRemoteAudioTrack?: any;
+  agoraWebRemoteVideoTrack?: any;
+  agoraWebAudioBlocked?: boolean;
+  onResumeAgoraAudio?: () => void;
 };
 
 export function SessionVideo({
-  stream,
-  nativeView,
   label,
   compact = false,
   height,
   fit = 'cover',
   scale = 1,
   fill = false,
+  agoraRemoteUid = null,
+  agoraSurfaceView,
+  agoraWebRemoteAudioTrack,
+  agoraWebRemoteVideoTrack,
+  agoraWebAudioBlocked = false,
+  onResumeAgoraAudio,
 }: SessionVideoProps) {
-  const videoRef = useRef<any>(null);
-  const videoTracks = stream?.getVideoTracks?.() ?? [];
-  const hasLiveVideo = videoTracks.some((track: any) => track?.readyState !== 'ended');
-  const videoTrackSignature = videoTracks
-    .map((track: any) => `${track?.id ?? 'video'}:${track?.readyState ?? 'unknown'}:${track?.enabled !== false}`)
-    .join('|');
+  const agoraWebVideoRef = useRef<any>(null);
+  const hasAgoraVideo = Platform.OS !== 'web' && agoraSurfaceView && agoraRemoteUid !== null;
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || !videoRef.current) return;
-    videoRef.current.srcObject = stream ?? null;
-    if (stream) void videoRef.current.play?.().catch(() => undefined);
-  }, [stream, videoTrackSignature]);
+    if (Platform.OS !== 'web' || !agoraWebRemoteVideoTrack || !agoraWebVideoRef.current) return;
+    try {
+      agoraWebRemoteVideoTrack.play(agoraWebVideoRef.current);
+    } catch {
+      // Video can be republished after the component mounts; the next track update retries.
+    }
+    return () => agoraWebRemoteVideoTrack.stop?.();
+  }, [agoraWebRemoteVideoTrack]);
 
-  if (!stream || !hasLiveVideo) {
+  if (Platform.OS === 'web' && (agoraWebRemoteAudioTrack || agoraWebRemoteVideoTrack)) {
     return (
-      <View style={[styles.empty, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { backgroundColor: '#112D4E', transform: [{ scale }] }]}>
-        <Text style={styles.emptyLabel}>{stream && !compact ? 'الصوت متصل — بانتظار فيديو المعلم' : label}</Text>
+      <View style={[styles.frame, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { transform: [{ scale }] }]}>
+        {React.createElement('div', {
+          ref: agoraWebVideoRef,
+          style: { width: '100%', height: '100%', objectFit: fit, backgroundColor: '#112D4E' },
+        })}
+        {agoraWebAudioBlocked ? (
+          <Pressable accessibilityRole="button" onPress={onResumeAgoraAudio} style={styles.audioRecovery}>
+            <Text style={styles.audioRecoveryText}>تفعيل صوت الحصة</Text>
+          </Pressable>
+        ) : null}
       </View>
     );
   }
 
-  if (Platform.OS === 'web') {
-    const webVideoStyle = {
-      width: '100%',
-      height: '100%',
-      objectFit: fit,
-    } as const;
-
+  if (hasAgoraVideo) {
     return (
       <View style={[styles.frame, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { transform: [{ scale }] }]}>
-        {React.createElement('video', {
-          ref: videoRef,
-          autoPlay: true,
-          playsInline: true,
-          muted: compact,
-          // This is a raw HTML element on web, so its style must be a plain
-          // CSS object rather than a React Native style array.
-          style: webVideoStyle,
+        {React.createElement(agoraSurfaceView, {
+          canvas: { uid: agoraRemoteUid },
+          style: styles.video,
         })}
       </View>
     );
   }
 
-  if (!nativeView) {
-    return (
-      <View style={[styles.empty, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { backgroundColor: '#112D4E', transform: [{ scale }] }]}>
-        <Text style={styles.emptyLabel}>جارٍ تجهيز الفيديو…</Text>
-      </View>
-    );
-  }
-
   return (
-    <View style={[styles.frame, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { transform: [{ scale }] }]}>
-      {React.createElement(nativeView, {
-        streamURL: stream.toURL?.() ?? stream.id,
-        objectFit: fit,
-        style: [styles.video, { objectFit: fit }],
-      })}
+    <View style={[styles.empty, compact && styles.compact, fill && styles.fill, !fill && height ? { height } : null, { backgroundColor: '#112D4E', transform: [{ scale }] }]}>
+      <Text style={styles.emptyLabel}>{label}</Text>
     </View>
   );
 }
@@ -87,8 +80,10 @@ export function SessionVideo({
 const styles = StyleSheet.create({
   frame: { width: '100%', height: 220, overflow: 'hidden', borderRadius: 18, backgroundColor: '#112D4E' },
   compact: { width: 108, height: 80, borderRadius: 13 },
-  video: { width: '100%', height: '100%', objectFit: 'cover' } as any,
   empty: { width: '100%', height: 220, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   fill: { flex: 1, height: '100%' },
+  video: { width: '100%', height: '100%' },
   emptyLabel: { color: '#FFFFFF', fontSize: 12, fontFamily: 'Inter_600SemiBold' },
+  audioRecovery: { position: 'absolute', alignSelf: 'center', bottom: 14, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: '#FFFFFF' },
+  audioRecoveryText: { color: '#112D4E', fontSize: 12, fontFamily: 'Inter_600SemiBold' },
 });
