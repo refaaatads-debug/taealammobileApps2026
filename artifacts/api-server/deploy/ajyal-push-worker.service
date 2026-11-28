@@ -1,0 +1,24 @@
+# PROPOSED unit file. Not installed anywhere. Install only after explicit approval.
+# Same environment file as ajyal-api.service (database URL etc.). Check the real
+# path with: systemctl cat ajyal-api.service
+[Unit]
+Description=Ajyal push notification worker
+After=network-online.target ajyal-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ajyal-api-github/artifacts/api-server
+EnvironmentFile=-/opt/ajyal-api-github/.env
+ExecStart=/usr/bin/node --enable-source-maps /opt/ajyal-api-github/artifacts/api-server/dist/worker.mjs
+Restart=always
+RestartSec=5
+# Hard caps so a burst cannot starve the site or the database on the shared VPS.
+MemoryMax=256M
+MemoryHigh=200M
+CPUQuota=50%
+Nice=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
