@@ -589,8 +589,21 @@ export default function HomeScreen() {
                   <Text style={[styles.balanceBadgeText, { color: colors.primary }]}>{studentBalanceChecking ? t('جارٍ التحقق', 'Checking') : studentBalanceError ? t('تعذر التحقق', 'Unavailable') : studentBalance ? t('نشط', 'Active') : t('غير نشط', 'Inactive')}</Text>
                 </View>
               </View>
-              <Text style={[styles.balanceValue, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{studentBalanceChecking ? t('جارٍ التحقق من رصيدك…', 'Checking your balance…') : studentBalanceError ? t('تعذر تحميل الرصيد', 'Could not load balance') : studentBalance ? `${formatNumber(studentBalance.remainingMinutes)} ${t('دقيقة متاحة', 'minutes available')}` : t('لا يوجد اشتراك نشط', 'No active plan')}</Text>
-              <Text style={[styles.balanceMeta, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{studentBalanceChecking ? t('نحدّث بيانات باقتك', 'Refreshing your plan') : studentBalanceError ? t('اسحب للتحديث أو أعد المحاولة', 'Refresh to try again') : studentBalance ? `${formatNumber(studentBalance.sessionsRemaining)} ${t('جلسة متبقية', 'sessions left')}${studentBalance.planName ? ` · ${studentBalance.planName}` : ''}` : t('استعرض الباقات المتاحة', 'View available plans')}</Text>
+              {studentBalance ? (
+                <View style={[styles.balanceStats, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                  <View style={[styles.balanceStat, { backgroundColor: 'rgba(255,255,255,0.12)', alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+                    <Text style={[styles.balanceStatLabel, { color: colors.tint, writingDirection: direction }]}>{t('الجلسات المتبقية', 'Sessions left')}</Text>
+                    <Text style={[styles.balanceStatValue, { color: colors.primaryForeground, writingDirection: direction }]}>{formatNumber(studentBalance.sessionsRemaining)}</Text>
+                  </View>
+                  <View style={[styles.balanceStat, { backgroundColor: 'rgba(255,255,255,0.12)', alignItems: isRTL ? 'flex-end' : 'flex-start' }]}>
+                    <Text style={[styles.balanceStatLabel, { color: colors.tint, writingDirection: direction }]}>{t('الدقائق المتاحة', 'Minutes available')}</Text>
+                    <Text style={[styles.balanceStatValue, { color: colors.primaryForeground, writingDirection: direction }]}>{formatNumber(studentBalance.remainingMinutes)}</Text>
+                  </View>
+                </View>
+              ) : (
+                <Text style={[styles.balanceValue, { color: colors.primaryForeground, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{studentBalanceChecking ? t('جارٍ التحقق من رصيدك…', 'Checking your balance…') : studentBalanceError ? t('تعذر تحميل الرصيد', 'Could not load balance') : t('لا يوجد اشتراك نشط', 'No active plan')}</Text>
+              )}
+              {studentBalance?.planName ? <Text style={[styles.balanceMeta, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]} numberOfLines={1}>{studentBalance.planName}</Text> : !studentBalance && !studentBalanceChecking && !studentBalanceError ? <Text style={[styles.balanceMeta, { color: colors.tint, writingDirection: direction, textAlign: isRTL ? 'right' : 'left' }]}>{t('استعرض الباقات المتاحة', 'View available plans')}</Text> : null}
            </View>
            <View style={styles.balanceArrow}><Icon name={isRTL ? 'arrow-left' : 'arrow-right'} size={17} color={colors.tint} /></View>
         </Pressable>
@@ -766,6 +779,10 @@ const styles = StyleSheet.create({
   balanceBadge: { minHeight: 22, borderRadius: 8, paddingHorizontal: 7, flexDirection: 'row', alignItems: 'center', gap: 4 },
   balanceBadgeDot: { width: 5, height: 5, borderRadius: 3 },
   balanceBadgeText: { fontSize: 8, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  balanceStats: { width: '100%', gap: 6, marginTop: 6 },
+  balanceStat: { flex: 1, borderRadius: 11, paddingHorizontal: 9, paddingVertical: 5 },
+  balanceStatLabel: { fontSize: 9, fontFamily: 'Inter_500Medium' },
+  balanceStatValue: { fontSize: 16, lineHeight: 22, fontFamily: 'Inter_700Bold' },
   balanceArrow: { width: 28, height: 36, alignItems: 'center', justifyContent: 'center' },
   earningsIcon: { width: 46, height: 46, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   earningsTopRow: { minHeight: 52, alignItems: 'center', gap: 10 },

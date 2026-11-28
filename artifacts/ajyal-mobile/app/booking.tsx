@@ -691,7 +691,7 @@ export default function BookingScreen() {
          {!balanceLoading && projectedRemainingMinutes !== null ? <View style={[styles.balanceCard, { backgroundColor: projectedRemainingMinutes > 0 ? colors.tealSoft : colors.accent, borderColor: projectedRemainingMinutes > 0 ? colors.teal : colors.border }]}>
            <View style={styles.balanceCopy}>
              <Text style={[styles.balanceLabel, { color: colors.mutedForeground }]}>{selectedSlots.length ? 'المتاح بعد الاختيار' : 'الرصيد المتاح للحجز'}</Text>
-             {selectedSlots.length ? <Text style={[styles.balanceSubtext, { color: colors.mutedForeground }]}>قبل الاختيار: {remainingMinutes} دقيقة · محجوز مؤقتاً: {requestedMinutes} دقيقة</Text> : null}
+             {selectedSlots.length ? <View style={styles.balanceChips}><View style={[styles.balanceChip, { backgroundColor: colors.card }]}><Text style={[styles.balanceChipText, { color: colors.mutedForeground }]}>قبل الاختيار: {remainingMinutes} د</Text></View><View style={[styles.balanceChip, { backgroundColor: colors.card }]}><Text style={[styles.balanceChipText, { color: colors.mutedForeground }]}>محجوز مؤقتاً: {requestedMinutes} د</Text></View></View> : null}
            </View>
            <Text style={[styles.balanceValue, { color: projectedRemainingMinutes > 0 ? colors.teal : colors.destructive }]}>{projectedRemainingMinutes > 0 ? `${projectedRemainingMinutes} دقيقة` : 'لا يوجد رصيد'}</Text>
          </View> : null}
@@ -863,6 +863,9 @@ const styles = StyleSheet.create({
   balanceCard: { minHeight: 48, borderRadius: 13, borderWidth: 1, paddingHorizontal: 12, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', marginBottom: 13 },
   balanceCopy: { flex: 1, alignItems: 'flex-end', gap: 3 },
   balanceLabel: { fontSize: 11, fontFamily: 'Inter_500Medium', writingDirection: 'rtl' },
+  balanceChips: { flexDirection: 'row-reverse', gap: 6, marginTop: 2 },
+  balanceChip: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  balanceChipText: { fontSize: 9, fontFamily: 'Inter_500Medium', writingDirection: 'rtl' },
   balanceSubtext: { width: '100%', fontSize: 9, fontFamily: 'Inter_400Regular', textAlign: 'right', writingDirection: 'rtl' },
   balanceValue: { fontSize: 12, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
   input: { minHeight: 49, borderRadius: 14, borderWidth: 1, paddingHorizontal: 13, fontSize: 12, fontFamily: 'Inter_400Regular', marginBottom: 13 },
