@@ -3,11 +3,13 @@ import { sql } from "drizzle-orm";
 import { sendCallPushNotification, type CallPushEvent, type CallPushEventType } from "./callPush";
 import { logger } from "./logger";
 import { findNotificationImageUrl } from "./notificationImage";
-import { sendUserPushNotification, type UserPushPayload } from "./userPush";
+import { sendUserPushNotification, sendUserPushNotificationsBatch, type BatchPushOutcome, type UserPushPayload } from "./userPush";
 
 const POLL_INTERVAL_MS = 1_000;
 const LOCK_DURATION_SECONDS = 120;
 const CLAIM_BATCH_SIZE = 10;
+// Account notifications (broadcasts) are claimed in larger groups and sent 100 per provider request.
+const PLATFORM_CLAIM_BATCH_SIZE = 100;
 const MAX_ATTEMPTS = 8;
 const RETRY_DELAYS_SECONDS = [2, 5, 15, 30, 60, 180, 300, 600];
 
@@ -576,7 +578,11 @@ async function deliverCurrentEvent(event: PushOutboxEvent): Promise<boolean | "s
   return dispatchPushOutboxEvent({ ...event, payload });
 }
 
-async function claimPendingEvents(): Promise<PushOutboxEvent[]> {
+async function claimPendingEvents(platformOnly = false): Promise<PushOutboxEvent[]> {
+  const typeFilter = platformOnly
+    ? sql`AND event_type = 'platform_notification'`
+    : sql`AND event_type <> 'platform_notification'`;
+  const limit = platformOnly ? PLATFORM_CLAIM_BATCH_SIZE : CLAIM_BATCH_SIZE;
   return db.transaction(async (tx) => {
     const result = await tx.execute(sql`
       WITH ready AS (
@@ -586,8 +592,9 @@ async function claimPendingEvents(): Promise<PushOutboxEvent[]> {
           AND failed_at IS NULL
           AND available_at <= now()
           AND (locked_until IS NULL OR locked_until <= now())
+          ${typeFilter}
         ORDER BY available_at, created_at
-        LIMIT ${CLAIM_BATCH_SIZE}
+        LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
       )
       UPDATE public.push_delivery_outbox AS outbox
@@ -611,6 +618,68 @@ async function markProcessed(id: string): Promise<void> {
     SET processed_at = now(), locked_until = NULL, last_error = NULL
     WHERE id::text = ${id}
   `);
+}
+
+async function markProcessedMany(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  await db.execute(sql`
+    UPDATE public.push_delivery_outbox
+    SET processed_at = now(), locked_until = NULL, last_error = NULL
+    WHERE id::text = ANY(${ids}::text[])
+  `);
+}
+
+type PlatformBatchDeps = {
+  load: (payload: Record<string, unknown>) => ReturnType<typeof currentPlatformNotification>;
+  send: (items: Array<{ userId: string; payload: UserPushPayload }>) => Promise<BatchPushOutcome[]>;
+  markDone: (ids: string[]) => Promise<void>;
+  retry: (event: PushOutboxEvent, reason: string) => Promise<void>;
+};
+
+/**
+ * Deliver a group of platform_notification events with one token query and
+ * one provider request per 100 messages. Finished events are marked in one
+ * statement; failed ones go back through the normal retry schedule.
+ */
+async function processPlatformBatch(
+  events: PushOutboxEvent[],
+  deps: PlatformBatchDeps = { load: currentPlatformNotification, send: sendUserPushNotificationsBatch, markDone: markProcessedMany, retry: scheduleRetry },
+): Promise<void> {
+  const done: string[] = [];
+  const toSend: Array<{ event: PushOutboxEvent; item: { userId: string; payload: UserPushPayload } }> = [];
+  for (const event of events) {
+    try {
+      const payload = asRecord(event.payload);
+      const current = payload ? await deps.load(payload) : null;
+      if (!payload || !current) { done.push(event.id); continue; }
+      payload.title = current.title;
+      payload.body = current.body;
+      payload.type = current.type;
+      if (current.supportTicketId) payload.supportTicketId = current.supportTicketId; else delete payload.supportTicketId;
+      if (current.imageUrl) payload.imageUrl = current.imageUrl; else delete payload.imageUrl;
+      const built = buildPlatformNotification(event.event_key, payload);
+      if (!built) { done.push(event.id); continue; }
+      toSend.push({ event, item: { userId: built.recipientId, payload: built.notification } });
+    } catch {
+      await deps.retry(event, "processing_error").catch(() => undefined);
+    }
+  }
+  if (toSend.length) {
+    let outcomes: BatchPushOutcome[];
+    try {
+      outcomes = await deps.send(toSend.map((entry) => entry.item));
+    } catch {
+      outcomes = toSend.map(() => "retry" as const);
+    }
+    for (let index = 0; index < toSend.length; index += 1) {
+      if (outcomes[index] === "retry") {
+        await deps.retry(toSend[index].event, "provider_not_accepted").catch(() => undefined);
+      } else {
+        done.push(toSend[index].event.id);
+      }
+    }
+  }
+  await deps.markDone(done);
 }
 
 async function scheduleRetry(event: PushOutboxEvent, reason: string): Promise<void> {
@@ -668,6 +737,8 @@ async function pollPushOutbox(): Promise<void> {
         });
       }
     }
+    const platformEvents = await claimPendingEvents(true);
+    if (platformEvents.length) await processPlatformBatch(platformEvents);
   } catch (error) {
     logger.warn({
       errorName: error instanceof Error ? error.name : "unknown",
@@ -700,4 +771,4 @@ export async function startPushOutboxWorker(): Promise<void> {
   logger.info({ pollIntervalMs: POLL_INTERVAL_MS }, "Persistent push worker started");
 }
 
-export const __testing = { asRecord, parseTimestamp };
+export const __testing = { asRecord, parseTimestamp, processPlatformBatch };

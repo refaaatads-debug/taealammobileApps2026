@@ -1,10 +1,11 @@
 import { db, pushTokensTable } from "@workspace/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   ExpoPushError,
   isExpoPushToken,
   notificationPresentation,
   sendExpoPushMessage,
+  sendExpoPushMessages,
   type ExpoPushMessage,
 } from "./expoPush";
 import { pushDedupeKey } from "./pushDedupe";
@@ -106,5 +107,112 @@ export async function sendUserPushNotification(userId: string, payload: UserPush
       providerCode: error instanceof ExpoPushError ? error.providerCode ?? null : null,
     });
     return false;
+  }
+}
+
+export type BatchPushItem = { userId: string; payload: UserPushPayload };
+/** ok = provider accepted; skip = nothing to deliver (no usable token, duplicate); retry = try again later. */
+export type BatchPushOutcome = "ok" | "skip" | "retry";
+
+/**
+ * Deliver many account notifications with one token query and one provider
+ * request per 100 messages. Same message shape, dedupe and dead-token cleanup
+ * as sendUserPushNotification. Returns one outcome per input item, in order.
+ * Unlike the single path, a missing token or a duplicate is "skip" (not retried).
+ */
+export async function sendUserPushNotificationsBatch(items: BatchPushItem[]): Promise<BatchPushOutcome[]> {
+  const outcomes: BatchPushOutcome[] = items.map(() => "skip");
+  if (!items.length) return outcomes;
+
+  const reserved: Array<string | null> = items.map(() => null);
+  const wanted: number[] = [];
+  items.forEach((item, index) => {
+    const key = pushDedupeKey(item.userId, item.payload.data);
+    if (key && !reservePushKey(key)) return;
+    reserved[index] = key;
+    wanted.push(index);
+  });
+  const release = (index: number) => {
+    const key = reserved[index];
+    if (key) recentPushes.delete(key);
+  };
+
+  try {
+    const userIds = [...new Set(wanted.map((index) => items[index].userId))];
+    const tokenByUser = new Map<string, string>();
+    for (let start = 0; start < userIds.length; start += 500) {
+      const rows = await db.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.server_write', 'true', true)`);
+        return tx.select({ userId: pushTokensTable.userId, token: pushTokensTable.token })
+          .from(pushTokensTable)
+          .where(inArray(pushTokensTable.userId, userIds.slice(start, start + 500)));
+      });
+      for (const row of rows) tokenByUser.set(row.userId, row.token);
+    }
+
+    const sendIndexes: number[] = [];
+    const messages: ExpoPushMessage[] = [];
+    const sentToken = new Map<number, string>();
+    for (const index of wanted) {
+      const item = items[index];
+      const stored = tokenByUser.get(item.userId);
+      const bundle = stored ? decodePushTokenBundle(stored) : null;
+      if (!stored || !bundle || !isExpoPushToken(bundle.expoToken)) {
+        release(index);
+        continue;
+      }
+      const presentation = notificationPresentation(item.payload.data?.type);
+      sendIndexes.push(index);
+      sentToken.set(index, stored);
+      messages.push({
+        to: bundle.expoToken,
+        title: item.payload.title,
+        body: item.payload.body,
+        data: item.payload.data,
+        ...(item.payload.richContent ? { richContent: item.payload.richContent } : {}),
+        sound: item.payload.sound ?? presentation.sound,
+        priority: item.payload.priority ?? "high",
+        ttl: item.payload.ttl ?? 3600,
+        channelId: item.payload.channelId ?? presentation.channelId,
+      });
+    }
+
+    const removeToken = async (index: number) => {
+      const token = sentToken.get(index);
+      if (!token) return;
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.server_write', 'true', true)`);
+        await tx.delete(pushTokensTable).where(and(
+          eq(pushTokensTable.userId, items[index].userId),
+          eq(pushTokensTable.token, token),
+        ));
+      });
+    };
+
+    const results = await sendExpoPushMessages(messages, async (position, providerCode) => {
+      if (providerCode !== "DeviceNotRegistered" && providerCode !== "InvalidPushToken") return;
+      await removeToken(sendIndexes[position]);
+    });
+    for (let position = 0; position < results.length; position += 1) {
+      const index = sendIndexes[position];
+      const result = results[position];
+      if (result.ok) {
+        outcomes[index] = "ok";
+      } else if (result.providerCode === "DeviceNotRegistered" || result.providerCode === "InvalidPushToken") {
+        release(index);
+        await removeToken(index).catch(() => undefined);
+        outcomes[index] = "skip";
+      } else {
+        release(index);
+        outcomes[index] = "retry";
+      }
+    }
+    return outcomes;
+  } catch (error) {
+    wanted.forEach(release);
+    console.warn("[push] batch_notification_failed", {
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
+    return items.map((_, index) => (wanted.includes(index) ? "retry" : "skip"));
   }
 }
