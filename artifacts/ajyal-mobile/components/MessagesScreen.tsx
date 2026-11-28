@@ -28,6 +28,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { blockUser, loadBlockedUserIds, reportMessage, unblockUser, type ReportReason } from "@/lib/chatSafety";
 import { EmptyState, Header, Icon, Screen } from "@/components/AjyalUI";
 import { customFetch } from "@workspace/api-client-react";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
@@ -753,6 +754,48 @@ function ConversationView({
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const [phoneModalOpen, setPhoneModalOpen] = useState(false);
+  const [blockedIds, setBlockedIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let active = true;
+    void loadBlockedUserIds(userId).then((ids) => { if (active) setBlockedIds(ids); });
+    return () => { active = false; };
+  }, [userId]);
+  const visibleMessages = useMemo(
+    () => messages.filter((item) => String(item.sender_id) === userId || !blockedIds.has(String(item.sender_id))),
+    [messages, blockedIds, userId],
+  );
+  const participantBlocked = blockedIds.has(participant.participantId);
+  const submitReport = async (item: Row, reason: ReportReason) => {
+    try {
+      await reportMessage({ reporterId: userId, reportedUserId: String(item.sender_id), messageId: item.id ? String(item.id) : null, bookingId, reason });
+      Alert.alert(t("تم إرسال البلاغ", "Report sent"), t("سيراجع فريقنا البلاغ في أقرب وقت.", "Our team will review your report promptly."));
+    } catch (error) {
+      Alert.alert(t("تعذر إرسال البلاغ", "Could not send report"), error instanceof Error ? error.message : t("حاول مرة أخرى.", "Please try again."));
+    }
+  };
+  const confirmBlock = (targetId: string) => {
+    Alert.alert(t("حظر المستخدم", "Block user"), t("لن تظهر لك رسائل هذا المستخدم بعد الآن. يمكنك إلغاء الحظر لاحقاً.", "You will no longer see messages from this user. You can unblock later."), [
+      { text: t("إلغاء", "Cancel"), style: "cancel" },
+      {
+        text: t("حظر", "Block"),
+        style: "destructive",
+        onPress: () => {
+          void blockUser(userId, targetId)
+            .then(() => setBlockedIds((current) => new Set(current).add(targetId)))
+            .catch((error) => Alert.alert(t("تعذر الحظر", "Could not block"), error instanceof Error ? error.message : t("حاول مرة أخرى.", "Please try again.")));
+        },
+      },
+    ]);
+  };
+  const openMessageActions = (item: Row) => {
+    Alert.alert(t("خيارات الرسالة", "Message options"), undefined, [
+      { text: t("إبلاغ: محتوى مسيء", "Report: abusive content"), onPress: () => void submitReport(item, "abuse") },
+      { text: t("إبلاغ: رسالة مزعجة", "Report: spam"), onPress: () => void submitReport(item, "spam") },
+      { text: t("إبلاغ: محتوى غير مناسب", "Report: inappropriate"), onPress: () => void submitReport(item, "inappropriate") },
+      { text: t("حظر المستخدم", "Block user"), style: "destructive", onPress: () => confirmBlock(String(item.sender_id)) },
+      { text: t("إلغاء", "Cancel"), style: "cancel" },
+    ]);
+  };
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const webRecorderRef = useRef<MediaRecorder | null>(null);
   const webStreamRef = useRef<MediaStream | null>(null);
@@ -1000,10 +1043,19 @@ function ConversationView({
             <Text style={[styles.instantSessionButtonText, { color: colors.teal }]}>{instantSessionBusy ? t("جارٍ التحقق…", "Checking…") : t("بدء جلسة فورية", "Start instant session")}</Text>
           </Pressable>
         ) : null}
+        {participantBlocked ? (
+          <Pressable
+            testID="unblock-user"
+            onPress={() => void unblockUser(userId, participant.participantId).then(() => setBlockedIds((current) => { const next = new Set(current); next.delete(participant.participantId); return next; })).catch(() => undefined)}
+            style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, marginBottom: 8 }}
+          >
+            <Text style={{ color: colors.foreground, textAlign: "center", fontSize: 11 }}>{t("لقد حظرت هذا المستخدم. اضغط لإلغاء الحظر.", "You blocked this user. Tap to unblock.")}</Text>
+          </Pressable>
+        ) : null}
         <FlatList
           ref={listRef}
           style={styles.messageListFrame}
-          data={messages}
+          data={visibleMessages}
           keyExtractor={(item, index) => String(item.id || `${item.created_at}-${index}`)}
           renderItem={({ item }) => {
             const outgoing = String(item.sender_id) === userId;
@@ -1016,6 +1068,12 @@ function ConversationView({
                   <MessageAttachment message={item} outgoing={outgoing} />
                   {text(item, "content") && !attachmentLabel(item.file_type, item.file_name) ? <Text style={[styles.messageText, { color: outgoing ? colors.primaryForeground : colors.foreground }]}>{text(item, "content")}</Text> : null}
                   <Text style={[styles.messageDate, { color: outgoing ? colors.tint : colors.mutedForeground }]}>{dateLabel(item.created_at, locale)}</Text>
+                  {!outgoing ? (
+                    <Pressable testID="message-report-button" accessibilityLabel={t("إبلاغ أو حظر", "Report or block")} hitSlop={8} onPress={() => openMessageActions(item)} style={{ alignSelf: "flex-end", flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 }}>
+                      <Icon name="flag" size={12} color={colors.mutedForeground} />
+                      <Text style={{ fontSize: 10, color: colors.mutedForeground }}>{t("إبلاغ / حظر", "Report / Block")}</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               </View>
             );
@@ -1027,7 +1085,7 @@ function ConversationView({
               <Text style={[styles.emptyConversationBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("يمكنك إرسال نص أو صورة أو PDF أو رسالة صوتية.", "You can send text, images, PDFs, or voice messages.")}</Text>
             </View>
           }
-          contentContainerStyle={[styles.messageList, messages.length === 0 && styles.messageListEmpty]}
+          contentContainerStyle={[styles.messageList, visibleMessages.length === 0 && styles.messageListEmpty]}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
