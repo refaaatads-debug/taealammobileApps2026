@@ -5,6 +5,7 @@ import {
   Alert,
   FlatList,
   Keyboard,
+  Image,
   Linking,
   Modal,
   Platform,
@@ -60,6 +61,7 @@ type Participant = {
   name: string;
   roleLabel: string;
   avatar: string;
+  avatarUrl?: string | null;
   bookingId: string;
   subject: string;
   scheduledAt: string;
@@ -297,6 +299,15 @@ function bookingStatusLabel(
   if (status === "cancelled") return t("ملغى", "Cancelled");
   if (status === "completed") return t("مكتمل", "Completed");
   return status || t("غير محدد", "Unavailable");
+}
+
+// Shows the profile photo when avatar_url exists; falls back to the initials (also if the image fails to load).
+function ParticipantAvatar({ uri, initialsText, color }: { uri?: string | null; initialsText: string; color: string }) {
+  const [failed, setFailed] = useState(false);
+  if (uri && !failed) {
+    return <Image source={{ uri }} style={{ width: "100%", height: "100%", borderRadius: 17 }} resizeMode="cover" onError={() => setFailed(true)} />;
+  }
+  return <Text style={[styles.avatarInitials, { color }]}>{initialsText}</Text>;
 }
 
 function initials(name: string) {
@@ -593,7 +604,7 @@ function ParticipantRow({ item, onPress }: { item: Participant; onPress: () => v
         </View>
       </View>
       <View style={[styles.participantAvatar, { backgroundColor: colors.card, borderColor: hasUnread ? colors.tealSoft : colors.card }]}>
-        <Text style={[styles.avatarInitials, { color: hasUnread ? colors.teal : colors.primary }]}>{item.avatar}</Text>
+        <ParticipantAvatar uri={item.avatarUrl} initialsText={item.avatar} color={hasUnread ? colors.teal : colors.primary} />
         {hasUnread ? <View style={[styles.avatarUnreadDot, { backgroundColor: colors.accent, borderColor: colors.card }]} /> : null}
       </View>
       </Pressable>
@@ -1550,6 +1561,7 @@ export default function MessagesScreen() {
           name,
           roleLabel: String(booking.student_id) === user.id ? "معلم" : "طالب",
           avatar: initials(name),
+          avatarUrl: text(profile, "avatar_url") || null,
           bookingId,
           subject: text(booking, "subject"),
           scheduledAt: text(booking, "scheduled_at", "created_at"),
