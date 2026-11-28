@@ -8,6 +8,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAjyal } from "@/hooks/useAjyal";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { requestAccountDeletion } from "@/lib/deleteAccount";
 import { useAppPreferences } from "@/contexts/AppPreferencesContext";
 
 type Row = Record<string, unknown>;
@@ -61,6 +62,7 @@ export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [teacherProfileId, setTeacherProfileId] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
@@ -236,6 +238,47 @@ export default function ProfileScreen() {
     else setCertificates((current) => current.filter((item) => String(item.id) !== id));
   };
 
+  const confirmDeleteAccount = () => {
+    if (deleting) return;
+    Alert.alert(
+      t("حذف الحساب", "Delete account"),
+      t("سيتم حذف حسابك وبياناتك الشخصية نهائياً ولا يمكن التراجع. قد نحتفظ ببعض السجلات المالية إن كان القانون يلزم بذلك. هل تريد المتابعة؟", "Your account and personal data will be permanently deleted. This cannot be undone. Some financial records may be kept where the law requires it. Continue?"),
+      [
+        { text: t("إلغاء", "Cancel"), style: "cancel" },
+        {
+          text: t("حذف الحساب", "Delete account"),
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              t("تأكيد الحذف النهائي", "Confirm permanent deletion"),
+              t("هذا آخر تأكيد. سيتم حذف الحساب فوراً.", "This is the last confirmation. Your account will be deleted now."),
+              [
+                { text: t("إلغاء", "Cancel"), style: "cancel" },
+                { text: t("نعم، احذف", "Yes, delete"), style: "destructive", onPress: () => void runDeleteAccount() },
+              ],
+            );
+          },
+        },
+      ],
+    );
+  };
+
+  const runDeleteAccount = async () => {
+    setDeleting(true);
+    try {
+      const result = await requestAccountDeletion();
+      if (!result.ok) {
+        Alert.alert(t("تعذر حذف الحساب", "Could not delete account"), result.message || t("حاول مرة أخرى أو تواصل مع الدعم.", "Please try again or contact support."));
+        return;
+      }
+      await logout();
+    } catch (error) {
+      Alert.alert(t("تعذر حذف الحساب", "Could not delete account"), message(error, t("حاول مرة أخرى.", "Please try again.")));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleLogout = async () => {
     if (loggingOut) return;
     setLoggingOut(true);
@@ -366,6 +409,7 @@ export default function ProfileScreen() {
              <LinkRow icon="shield" label={t("سياسة الخصوصية", "Privacy policy")} onPress={() => router.push("/privacy")} />
              <LinkRow icon="file-text" label={t("شروط الاستخدام", "Terms of use")} onPress={() => router.push("/terms")} />
              <LinkRow icon="log-out" label={loggingOut ? t("جارٍ تسجيل الخروج...", "Signing out...") : t("تسجيل الخروج", "Sign out")} destructive onPress={() => void handleLogout()} />
+             <LinkRow icon="trash-2" label={deleting ? t("جارٍ حذف الحساب...", "Deleting account...") : t("حذف الحساب", "Delete account")} destructive onPress={confirmDeleteAccount} />
           </FormCard>
         </>
       )}
@@ -398,7 +442,7 @@ function ToggleRow({ icon, label, value, onValueChange }: { icon: "calendar" | "
   return <View style={[styles.toggle, { borderBottomColor: colors.border, flexDirection: direction === "rtl" ? "row" : "row-reverse" }]}><Switch value={value} onValueChange={onValueChange} trackColor={{ false: colors.muted, true: colors.teal }} thumbColor={colors.card} /><Text style={[styles.toggleText, { color: colors.foreground, textAlign: direction === "rtl" ? "right" : "left", writingDirection: direction }]}>{label}</Text><View style={[styles.toggleIcon, { backgroundColor: iconBackground }]}><Icon name={icon} size={16} color={iconColor} /></View></View>;
 }
 
-function LinkRow({ icon, label, onPress, destructive = false }: { icon: "help-circle" | "message-circle" | "shield" | "file-text" | "log-out"; label: string; onPress: () => void; destructive?: boolean }) {
+function LinkRow({ icon, label, onPress, destructive = false }: { icon: "help-circle" | "message-circle" | "shield" | "file-text" | "log-out" | "trash-2"; label: string; onPress: () => void; destructive?: boolean }) {
   const colors = useColors();
   const { direction } = useAppPreferences();
   const iconColor = destructive ? colors.destructive : icon === "help-circle" ? colors.primary : icon === "message-circle" ? colors.teal : colors.accentForeground;

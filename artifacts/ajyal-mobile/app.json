@@ -16,7 +16,8 @@
         "NSCameraUsageDescription": "يحتاج التطبيق إلى الكاميرا عند تفعيل الفيديو داخل الجلسة.",
         "NSPhotoLibraryUsageDescription": "يحتاج التطبيق إلى الصور لإرسال حلول ومرفقات الجلسات."
       },
-      "bitcode": false
+      "bitcode": false,
+      "usesAppleSignIn": true
     },
     "android": {
       "package": "com.ajyalalmaerifa.app",
@@ -93,7 +94,8 @@
       ],
       "expo-asset",
       "expo-audio",
-      "expo-video"
+      "expo-video",
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true,

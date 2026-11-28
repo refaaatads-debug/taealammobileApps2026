@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import * as AuthSession from "expo-auth-session";
 import * as WebBrowser from "expo-web-browser";
+import * as AppleAuthentication from "expo-apple-authentication";
+import * as Crypto from "expo-crypto";
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { unregisterPushToken } from "@workspace/api-client-react";
@@ -24,6 +26,7 @@ type AuthContextValue = {
   beginPasswordRecovery: () => void;
   login: (mode?: 'login' | 'signup', role?: 'student' | 'teacher', credentials?: { email: string; password: string; fullName?: string }) => Promise<void>;
   loginWithGoogle: (role?: 'student' | 'teacher', isSignup?: boolean) => Promise<void>;
+  loginWithApple: (role?: 'student' | 'teacher', isSignup?: boolean) => Promise<void>;
   completePendingRole: (authenticatedEmail?: string | null) => Promise<void>;
   completePasswordRecovery: () => void;
   logout: () => Promise<void>;
@@ -37,6 +40,7 @@ const AuthContext = createContext<AuthContextValue>({
   beginPasswordRecovery: () => undefined,
   login: async () => undefined,
   loginWithGoogle: async () => undefined,
+  loginWithApple: async () => undefined,
   completePendingRole: async () => undefined,
   completePasswordRecovery: () => undefined,
   logout: async () => undefined,
@@ -316,6 +320,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [completePendingRole]);
 
+  // Sign in with Apple (App Review Guideline 4.8). iOS only. Uses the native
+  // Apple sheet, then exchanges the Apple identity token with Supabase.
+  // Needs Apple provider enabled in Supabase Auth (server setting, not done).
+  const loginWithApple = useCallback(async (role?: 'student' | 'teacher', isSignup = false) => {
+    if (!supabase) throw new Error(supabaseConfigError ?? "Supabase is not configured");
+    if (Platform.OS !== "ios") throw new Error("Sign in with Apple is available on iOS only");
+    if (!(await AppleAuthentication.isAvailableAsync())) throw new Error("Sign in with Apple is not available on this device");
+    if (isSignup && role === "teacher") {
+      await AsyncStorage.setItem(PENDING_ROLE_KEY, "teacher");
+      deferSignedInUser.current = true;
+      await AsyncStorage.removeItem(PENDING_ROLE_EMAIL_KEY);
+    } else {
+      await AsyncStorage.removeItem(PENDING_ROLE_KEY);
+      await AsyncStorage.removeItem(PENDING_ROLE_EMAIL_KEY);
+    }
+    try {
+      const rawNonce = Array.from(Crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+      const hashedNonce = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, rawNonce);
+      let credential: AppleAuthentication.AppleAuthenticationCredential;
+      try {
+        credential = await AppleAuthentication.signInAsync({
+          requestedScopes: [AppleAuthentication.AppleAuthenticationScope.FULL_NAME, AppleAuthentication.AppleAuthenticationScope.EMAIL],
+          nonce: hashedNonce,
+        });
+      } catch (error) {
+        if ((error as { code?: string }).code === "ERR_REQUEST_CANCELED") throw new Error("تم إلغاء تسجيل الدخول");
+        throw error;
+      }
+      if (!credential.identityToken) throw new Error("لم يصل رمز الهوية من Apple");
+      const result = await withTimeout(
+        supabase.auth.signInWithIdToken({ provider: "apple", token: credential.identityToken, nonce: rawNonce }),
+        "انتهت مهلة تأكيد جلسة Apple",
+      );
+      if (result.error) throw new Error(result.error.message);
+      const authenticatedUser = result.data.session?.user ?? null;
+      await completePendingRole(authenticatedUser?.email);
+      if (authenticatedUser) {
+        deferSignedInUser.current = false;
+        setUser(mapUser(authenticatedUser));
+        setIsLoading(false);
+      }
+    } catch (error) {
+      deferSignedInUser.current = false;
+      setIsLoading(false);
+      await AsyncStorage.multiRemove([PENDING_ROLE_KEY, PENDING_ROLE_EMAIL_KEY]);
+      throw error;
+    }
+  }, [completePendingRole]);
+
   const completePasswordRecovery = useCallback(() => {
     setIsPasswordRecovery(false);
   }, []);
@@ -338,7 +391,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  return <AuthContext.Provider value={{ user, isLoading, isAuthenticated: !!user, isPasswordRecovery, beginPasswordRecovery, login, loginWithGoogle, completePendingRole, completePasswordRecovery, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, isLoading, isAuthenticated: !!user, isPasswordRecovery, beginPasswordRecovery, login, loginWithGoogle, loginWithApple, completePendingRole, completePasswordRecovery, logout }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

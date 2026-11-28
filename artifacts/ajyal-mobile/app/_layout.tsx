@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
-import { Image, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from 'react-native';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import { Image, Platform, Pressable, StyleSheet, Text, TextInput, View, useWindowDimensions, type TextInputProps } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -77,7 +78,7 @@ const TEACHER_REVIEW_ALLOWED_PATHS = new Set([
 
 function RootLayoutNav() {
   const colors = useColors();
-  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, user } = useAuth();
+  const { isLoading: authLoading, isAuthenticated, isPasswordRecovery, login, loginWithGoogle, loginWithApple, user } = useAuth();
   const { profile, role, roleResolved, profileError, retryProfile, logout: logoutAjyal, isLoading: profileLoading } = useAjyal();
   const { t } = useAppPreferences();
   const pathname = usePathname();
@@ -342,6 +343,18 @@ function RootLayoutNav() {
         setAuthSubmitting(false);
       }
     };
+    const startAppleAuth = async () => {
+      setAuthSubmitting(true);
+      setAuthError(null);
+      try {
+        await loginWithApple(isSignup ? signupRole : undefined, isSignup);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (message !== 'تم إلغاء تسجيل الدخول') setAuthError(message || t('تعذر تسجيل الدخول باستخدام Apple', 'Unable to sign in with Apple'));
+      } finally {
+        setAuthSubmitting(false);
+      }
+    };
     overlay = (
       <View style={[styles.authScreen, { backgroundColor: colors.background }]}>
         <KeyboardAwareScrollViewCompat
@@ -388,6 +401,17 @@ function RootLayoutNav() {
                <Text style={[styles.googleButtonText, { color: colors.foreground }]}>{t('المتابعة باستخدام Google', 'Continue with Google')}</Text>
               <View style={styles.googleSpacer} />
             </Pressable>
+
+            {Platform.OS === 'ios' ? (
+              <AppleAuthentication.AppleAuthenticationButton
+                testID="apple-login-button"
+                buttonType={isSignup ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP : AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={14}
+                style={styles.appleButton}
+                onPress={() => void startAppleAuth()}
+              />
+            ) : null}
 
             <View style={styles.orRow}>
               <View style={[styles.orLine, { backgroundColor: colors.border }]} />
@@ -655,6 +679,7 @@ const styles = StyleSheet.create({
   authModeSwitch: { width: '100%', maxWidth: 340, borderRadius: 14, padding: 4, flexDirection: 'row-reverse', marginBottom: 13 },
   authMode: { flex: 1, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
   authModeText: { fontSize: 11, fontFamily: 'Inter_700Bold', writingDirection: 'rtl' },
+  appleButton: { width: '100%', maxWidth: 340, height: 49, marginBottom: 15 },
   googleButton: { width: '100%', maxWidth: 340, minHeight: 49, borderRadius: 14, borderWidth: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, marginBottom: 15 },
   googleMark: { width: 25, height: 25, borderRadius: 13, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   googleMarkText: { color: '#4285F4', fontSize: 16, fontWeight: '700' },
