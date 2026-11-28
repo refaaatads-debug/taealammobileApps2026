@@ -625,7 +625,7 @@ async function markProcessedMany(ids: string[]): Promise<void> {
   await db.execute(sql`
     UPDATE public.push_delivery_outbox
     SET processed_at = now(), locked_until = NULL, last_error = NULL
-    WHERE id::text = ANY(${ids}::text[])
+    WHERE id::text IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
   `);
 }
 
