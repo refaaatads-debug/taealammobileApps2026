@@ -292,7 +292,7 @@ function bookingStatusLabel(
 function ParticipantAvatar({ uri, initialsText, color }: { uri?: string | null; initialsText: string; color: string }) {
   const [failed, setFailed] = useState(false);
   if (uri && !failed) {
-    return <Image source={{ uri }} style={{ width: "100%", height: "100%", borderRadius: 17 }} resizeMode="cover" onError={() => setFailed(true)} />;
+    return <Image source={{ uri }} style={{ width: "100%", height: "100%", borderRadius: 13 }} resizeMode="cover" onError={() => setFailed(true)} />;
   }
   return <Text style={[styles.avatarInitials, { color }]}>{initialsText}</Text>;
 }
@@ -551,21 +551,8 @@ function ParticipantRow({ item, onPress }: { item: Participant; onPress: () => v
       <View style={[styles.participantAccent, { backgroundColor: hasUnread ? colors.teal : colors.primary }]} />
       <View style={styles.rowArrow}><Icon name={isRTL ? "chevron-left" : "chevron-right"} size={19} color={colors.mutedForeground} /></View>
       <View style={[styles.participantCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
-        <Text style={[styles.participantName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>{item.name}</Text>
-        <View style={styles.bookingSchedule}>
-          <Text style={[styles.bookingScheduleLine, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>
-            <Text style={{ color: colors.mutedForeground }}>تاريخ الحجز</Text>
-            <Text style={{ color: colors.foreground, fontFamily: "Inter_600SemiBold" }}> · {bookingDateLabel(item.scheduledAt, locale)}</Text>
-          </Text>
-          <Text style={[styles.bookingScheduleLine, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>
-            <Text style={{ color: colors.mutedForeground }}>وقت الحجز</Text>
-            <Text style={{ color: colors.foreground, fontFamily: "Inter_600SemiBold" }}> · {bookingTimeLabel(item.scheduledAt, locale)}</Text>
-          </Text>
-        </View>
-        <View style={[styles.participantMetaLine, { borderTopColor: colors.border }]}>
-          <Text style={[styles.roleText, { color: colors.teal, writingDirection: direction }]} numberOfLines={1}>
-            {item.roleLabel === "معلم" ? t("معلم", "Teacher") : t("طالب", "Student")} · {item.subject || t("مادة غير محددة", "Subject unavailable")}
-          </Text>
+        <View style={[styles.participantTopLine, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+          <Text style={[styles.participantName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>{item.name}</Text>
           <View style={[styles.statusPill, { backgroundColor: hasUnread ? colors.tealSoft : colors.muted }]}>
             <View style={[styles.statusPillDot, { backgroundColor: hasUnread ? colors.teal : colors.mutedForeground }]} />
             <Text style={[styles.statusPillText, { color: hasUnread ? colors.teal : colors.mutedForeground }]} numberOfLines={1}>
@@ -575,6 +562,9 @@ function ParticipantRow({ item, onPress }: { item: Participant; onPress: () => v
             </Text>
           </View>
         </View>
+        <Text style={[styles.bookingScheduleLine, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>
+          {item.roleLabel === "معلم" ? t("معلم", "Teacher") : t("طالب", "Student")} · {item.subject || t("مادة غير محددة", "Subject unavailable")} · {bookingDateLabel(item.scheduledAt, locale)} · {bookingTimeLabel(item.scheduledAt, locale)}
+        </Text>
         <View style={styles.participantBottom}>
           <Text style={[styles.participantPreview, { color: hasUnread ? colors.foreground : colors.mutedForeground, fontFamily: hasUnread ? "Inter_600SemiBold" : "Inter_400Regular", writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>{t(lastMessagePreview(item.latestMessage), { "رسالة صوتية": "Voice message", "صورة": "Image", "ملف PDF": "PDF file", "ملف مرفق": "Attachment", "ابدأ محادثة جديدة": "Start a new conversation", "مرفق": "Attachment" }[lastMessagePreview(item.latestMessage)] ?? lastMessagePreview(item.latestMessage))}</Text>
           {hasUnread ? <View style={[styles.unreadBadge, { backgroundColor: colors.teal }]}><Text style={styles.unreadText}>{item.unreadCount > 9 ? "9+" : formatNumber(item.unreadCount)}</Text></View> : null}
@@ -1102,12 +1092,28 @@ function ConversationView({
   return (
     <Screen scroll={false} contentStyle={styles.conversationScreen}>
       <KeyboardAvoidingView behavior="padding" style={styles.keyboardRoot} keyboardVerticalOffset={0}>
-        <Header onBack={onBack} eyebrow={t("محادثة آمنة داخل المنصة", "Secure platform chat")} title={participant.name} avatarText={participant.avatar} onAvatar={() => router.push("/profile")} />
-        <View style={[styles.conversationMeta, { backgroundColor: colors.tealSoft, borderColor: colors.border }]}>
-          <View style={[styles.onlineDot, { backgroundColor: peerOnline ? colors.teal : colors.mutedForeground, opacity: peerOnline ? 1 : 0.45 }]} />
-          <Text style={[styles.conversationMetaText, { color: colors.teal, writingDirection: direction }]} numberOfLines={2}>
-            {participant.roleLabel === "معلم" ? t("معلم", "Teacher") : t("طالب", "Student")} · {participant.subject || t("مادة غير محددة", "Subject unavailable")} · {dateLabel(participant.scheduledAt, locale)} · {bookingStatusLabel(participant.bookingStatus, participant.sessionStatus, t)}
-          </Text>
+        <View style={[styles.chatHeader, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: isRTL ? "row-reverse" : "row" }]}>
+          <Pressable
+            testID="back-button"
+            hitSlop={8}
+            onPress={() => { if (router.canGoBack()) onBack(); else router.replace("/(tabs)"); }}
+            style={({ pressed }) => [styles.chatHeaderBack, { backgroundColor: colors.background, borderColor: colors.border }, pressed && styles.pressed]}
+          >
+            <Icon name={isRTL ? "arrow-right" : "arrow-left"} size={18} color={colors.primary} />
+          </Pressable>
+          <View style={[styles.chatHeaderAvatar, { backgroundColor: colors.navySoft, borderColor: colors.border }]}>
+            <ParticipantAvatar uri={participant.avatarUrl} initialsText={participant.avatar} color={colors.primary} />
+          </View>
+          <View style={[styles.chatHeaderCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
+            <Text style={[styles.chatHeaderName, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>{participant.name}</Text>
+            <View style={[styles.chatHeaderStatus, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
+              <View style={[styles.onlineDot, { backgroundColor: peerOnline ? colors.teal : colors.mutedForeground, opacity: peerOnline ? 1 : 0.45 }]} />
+              <Text style={[styles.conversationMetaText, { color: peerOnline ? colors.teal : colors.mutedForeground, writingDirection: direction }]}>{peerOnline ? t("متصل الآن", "Online") : t("غير متصل", "Offline")}</Text>
+            </View>
+            <Text style={[styles.chatHeaderMeta, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]} numberOfLines={1}>
+              {participant.roleLabel === "معلم" ? t("معلم", "Teacher") : t("طالب", "Student")} · {participant.subject || t("مادة غير محددة", "Subject unavailable")} · {dateLabel(participant.scheduledAt, locale)} · {bookingStatusLabel(participant.bookingStatus, participant.sessionStatus, t)}
+            </Text>
+          </View>
         </View>
         {canCall ? (
           <View style={styles.callActions}>
@@ -1735,23 +1741,9 @@ export default function MessagesScreen() {
     <Screen>
       <Header title={t("الرسائل", "Messages")} eyebrow={t("تواصل داخل أجيال المعرفة", "Connect inside Ajyal Knowledge")} avatarText={user?.email?.slice(0, 1)} onAvatar={() => router.push("/profile")} />
       <DepthCard wrapperStyle={styles.introCardWrap} surfaceStyle={isRTL ? { ...styles.introCard, flexDirection: "row-reverse" as const } : styles.introCard} surfaceColor={colors.navySoft} depthColor={colors.tealSoft} borderColor={colors.border}>
-        <View style={[styles.introIcon, { backgroundColor: colors.primary }]}><Icon name="message-circle" size={23} color={colors.primaryForeground} /></View>
+        <View style={[styles.introIcon, { backgroundColor: colors.primary }]}><Icon name="message-circle" size={18} color={colors.primaryForeground} /></View>
         <View style={[styles.introCopy, { alignItems: isRTL ? "flex-end" : "flex-start" }]}>
-          <Text style={[styles.introEyebrow, { color: colors.teal, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("مساحة تعلم متصلة", "Connected learning space")}</Text>
           <Text style={[styles.introTitle, { color: colors.foreground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("رسائلك التعليمية", "Your learning messages")}</Text>
-          <Text style={[styles.introBody, { color: colors.mutedForeground, writingDirection: direction, textAlign: isRTL ? "right" : "left" }]}>{t("تواصل مع المعلمين والطلاب بالنصوص والمرفقات والصوت والمكالمات والجلسات.", "Connect through text, attachments, voice notes, calls, and sessions.")}</Text>
-          <View style={[styles.featureRow, { flexDirection: isRTL ? "row-reverse" : "row" }]}>
-            {[
-              { icon: "message-square" as const, label: t("نص", "Text") },
-              { icon: "paperclip" as const, label: t("مرفقات", "Files") },
-              { icon: "phone" as const, label: t("مكالمات", "Calls") },
-            ].map((feature) => (
-              <View key={feature.label} style={[styles.featurePill, isRTL && { flexDirection: "row-reverse" as const }, { backgroundColor: colors.card }]}>
-                <Icon name={feature.icon} size={12} color={colors.teal} />
-                <Text style={[styles.featurePillText, { color: colors.foreground, writingDirection: direction }]}>{feature.label}</Text>
-              </View>
-            ))}
-          </View>
         </View>
       </DepthCard>
 
@@ -1832,45 +1824,46 @@ const styles = StyleSheet.create({
   depthCardWrap: { position: "relative", overflow: "visible" },
   depthCardBackplate: { position: "absolute", left: 2, right: -2, top: 4, bottom: -4, borderWidth: 1, borderRadius: 18, opacity: 0.95 },
   depthCardSurface: { position: "relative", borderWidth: 1, borderRadius: 18, overflow: "hidden" },
-  introCardWrap: { marginBottom: 14 },
-  introCard: { minHeight: 154, padding: 16, flexDirection: "row", alignItems: "center" },
-  introIcon: { width: 52, height: 52, borderRadius: 18, alignItems: "center", justifyContent: "center", marginLeft: 13, shadowColor: "#173E8C", shadowOpacity: 0.14, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  introCardWrap: { marginBottom: 8 },
+  introCard: { minHeight: 52, padding: 10, flexDirection: "row", alignItems: "center" },
+  introIcon: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center", marginLeft: 10, shadowColor: "#173E8C", shadowOpacity: 0.14, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
   introCopy: { flex: 1, alignItems: "flex-end" },
   introEyebrow: { width: "100%", textAlign: "right", writingDirection: "rtl", fontSize: 10, fontFamily: "Inter_500Medium" },
-  introTitle: { width: "100%", textAlign: "right", writingDirection: "rtl", fontSize: 19, lineHeight: 26, fontFamily: "Inter_700Bold", marginTop: 5 },
+  introTitle: { width: "100%", textAlign: "right", writingDirection: "rtl", fontSize: 16, lineHeight: 22, fontFamily: "Inter_700Bold", marginTop: 0 },
   introBody: { width: "100%", textAlign: "right", writingDirection: "rtl", fontSize: 10, lineHeight: 16, fontFamily: "Inter_400Regular", marginTop: 5 },
   featureRow: { alignItems: "center", gap: 5, marginTop: 10 },
   featurePill: { minHeight: 25, borderRadius: 10, paddingHorizontal: 8, flexDirection: "row", alignItems: "center", gap: 4 },
   featurePillText: { fontSize: 9, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
-  searchPanelWrap: { marginBottom: 16 },
-  searchPanel: { padding: 12 },
-  searchInputWrap: { minHeight: 46, borderWidth: 1, borderRadius: 14, paddingHorizontal: 11, alignItems: "center", gap: 8 },
-  searchInput: { flex: 1, minHeight: 42, paddingHorizontal: 2, paddingVertical: 7, fontSize: 11, fontFamily: "Inter_400Regular" },
+  searchPanelWrap: { marginBottom: 8 },
+  searchPanel: { padding: 8 },
+  searchInputWrap: { minHeight: 38, borderWidth: 1, borderRadius: 14, paddingHorizontal: 11, alignItems: "center", gap: 8 },
+  searchInput: { flex: 1, minHeight: 34, paddingHorizontal: 2, paddingVertical: 4, fontSize: 11, fontFamily: "Inter_400Regular" },
   searchClear: { width: 25, height: 30, alignItems: "center", justifyContent: "center" },
-  filterRow: { alignItems: "center", gap: 6, marginTop: 9 },
+  filterRow: { alignItems: "center", gap: 6, marginTop: 6 },
   filterLabel: { alignItems: "center", gap: 4, marginRight: 2 },
   filterLabelText: { fontSize: 10, fontFamily: "Inter_500Medium", writingDirection: "rtl" },
-  filterChip: { minHeight: 30, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, alignItems: "center", justifyContent: "center" },
+  filterChip: { minHeight: 26, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, alignItems: "center", justifyContent: "center" },
   filterChipText: { fontSize: 10, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
-  sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
   sectionTitleWrap: { alignItems: "center", gap: 7 },
   sectionMark: { width: 5, height: 19, borderRadius: 3 },
   sectionTitle: { flex: 1, minWidth: 0, fontSize: 16, fontFamily: "Inter_700Bold", writingDirection: "rtl" },
   sectionCount: { fontSize: 11, fontFamily: "Inter_400Regular", writingDirection: "rtl" },
   sectionActions: { alignItems: "center", gap: 8 },
   refreshButton: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  participantRowWrap: { marginBottom: 10 },
-  participantRow: { minHeight: 166, borderWidth: 1, borderRadius: 18, padding: 13, flexDirection: "row", alignItems: "center", position: "relative", overflow: "hidden" },
+  participantRowWrap: { marginBottom: 6 },
+  participantRow: { minHeight: 74, borderWidth: 1, borderRadius: 14, padding: 9, flexDirection: "row", alignItems: "center", position: "relative", overflow: "hidden" },
   participantTint: { position: "absolute", width: 150, height: 150, borderRadius: 75, top: -74, right: -52, opacity: 0.55 },
   participantAccent: { position: "absolute", width: 4, borderRadius: 2, top: 14, bottom: 14, right: 0, opacity: 0.85 },
-  participantAvatar: { width: 51, height: 51, borderRadius: 18, borderWidth: 1, alignItems: "center", justifyContent: "center", marginLeft: 11, position: "relative", shadowColor: "#173E8C", shadowOpacity: 0.12, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
-  avatarInitials: { fontSize: 15, fontFamily: "Inter_700Bold" },
+  participantAvatar: { width: 42, height: 42, borderRadius: 14, borderWidth: 1, alignItems: "center", justifyContent: "center", marginLeft: 9, position: "relative", shadowColor: "#173E8C", shadowOpacity: 0.12, shadowRadius: 7, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  avatarInitials: { fontSize: 13, fontFamily: "Inter_700Bold" },
   avatarUnreadDot: { position: "absolute", width: 10, height: 10, borderRadius: 5, right: -2, top: -2, borderWidth: 2 },
   participantCopy: { flex: 1, minWidth: 0 },
-  participantName: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 14, fontFamily: "Inter_700Bold" },
+  participantTopLine: { width: "100%", alignItems: "center", gap: 6 },
+  participantName: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 13, fontFamily: "Inter_700Bold" },
   bookingSchedule: { width: "100%", marginTop: 7, gap: 3 },
-  bookingScheduleLine: { width: "100%", fontSize: 10, lineHeight: 16, fontFamily: "Inter_500Medium" },
-  participantBottom: { width: "100%", flexDirection: "row", alignItems: "center", marginTop: 7, gap: 7 },
+  bookingScheduleLine: { width: "100%", fontSize: 10, lineHeight: 15, marginTop: 1, fontFamily: "Inter_500Medium" },
+  participantBottom: { width: "100%", flexDirection: "row", alignItems: "center", marginTop: 2, gap: 7 },
   participantPreview: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 11 },
   unreadBadge: { minWidth: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 5 },
   unreadText: { color: "#FFFFFF", fontSize: 9, fontFamily: "Inter_700Bold" },
@@ -1879,7 +1872,7 @@ const styles = StyleSheet.create({
   statusPill: { minHeight: 20, borderRadius: 8, paddingHorizontal: 6, flexDirection: "row", alignItems: "center", gap: 4, maxWidth: 94 },
   statusPillDot: { width: 5, height: 5, borderRadius: 3 },
   statusPillText: { fontSize: 8, fontFamily: "Inter_600SemiBold", writingDirection: "rtl" },
-  rowArrow: { width: 24, alignItems: "flex-start" },
+  rowArrow: { width: 18, alignItems: "flex-start" },
   loading: { minHeight: 180, justifyContent: "center", alignItems: "center", gap: 10 },
   loadingText: { fontSize: 11, fontFamily: "Inter_400Regular", writingDirection: "rtl" },
   safetyNoteWrap: { marginTop: 8 },
@@ -1887,6 +1880,13 @@ const styles = StyleSheet.create({
   safetyText: { flex: 1, textAlign: "right", writingDirection: "rtl", fontSize: 10, lineHeight: 16, fontFamily: "Inter_400Regular" },
   conversationMeta: { minHeight: 34, borderWidth: 1, borderRadius: 12, flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 7, paddingHorizontal: 11, marginBottom: 9 },
   onlineDot: { width: 7, height: 7, borderRadius: 4 },
+  chatHeader: { minHeight: 62, borderWidth: 1, borderRadius: 16, paddingHorizontal: 9, paddingVertical: 8, alignItems: "center", gap: 9, marginBottom: 8 },
+  chatHeaderBack: { width: 34, height: 34, borderRadius: 11, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  chatHeaderAvatar: { width: 42, height: 42, borderRadius: 14, borderWidth: 1, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  chatHeaderCopy: { flex: 1, minWidth: 0 },
+  chatHeaderName: { fontSize: 14, lineHeight: 20, fontFamily: "Inter_700Bold" },
+  chatHeaderStatus: { alignItems: "center", gap: 5 },
+  chatHeaderMeta: { width: "100%", fontSize: 9, lineHeight: 14, fontFamily: "Inter_400Regular", marginTop: 1 },
   conversationMetaText: { fontSize: 10, fontFamily: "Inter_500Medium", writingDirection: "rtl" },
   callActions: { flexDirection: "row", gap: 7, marginBottom: 9 },
   callAction: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 14, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, paddingHorizontal: 7 },
@@ -1921,7 +1921,7 @@ const styles = StyleSheet.create({
   messageList: { flexGrow: 1, justifyContent: "flex-end", paddingTop: 10, paddingBottom: 12, paddingHorizontal: 2 },
   messageListEmpty: { justifyContent: "center" },
   messageRow: { width: "100%", marginBottom: 9 },
-  messageBubble: { maxWidth: "86%", minWidth: 78, borderWidth: 1, borderRadius: 17, padding: 11 },
+  messageBubble: { maxWidth: "92%", minWidth: 120, borderWidth: 1, borderRadius: 17, padding: 11 },
   messageSender: { textAlign: "right", writingDirection: "rtl", fontSize: 9, lineHeight: 13, fontFamily: "Inter_700Bold", marginBottom: 4 },
   messageText: { textAlign: "right", writingDirection: "rtl", fontSize: 12, lineHeight: 20, fontFamily: "Inter_500Medium" },
   messageDate: { textAlign: "right", writingDirection: "rtl", fontSize: 9, fontFamily: "Inter_400Regular", marginTop: 6 },
